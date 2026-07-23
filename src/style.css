@@ -1,0 +1,993 @@
+:root {
+  --bg: #16181d;
+  --panel: #1f2229;
+  --panel-2: #262a33;
+  --border: #363b47;
+  --text: #e7e9ee;
+  --muted: #9aa1af;
+  --accent: #7c5cff;
+  --aura: #0ea5b7;
+  --ok: #22c55e;
+  --bad: #ef4444;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+}
+
+.app {
+  max-width: 1700px;
+  margin: 0 auto;
+  padding: 12px;
+}
+
+/* ---------- top bar ---------- */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 8px 4px;
+}
+
+.topbar h1 {
+  font-size: 18px;
+  margin: 0;
+  font-family: Georgia, serif;
+  letter-spacing: 0.5px;
+}
+
+.mode-switch {
+  display: flex;
+  gap: 4px;
+}
+
+.puzzle-title {
+  font-weight: 600;
+}
+
+.puzzle-title .target {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.notice {
+  color: var(--accent);
+  margin-left: auto;
+}
+
+.result-banner {
+  padding: 10px 14px;
+  border-radius: 8px;
+  margin: 4px 0 10px;
+  font-weight: 600;
+}
+
+.result-banner.ok {
+  background: rgba(34, 197, 94, 0.15);
+  border: 1px solid var(--ok);
+}
+
+.result-banner.bad {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid var(--bad);
+}
+
+/* ---------- layout ---------- */
+
+.layout {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  gap: 12px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.panel,
+.card-pool,
+.move-log {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.zone-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.field-label {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  margin: 6px 0;
+}
+
+.text-input {
+  width: 100%;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin: 2px 0 6px;
+}
+
+.btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0;
+}
+
+.btn {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.btn.active,
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.btn.danger {
+  border-color: var(--bad);
+  color: #ffb4b4;
+}
+
+.btn.small {
+  padding: 2px 7px;
+  font-size: 12px;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 6px 2px;
+}
+
+/* ---------- table / board ---------- */
+
+.table {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* 5x4 grid of actual squares. */
+.board {
+  position: relative;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px;
+}
+
+.board-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.cell {
+  aspect-ratio: 1 / 1;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  position: relative;
+  overflow: hidden;
+  min-width: 0;
+}
+
+/* max-width/max-height (rather than object-fit) keep the img box hugging the
+   image so the rounded corners clip the artwork, not empty letterbox space.
+   The image itself is the drag/click surface for moving the site. */
+.site-bg {
+  position: absolute;
+  bottom: 3%;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 82%;
+  max-height: 82%;
+  border-radius: 8px;
+  opacity: 0.9;
+  cursor: grab;
+  user-select: none;
+}
+
+.site-bg:active {
+  cursor: grabbing;
+}
+
+.site-bg.flipped {
+  bottom: auto;
+  top: 3%;
+  transform: translateX(-50%) rotate(180deg);
+}
+
+.cell-half {
+  position: absolute;
+  left: 0;
+  right: 0;
+  padding: 3px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px;
+}
+
+/* Above the site strip (z 1): all cards render on top, and their corner
+   buttons must win the click where they overhang the site image. The site
+   stays clickable/draggable wherever no card covers it. */
+.cell-half.top {
+  top: 0;
+  height: 44%;
+  align-content: flex-start;
+  z-index: 3;
+  /* Room for the toggle row riding on the cards' top edge. */
+  padding-top: 13px;
+}
+
+/* Drop-only band for sending a card underground; the cards themselves are
+   shown in the top area, darkened and badged. */
+.cell-half.bot {
+  bottom: 0;
+  height: 26%;
+  align-content: flex-end;
+  background: rgba(0, 0, 0, 0.18);
+  z-index: 3;
+}
+
+.cell-half.bot::after {
+  position: absolute;
+  bottom: 2px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-size: 8px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--muted);
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+/* Fills the whole square; cards in .cell-half sit above it (z 3) so they
+   still win clicks wherever they overlap the site image. */
+.site-strip {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
+
+/* Owner toggle for the square's site, tucked in the cell's top-left
+   corner away from the card toggles that live on the top edge. */
+.site-control-toggle {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 4;
+}
+
+.site-control-toggle.on {
+  background: var(--bad);
+  border-color: var(--bad);
+  color: #fff;
+}
+.dropzone.over {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* ---------- intersections / auras ---------- */
+
+/* Overlay matching the grid area (inset = board padding) so the nodes sit
+   exactly on the crossings of the grid lines. */
+.intersections {
+  position: absolute;
+  inset: 14px;
+  pointer-events: none;
+}
+
+.aura-node {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 1px dashed var(--muted);
+  background: var(--bg);
+  pointer-events: auto;
+  /* Auras always paint above sites and any cards on them. */
+  z-index: 4;
+}
+
+/* Sized so a portrait aura card stands roughly as tall as a site card:
+   a site is ~82% of a cell (16.4% of the grid); at 4:3 cells and 88x63
+   card art, a 9%-wide portrait card matches the site's height. */
+.aura-node.occupied {
+  width: 9%;
+  min-width: 64px;
+  height: auto;
+  border-radius: 8px;
+  border: 2px solid var(--aura);
+  background: var(--panel-2);
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+}
+
+.aura-node.over {
+  border-style: solid;
+}
+
+.aura-token {
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.aura-token:active {
+  cursor: grabbing;
+}
+
+.aura-token img {
+  width: 100%;
+  height: auto;
+  display: block;
+  pointer-events: none;
+}
+
+.aura-token img.flipped {
+  transform: rotate(180deg);
+}
+
+.aura-name {
+  font-size: 8px;
+  font-weight: 600;
+  text-align: center;
+  overflow: hidden;
+  padding: 4px 2px;
+}
+
+/* ---------- hands / cemeteries ---------- */
+
+.hand-row {
+  display: flex;
+  gap: 10px;
+}
+
+.zone-block {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px;
+}
+
+.hand-block {
+  flex: 1;
+  min-width: 0;
+}
+
+.grave-block {
+  width: 130px;
+  flex-shrink: 0;
+}
+
+.hand,
+.grave {
+  min-height: 96px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.grave .card-token {
+  width: 58px;
+}
+
+/* ---------- mana & thresholds ---------- */
+
+.stats-block {
+  width: 200px;
+  flex-shrink: 0;
+}
+
+.stat-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0;
+}
+
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  width: 34px;
+}
+
+.mana-row .stat-value {
+  font-size: 15px;
+}
+
+.stat-value {
+  min-width: 18px;
+  text-align: center;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-btn {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
+.stat-btn:hover {
+  border-color: var(--accent);
+}
+
+.threshold-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px 12px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+.threshold-grid .stat-row {
+  justify-content: space-between;
+}
+
+.th-icon {
+  flex-shrink: 0;
+  display: block;
+}
+
+/* ---------- storyline ---------- */
+
+.storyline {
+  min-height: 96px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+/* ---------- alt-key card preview ---------- */
+
+.card-preview-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}
+
+.card-preview-overlay img {
+  max-height: 80vh;
+  max-width: 80vw;
+  border-radius: 14px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.8);
+}
+
+.card-preview-name {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 120px 60px;
+  font-size: 24px;
+  font-family: Georgia, serif;
+}
+
+.card-preview-caption {
+  font-size: 16px;
+  font-weight: 600;
+  text-shadow: 0 1px 4px #000;
+}
+
+/* ---------- cards ---------- */
+
+.card-token {
+  position: relative;
+  width: 82px;
+  cursor: grab;
+  user-select: none;
+}
+
+.card-token:active {
+  cursor: grabbing;
+}
+
+/* Underground cards render on top like everything else, but darkened. */
+.card-token.is-under img,
+.card-token.is-under .card-name {
+  filter: brightness(0.55) saturate(0.85);
+}
+
+.card-token.attacker {
+  outline: 2px solid var(--bad);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+.card-token.targetable,
+.site-bg.targetable {
+  cursor: crosshair;
+}
+
+.card-token.targetable:hover {
+  outline: 2px dashed var(--bad);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+.site-bg.targetable {
+  outline: 1px dashed var(--bad);
+  outline-offset: -1px;
+}
+
+.card-token img {
+  width: 100%;
+  display: block;
+  border-radius: 8px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+
+.card-token img.flipped,
+.card-token .card-name.flipped {
+  transform: rotate(180deg);
+}
+
+.card-token .card-name {
+  display: block;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 14px 4px;
+  font-size: 11px;
+  text-align: center;
+  word-break: break-word;
+}
+
+.card-remove {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: none;
+  background: var(--bad);
+  color: #fff;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+/* minions inside a square's surface/underground slots stay small */
+.cell-half .card-token {
+  width: 30%;
+}
+
+/* On the board, every button lines up along the card's top edge so nothing
+   gets clipped or hides behind neighboring cards. */
+.cell-half .card-token .card-remove,
+.cell-half .card-token .card-site-toggle,
+.cell-half .card-token .card-aura-toggle,
+.cell-half .card-token .card-control-toggle,
+.cell-half .card-token .card-under-toggle,
+.cell-half .card-token .card-attack {
+  width: 20px;
+  height: 20px;
+  font-size: 11px;
+  top: -10px;
+  bottom: auto;
+}
+
+.cell-half .card-token .card-site-toggle {
+  left: -6px;
+}
+
+.cell-half .card-token .card-aura-toggle {
+  left: 25%;
+  transform: translateX(-50%);
+}
+
+.cell-half .card-token .card-under-toggle {
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.cell-half .card-token .card-control-toggle {
+  left: 75%;
+  right: auto;
+  transform: translateX(-50%);
+}
+
+.cell-half .card-token .card-remove {
+  right: -6px;
+}
+
+/* Shares the top-right spot with the remove button; they are never shown
+   at the same time (attack: play/recording, remove: editor only). */
+.cell-half .card-token .card-attack {
+  left: auto;
+  right: -6px;
+  transform: none;
+}
+
+.card-site-toggle {
+  position: absolute;
+  top: -8px;
+  left: -8px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.card-site-toggle.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.card-aura-toggle {
+  position: absolute;
+  top: -8px;
+  left: 33%;
+  transform: translateX(-50%);
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.card-aura-toggle.on {
+  background: var(--aura);
+  border-color: var(--aura);
+  color: #fff;
+}
+
+.card-control-toggle {
+  position: absolute;
+  top: -8px;
+  left: 67%;
+  transform: translateX(-50%);
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.card-control-toggle.on {
+  background: var(--bad);
+  border-color: var(--bad);
+  color: #fff;
+}
+
+/* Top-center, between the two editor corner toggles. */
+.card-under-toggle {
+  position: absolute;
+  top: -8px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.card-under-toggle:hover {
+  border-color: var(--accent);
+}
+
+.card-attack {
+  position: absolute;
+  top: 50%;
+  right: -8px;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.card-attack:hover {
+  border-color: var(--bad);
+}
+
+.card-attack.on {
+  background: var(--bad);
+  border-color: var(--bad);
+  color: #fff;
+}
+
+.site-badge {
+  position: absolute;
+  bottom: 3px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--accent);
+  color: #fff;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  pointer-events: none;
+}
+
+.aura-badge {
+  background: var(--aura);
+}
+
+.under-badge {
+  background: #44403c;
+  bottom: auto;
+  top: 3px;
+}
+
+.legend-badge.under {
+  background: #44403c;
+}
+
+/* ---------- card pool ---------- */
+
+.pool-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* The corner buttons overhang each card by ~8px, so cards need at least
+   16px of air between them for every button to stay clickable. */
+.pool {
+  min-height: 80px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+}
+
+/* ---------- legend ---------- */
+
+.legend-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.legend-list li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.legend-badge {
+  background: var(--accent);
+  color: #fff;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  padding: 2px 5px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.legend-badge.aura {
+  background: var(--aura);
+}
+
+.legend-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.legend-elements {
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+
+.legend-el {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  text-transform: capitalize;
+}
+
+.legend-kbd {
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--text);
+}
+
+/* ---------- saved list & move log ---------- */
+
+.saved-list {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.saved-list li {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.saved-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.saved-date {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* Release status in the editor's saved list: draft (no date) / upcoming. */
+.saved-badge {
+  margin-left: 4px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.move-log ol {
+  margin: 0;
+  padding-left: 22px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.move-log li {
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+
+.move-log li.ok {
+  color: var(--ok);
+}
+
+.move-log li.bad {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ffb4b4;
+}
+
+.move-log li.after {
+  color: var(--muted);
+}
