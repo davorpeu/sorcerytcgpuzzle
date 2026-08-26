@@ -86,7 +86,13 @@ add_filter('sorcery_puzzle_can_edit', fn() => current_user_can('manage_options')
 
 #### Site-wide puzzle storage
 
-When embedded via the shortcode, *Save*, the saved-puzzles list, *Delete*, and the daily pick all go through the plugin's REST API instead of the browser's localStorage, so puzzles an editor saves are visible to every visitor. Puzzles are stored as a hidden `sorcery_puzzle` custom post type — the puzzle JSON (including card images) in the post content, the name in the post title, the daily date in post meta. Nothing appears in the wp-admin menus; everything is managed from the app's editor UI, and the data is covered by your normal database backups.
+When embedded via the shortcode, *Save*, the saved-puzzles list, *Delete*, and the daily pick all go through the plugin's REST API instead of the browser's localStorage, so puzzles an editor saves are visible to every visitor. Puzzles are stored as a hidden `sorcery_puzzle` custom post type — the puzzle JSON in the post content, the name in the post title, the daily date in post meta. Nothing appears in the wp-admin menus; everything is managed from the app's editor UI.
+
+Card images are **not** stored inside the puzzle. On save, each inline image is moved into the WordPress **Media Library** (deduplicated by content hash, so the same art shared across puzzles is stored once), and the puzzle keeps only a small attachment-id reference (`imgId`); reads resolve it back to the file URL. This keeps the database small, lets the browser cache images across puzzles, and scales to thousands of cards. Because images now live in `wp-content/uploads` rather than the database, back up that directory alongside your database. Puzzles saved before this change keep working; run the one-time migration to move their inline images out:
+
+```bash
+wp eval 'sorcery_puzzle_migrate_inline_images();'   # idempotent; safe to re-run
+```
 
 Endpoints under `/wp-json/sorcery-puzzle/v1/`:
 
@@ -113,7 +119,7 @@ When the app runs standalone (`npm run dev`, or any page without `data-api`), al
 #### Gotchas
 
 - **Migrating old browser-saved puzzles**: puzzles saved to localStorage (e.g. during local dev) don't move over automatically. *Export* each one to JSON, then *Import* + *Save* on the WordPress page — that writes it to the server.
-- **Payload size**: puzzles embed card images as data URLs, so a card-heavy puzzle can be a few MB. If saving fails with a 413, raise `post_max_size`/`upload_max_filesize` (and any proxy body-size limit) in your hosting config.
+- **Payload size**: the app *uploads* card images as data URLs (the server then externalizes them to the Media Library), so a card-heavy first save can still POST a few MB. If saving fails with a 413, raise `post_max_size`/`upload_max_filesize` (and any proxy body-size limit) in your hosting config.
 - **Nonce expiry**: WordPress REST nonces last ~24 hours. If the editor page sits open longer, saves start failing with a 403 — reload the page to get a fresh nonce.
 
 ## Puzzle JSON format
@@ -125,6 +131,7 @@ When the app runs standalone (`npm run dev`, or any page without `data-api`), al
   "name": "Puzzle name",
   "date": "2026-07-08",
   "cards": { "cardId": { "id": "cardId", "name": "Wolf", "img": "data:image/jpeg;base64,..." } },
+  "//": "when stored in WordPress, img is externalized to the Media Library and replaced by an imgId reference; the API resolves imgId back to a URL on read",
   "initial": { "hand:player": ["cardId"], "cell:0": [], "...": [] },
   "solutions": [
     [{ "cardId": "cardId", "from": "hand:player", "to": "cell:7" }],

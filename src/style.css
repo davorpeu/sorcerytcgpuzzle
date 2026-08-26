@@ -360,7 +360,6 @@ body {
   min-width: 64px;
   height: auto;
   border-radius: 8px;
-  border: 2px solid var(--aura);
   background: var(--panel-2);
   overflow: hidden;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);

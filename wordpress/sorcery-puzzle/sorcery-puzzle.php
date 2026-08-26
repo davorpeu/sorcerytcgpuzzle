@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Sorcery Puzzle
  * Description: Embeds the Sorcery TCG puzzle app via the [sorcery_puzzle] shortcode and stores puzzles site-wide through a REST API. Shortcode attributes: src (URL to a puzzle JSON), puzzle (stored puzzle id), daily="1".
- * Version: 0.3.0
+ * Version: 0.4.0
  * Author: davorpeu
  */
 
@@ -89,6 +89,141 @@ function sorcery_puzzle_summary($post)
     );
 }
 
+/**
+ * Card images are stored once in the Media Library and referenced by
+ * attachment id, rather than inlined as base64 in every puzzle. This keeps
+ * the database small, lets the browser cache each image across puzzles, and
+ * deduplicates identical art. Raster types only; SVG (demo cards) stays
+ * inline, which is harmless.
+ */
+function sorcery_puzzle_image_exts()
+{
+    return array(
+        'image/jpeg' => 'jpg',
+        'image/png'  => 'png',
+        'image/webp' => 'webp',
+        'image/gif'  => 'gif',
+    );
+}
+
+/**
+ * Store a data: URL as a Media Library attachment, reusing an existing one
+ * when the same bytes were stored before. Returns an attachment id, or 0 if
+ * the input isn't an image data URL we handle (callers then leave it inline).
+ */
+function sorcery_puzzle_intern_image($src)
+{
+    if (!is_string($src) || strpos($src, 'data:') !== 0) {
+        return 0;
+    }
+    if (!preg_match('#^data:([^;,]+)[^,]*,(.*)$#s', $src, $m)) {
+        return 0;
+    }
+
+    $mime = strtolower(trim($m[1]));
+    $exts = sorcery_puzzle_image_exts();
+    if (!isset($exts[$mime])) {
+        return 0;
+    }
+
+    $header = substr($src, 0, strpos($src, ','));
+    $bytes  = stripos($header, 'base64') !== false
+        ? base64_decode($m[2])
+        : rawurldecode($m[2]);
+    if (empty($bytes)) {
+        return 0;
+    }
+
+    $hash = hash('sha256', $bytes);
+
+    // Dedup: have we stored these exact bytes before?
+    $existing = get_posts(array(
+        'post_type'   => 'attachment',
+        'post_status' => 'inherit',
+        'numberposts' => 1,
+        'fields'      => 'ids',
+        'meta_key'    => '_sorcery_img_hash',
+        'meta_value'  => $hash,
+    ));
+    if ($existing) {
+        return (int) $existing[0];
+    }
+
+    $filename = 'sorcery-' . substr($hash, 0, 16) . '.' . $exts[$mime];
+    $upload   = wp_upload_bits($filename, null, $bytes);
+    if (!empty($upload['error'])) {
+        return 0;
+    }
+
+    $attach_id = wp_insert_attachment(array(
+        'post_mime_type' => $mime,
+        'post_title'     => $filename,
+        'post_status'    => 'inherit',
+    ), $upload['file']);
+    if (is_wp_error($attach_id) || !$attach_id) {
+        return 0;
+    }
+
+    require_once ABSPATH . 'wp-admin/includes/image.php';
+    wp_update_attachment_metadata(
+        $attach_id,
+        wp_generate_attachment_metadata($attach_id, $upload['file'])
+    );
+    update_post_meta($attach_id, '_sorcery_img_hash', $hash);
+    // Marks this attachment as ours so a future cleanup pass can find
+    // images no puzzle references any more.
+    update_post_meta($attach_id, '_sorcery_managed', 1);
+
+    return (int) $attach_id;
+}
+
+/**
+ * Replace each card's inline data: image with an attachment-id reference,
+ * for storage. Idempotent: cards already carrying an imgId (or a plain URL)
+ * are left alone, so re-saving never duplicates a file. On any intern
+ * failure the original data URL is kept, so no image is ever lost.
+ */
+function sorcery_puzzle_pack_images(&$data)
+{
+    if (empty($data['cards']) || !is_array($data['cards'])) {
+        return;
+    }
+    foreach ($data['cards'] as &$card) {
+        if (
+            is_array($card)
+            && !empty($card['img'])
+            && strpos($card['img'], 'data:') === 0
+        ) {
+            $id = sorcery_puzzle_intern_image($card['img']);
+            if ($id) {
+                $card['imgId'] = $id;
+                unset($card['img']);
+            }
+        }
+    }
+    unset($card);
+}
+
+/**
+ * Resolve each card's stored attachment reference back to its current URL,
+ * for output. The app only ever sees img as a plain URL string.
+ */
+function sorcery_puzzle_unpack_images(&$data)
+{
+    if (empty($data['cards']) || !is_array($data['cards'])) {
+        return;
+    }
+    foreach ($data['cards'] as &$card) {
+        if (is_array($card) && !empty($card['imgId'])) {
+            $url = wp_get_attachment_url((int) $card['imgId']);
+            if ($url) {
+                $card['img'] = $url;
+            }
+        }
+    }
+    unset($card);
+}
+
 function sorcery_puzzle_full($post)
 {
     $data = json_decode($post->post_content, true);
@@ -104,6 +239,9 @@ function sorcery_puzzle_full($post)
     $data['id']   = $summary['id'];
     $data['name'] = $summary['name'];
     $data['date'] = $summary['date'];
+    // Card images are stored as Media Library references; resolve each back
+    // to its current URL so the app always receives a plain img string.
+    sorcery_puzzle_unpack_images($data);
     return $data;
 }
 
@@ -190,6 +328,10 @@ function sorcery_puzzle_rest_save($req)
     $data['name'] = $name;
     $data['date'] = $date ? $date : null;
 
+    // Move any inline card images into the Media Library, leaving only
+    // small attachment references in the puzzle JSON we store.
+    sorcery_puzzle_pack_images($data);
+
     $postarr = array(
         'post_type'    => SORCERY_PUZZLE_CPT,
         'post_status'  => 'publish',
@@ -260,6 +402,34 @@ function sorcery_puzzle_rest_daily()
     return sorcery_puzzle_full($released[0]);
 }
 
+/**
+ * One-time migration for puzzles saved before images were externalized:
+ * re-packs every stored puzzle so inline base64 images move into the Media
+ * Library. Idempotent and deduplicating, so it's safe to run more than once.
+ * Run via WP-CLI: wp eval 'sorcery_puzzle_migrate_inline_images();'
+ * Returns the number of puzzles whose stored content changed.
+ */
+function sorcery_puzzle_migrate_inline_images()
+{
+    $changed = 0;
+    foreach (sorcery_puzzle_all_posts() as $post) {
+        $data = json_decode($post->post_content, true);
+        if (!is_array($data)) {
+            continue;
+        }
+        sorcery_puzzle_pack_images($data);
+        $content = wp_json_encode($data);
+        if ($content !== $post->post_content) {
+            wp_update_post(array(
+                'ID'           => $post->ID,
+                'post_content' => wp_slash($content),
+            ));
+            $changed++;
+        }
+    }
+    return $changed;
+}
+
 function sorcery_puzzle_shortcode($atts)
 {
     $atts = shortcode_atts(
@@ -280,7 +450,7 @@ function sorcery_puzzle_shortcode($atts)
         'sorcery-puzzle',
         plugins_url('dist/sorcery-puzzle.js', __FILE__),
         array(),
-        file_exists($bundle) ? (string) filemtime($bundle) : '0.3.0',
+        file_exists($bundle) ? (string) filemtime($bundle) : '0.4.0',
         true
     );
 
