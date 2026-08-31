@@ -92,12 +92,6 @@ body {
   align-items: start;
 }
 
-@media (max-width: 900px) {
-  .layout {
-    grid-template-columns: 1fr;
-  }
-}
-
 .sidebar {
   display: flex;
   flex-direction: column;
@@ -136,6 +130,13 @@ body {
   border-radius: 6px;
   padding: 6px 8px;
   margin: 2px 0 6px;
+}
+
+.text-area {
+  resize: vertical;
+  min-height: 56px;
+  font: inherit;
+  line-height: 1.4;
 }
 
 .btn-row {
@@ -186,12 +187,167 @@ body {
   margin: 6px 2px;
 }
 
+/* ---------- puzzle brief (play mode) ---------- */
+
+.brief-title {
+  font-family: Georgia, serif;
+  font-size: 16px;
+  margin: 0 0 6px;
+}
+
+.brief-desc {
+  margin: 0 0 6px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.brief-goal {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 /* ---------- table / board ---------- */
 
 .table {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+/* ---------- bottom dock (storyline + player side) ---------- */
+
+/* Sticks to the bottom of the viewport while the board scrolls above it.
+   It keeps its place in the flow, so nothing is ever hidden underneath. */
+.table-dock {
+  position: sticky;
+  bottom: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  padding-bottom: 4px;
+  box-shadow: 0 -14px 22px -14px rgba(0, 0, 0, 0.95);
+}
+
+.dock-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-start;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  padding: 4px 12px;
+  cursor: pointer;
+}
+
+.dock-toggle:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.table-dock.collapsed .dock-toggle {
+  border-bottom: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.dock-caret {
+  font-size: 12px;
+  line-height: 1;
+}
+
+/* Capped so a crowded hand can never push the board off screen; it scrolls
+   inside the dock instead. */
+.dock-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 58vh;
+  overflow-y: auto;
+  padding-top: 4px;
+}
+
+/* ---------- selected-card action bar ---------- */
+
+/* Everything a card can do, at a size a finger can hit, docked where the
+   eye already is. It rides above the storyline and survives the dock being
+   folded away, so the actions are never more than one tap from the board. */
+.card-actions {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  padding: 8px 36px 8px 10px;
+  margin-bottom: 6px;
+}
+
+.ca-thumb {
+  width: 44px;
+  border-radius: 5px;
+  display: block;
+  flex-shrink: 0;
+}
+
+.ca-thumb.flipped {
+  transform: rotate(180deg);
+}
+
+.ca-id {
+  min-width: 0;
+}
+
+.ca-name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ca-zone {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.ca-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ca-hint {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 0;
+}
+
+.ca-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ca-close:hover {
+  border-color: var(--accent);
+  color: var(--text);
 }
 
 /* 5x4 grid of actual squares. */
@@ -265,8 +421,6 @@ body {
   height: 44%;
   align-content: flex-start;
   z-index: 3;
-  /* Room for the toggle row riding on the cards' top edge. */
-  padding-top: 13px;
 }
 
 /* Drop-only band for sending a card underground; the cards themselves are
@@ -301,32 +455,20 @@ body {
   z-index: 1;
 }
 
-/* Owner toggle for the square's site, tucked in the cell's top-left
-   corner away from the card toggles that live on the top edge. */
-.site-control-toggle {
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  border: 1px solid var(--border);
-  background: var(--panel-2);
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1;
-  cursor: pointer;
-  z-index: 4;
-}
-
-.site-control-toggle.on {
-  background: var(--bad);
-  border-color: var(--bad);
-  color: #fff;
-}
 .dropzone.over {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
+}
+
+/* While a card is selected every zone is a one-click destination, so they
+   say so faintly rather than staying invisible. */
+.dropzone.armed {
+  cursor: copy;
+}
+
+.dropzone.armed:hover {
+  outline: 1px dashed var(--accent);
+  outline-offset: -1px;
 }
 
 /* ---------- intersections / auras ---------- */
@@ -404,8 +546,11 @@ body {
 
 /* ---------- hands / cemeteries ---------- */
 
+/* Wraps rather than squeezing: on a tablet the cemetery and collection drop
+   onto their own line instead of crushing the hand. */
 .hand-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
 }
 
@@ -417,13 +562,13 @@ body {
 }
 
 .hand-block {
-  flex: 1;
+  flex: 1 1 200px;
   min-width: 0;
 }
 
 .grave-block {
-  width: 130px;
-  flex-shrink: 0;
+  flex: 1 1 118px;
+  max-width: 160px;
 }
 
 .hand,
@@ -434,7 +579,7 @@ body {
   padding: 10px;
   display: flex;
   flex-wrap: wrap;
-  gap: 16px;
+  gap: 10px;
   align-items: flex-start;
 }
 
@@ -445,8 +590,9 @@ body {
 /* ---------- mana & thresholds ---------- */
 
 .stats-block {
-  width: 200px;
-  flex-shrink: 0;
+  /* Wide enough that the life readout still fits when it reads
+     "Death's Door" instead of a number. */
+  flex: 0 0 224px;
 }
 
 .stat-row {
@@ -460,6 +606,33 @@ body {
   font-size: 12px;
   color: var(--muted);
   width: 34px;
+}
+
+.life-row {
+  gap: 6px;
+  padding-bottom: 4px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.life-value {
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* At 0 the number is replaced by the state's name, which needs room and
+   should read as a warning rather than a score. */
+.life-row.at-door .life-value {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  color: var(--bad);
+  white-space: nowrap;
+}
+
+.door-icon {
+  margin-right: 2px;
 }
 
 .mana-row .stat-value {
@@ -583,6 +756,23 @@ body {
   border-radius: 8px;
 }
 
+.card-token.selected {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+.site-bg.selected {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.aura-token.selected {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: 8px;
+}
+
 .card-token.targetable,
 .site-bg.targetable {
   cursor: crosshair;
@@ -623,183 +813,9 @@ body {
   word-break: break-word;
 }
 
-.card-remove {
-  position: absolute;
-  top: -8px;
-  right: -8px;
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  border: none;
-  background: var(--bad);
-  color: #fff;
-  font-size: 15px;
-  line-height: 1;
-  cursor: pointer;
-}
-
 /* minions inside a square's surface/underground slots stay small */
 .cell-half .card-token {
   width: 30%;
-}
-
-/* On the board, every button lines up along the card's top edge so nothing
-   gets clipped or hides behind neighboring cards. */
-.cell-half .card-token .card-remove,
-.cell-half .card-token .card-site-toggle,
-.cell-half .card-token .card-aura-toggle,
-.cell-half .card-token .card-control-toggle,
-.cell-half .card-token .card-under-toggle,
-.cell-half .card-token .card-attack {
-  width: 20px;
-  height: 20px;
-  font-size: 11px;
-  top: -10px;
-  bottom: auto;
-}
-
-.cell-half .card-token .card-site-toggle {
-  left: -6px;
-}
-
-.cell-half .card-token .card-aura-toggle {
-  left: 25%;
-  transform: translateX(-50%);
-}
-
-.cell-half .card-token .card-under-toggle {
-  left: 50%;
-  transform: translateX(-50%);
-}
-
-.cell-half .card-token .card-control-toggle {
-  left: 75%;
-  right: auto;
-  transform: translateX(-50%);
-}
-
-.cell-half .card-token .card-remove {
-  right: -6px;
-}
-
-/* Shares the top-right spot with the remove button; they are never shown
-   at the same time (attack: play/recording, remove: editor only). */
-.cell-half .card-token .card-attack {
-  left: auto;
-  right: -6px;
-  transform: none;
-}
-
-.card-site-toggle {
-  position: absolute;
-  top: -8px;
-  left: -8px;
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  border: 1px solid var(--border);
-  background: var(--panel-2);
-  color: var(--muted);
-  font-size: 14px;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.card-site-toggle.on {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
-}
-
-.card-aura-toggle {
-  position: absolute;
-  top: -8px;
-  left: 33%;
-  transform: translateX(-50%);
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  border: 1px solid var(--border);
-  background: var(--panel-2);
-  color: var(--muted);
-  font-size: 14px;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.card-aura-toggle.on {
-  background: var(--aura);
-  border-color: var(--aura);
-  color: #fff;
-}
-
-.card-control-toggle {
-  position: absolute;
-  top: -8px;
-  left: 67%;
-  transform: translateX(-50%);
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  border: 1px solid var(--border);
-  background: var(--panel-2);
-  color: var(--muted);
-  font-size: 14px;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.card-control-toggle.on {
-  background: var(--bad);
-  border-color: var(--bad);
-  color: #fff;
-}
-
-/* Top-center, between the two editor corner toggles. */
-.card-under-toggle {
-  position: absolute;
-  top: -8px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  border: 1px solid var(--border);
-  background: var(--panel-2);
-  color: var(--text);
-  font-size: 14px;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.card-under-toggle:hover {
-  border-color: var(--accent);
-}
-
-.card-attack {
-  position: absolute;
-  top: 50%;
-  right: -8px;
-  transform: translateY(-50%);
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  border: 1px solid var(--border);
-  background: var(--panel-2);
-  color: var(--text);
-  font-size: 12px;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.card-attack:hover {
-  border-color: var(--bad);
-}
-
-.card-attack.on {
-  background: var(--bad);
-  border-color: var(--bad);
-  color: #fff;
 }
 
 .site-badge {
@@ -840,8 +856,6 @@ body {
   gap: 8px;
 }
 
-/* The corner buttons overhang each card by ~8px, so cards need at least
-   16px of air between them for every button to stay clickable. */
 .pool {
   min-height: 80px;
   border: 1px dashed var(--border);
@@ -850,7 +864,7 @@ body {
   margin-top: 6px;
   display: flex;
   flex-wrap: wrap;
-  gap: 18px;
+  gap: 10px;
 }
 
 /* ---------- legend ---------- */
@@ -989,4 +1003,125 @@ body {
 
 .move-log li.after {
   color: var(--muted);
+}
+
+/* ---------- responsive ---------- */
+
+/* Tablet landscape: keep the two-column layout but give the board the room. */
+@media (max-width: 1200px) {
+  .layout {
+    grid-template-columns: 250px 1fr;
+  }
+}
+
+/* Tablet portrait and below: one column, with the sidebar's panels flowing
+   side by side so it stays a header rather than a long scroll before the
+   board. */
+@media (max-width: 1000px) {
+  .app {
+    padding: 8px;
+  }
+
+  .layout {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    align-items: start;
+  }
+
+  .board {
+    padding: 8px;
+  }
+
+  .intersections {
+    inset: 8px;
+  }
+
+  .move-log ol {
+    max-height: 200px;
+  }
+}
+
+/* Phone-width fallback: the board is still the same 5x4 grid, just small. */
+@media (max-width: 560px) {
+  .card-token {
+    width: 64px;
+  }
+
+  .grave .card-token {
+    width: 48px;
+  }
+
+  .hand,
+  .grave,
+  .storyline {
+    min-height: 76px;
+  }
+
+  .stats-block {
+    flex: 1 1 100%;
+  }
+
+  /* At this width the dock would otherwise cover most of the board. */
+  .dock-body {
+    max-height: 42vh;
+  }
+}
+
+/* Touch screens: the 18px counter buttons and 6px-tall controls are a
+   mouse's dimensions, not a finger's. */
+@media (pointer: coarse) {
+  .btn {
+    padding: 9px 13px;
+  }
+
+  .btn.small {
+    padding: 6px 10px;
+  }
+
+  .stat-btn {
+    width: 28px;
+    height: 28px;
+    font-size: 14px;
+  }
+
+  .ca-close {
+    width: 32px;
+    height: 32px;
+  }
+
+  .card-actions {
+    padding-right: 44px;
+  }
+}
+
+/* Short viewports (landscape tablets): the dock must not swallow the board,
+   so its zones and the cards inside them tighten up rather than the dock
+   growing and pushing the grid off screen. */
+@media (max-height: 820px) {
+  .dock-body {
+    max-height: 48vh;
+  }
+
+  .hand,
+  .grave,
+  .storyline {
+    min-height: 72px;
+    padding: 6px;
+  }
+
+  .dock-body .card-token {
+    width: 62px;
+  }
+
+  .dock-body .grave .card-token {
+    width: 46px;
+  }
+
+  .ca-thumb {
+    width: 36px;
+  }
 }

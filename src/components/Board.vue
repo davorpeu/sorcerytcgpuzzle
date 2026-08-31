@@ -3,7 +3,7 @@ import {
   state,
   ui,
   targetAttack,
-  toggleControl,
+  selectCard,
   setDragGhost,
   GRID_SIZE,
   GRID_COLS,
@@ -46,9 +46,18 @@ function dragAura(e, idx) {
   setDragGhost(e, e.currentTarget.querySelector('img'))
 }
 
+// Sites and auras select the same way board cards do; their actions then
+// appear in the bar above the storyline.
 function clickSite(idx) {
   const card = siteCard(idx)
-  if (card && ui.attacker) targetAttack(card.id)
+  if (!card) return
+  if (ui.attacker && ui.attacker !== card.id) targetAttack(card.id)
+  else selectCard(card.id)
+}
+
+function clickAura(idx) {
+  const card = auraCard(idx)
+  if (card) selectCard(card.id)
 }
 
 // Position each intersection node on the grid line crossing it marks.
@@ -75,14 +84,15 @@ function nodeStyle(idx) {
             class="site-bg"
             :class="{
               flipped: siteCard(n - 1).enemy,
+              selected: ui.selected === siteCard(n - 1).id,
               targetable: ui.attacker && ui.attacker !== siteCard(n - 1).id,
             }"
             :src="siteCard(n - 1).img"
             :alt="siteCard(n - 1).name"
             draggable="true"
-            :title="siteCard(n - 1).name + ' (drag to move site, hold Alt to enlarge)'"
+            :title="siteCard(n - 1).name + ' (click for actions, hold Alt to enlarge)'"
             @dragstart="dragSite($event, n - 1)"
-            @click="clickSite(n - 1)"
+            @click.stop="clickSite(n - 1)"
             @mouseenter="ui.hoverCard = siteCard(n - 1).id"
             @mouseleave="ui.hoverCard = null"
           />
@@ -107,15 +117,6 @@ function nodeStyle(idx) {
         <!-- Drop-only band: cards dropped here go underground but are
              displayed in the top area with the BELOW mark. -->
         <DropZone :zone="`cell:${n - 1}:bot`" class="cell-half bot" />
-        <button
-          v-if="siteCard(n - 1) && state.mode === 'editor' && !state.recording"
-          class="site-control-toggle"
-          :class="{ on: siteCard(n - 1).enemy }"
-          :title="siteCard(n - 1).enemy ? 'Opponent controls this site (click to give to player)' : 'Player controls this site (click to give to opponent)'"
-          @click.stop="toggleControl(siteCard(n - 1).id)"
-        >
-          ⇅
-        </button>
       </div>
     </div>
     <div class="intersections">
@@ -130,9 +131,11 @@ function nodeStyle(idx) {
         <div
           v-if="auraCard(n - 1)"
           class="aura-token"
+          :class="{ selected: ui.selected === auraCard(n - 1).id }"
           draggable="true"
-          :title="auraCard(n - 1).name + ' (drag to move aura, hold Alt to enlarge)'"
+          :title="auraCard(n - 1).name + ' (click for actions, hold Alt to enlarge)'"
           @dragstart="dragAura($event, n - 1)"
+          @click.stop="clickAura(n - 1)"
           @mouseenter="ui.hoverCard = auraCard(n - 1).id"
           @mouseleave="ui.hoverCard = null"
         >

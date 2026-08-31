@@ -32,11 +32,11 @@ async function onFiles(e) {
         :key="id"
         :card-id="id"
         from="pool"
-        removable
       />
       <p v-if="!state.zones.pool.length" class="hint">
-        Upload card images, then drag them onto the board or hands. Dragging
-        places a copy — the card stays here so you can use it again.
+        Upload card images, then drag them onto the board or hands — or click
+        a card and then click where it should go. Either way a copy is placed
+        and the card stays here, so one upload can be used many times.
       </p>
     </DropZone>
   </div>
