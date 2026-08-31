@@ -337,6 +337,22 @@ const result = computed(() => {
         </template>
 
         <template v-else>
+          <div v-if="!state.puzzleName" class="panel">
+            <div class="zone-title">No puzzle loaded</div>
+            <p class="hint">
+              Pick a puzzle to play — load the current one, or browse the
+              archive.
+            </p>
+            <div class="btn-row">
+              <button class="btn primary" @click="onLoadDaily">
+                Play current puzzle
+              </button>
+              <button class="btn" @click="showArchive = !showArchive">
+                {{ showArchive ? 'Hide archive' : 'Archive' }}
+              </button>
+            </div>
+          </div>
+
           <div class="panel">
             <div class="zone-title">Controls</div>
             <div class="btn-row">
@@ -351,6 +367,9 @@ const result = computed(() => {
               </button>
               <button class="btn" @click="showArchive = !showArchive">
                 {{ showArchive ? 'Hide archive' : 'Archive' }}
+              </button>
+              <button class="btn" @click="onLoadDaily">
+                Load current puzzle
               </button>
             </div>
             <p v-if="!config.canEdit" class="hint">
