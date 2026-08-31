@@ -5,10 +5,15 @@ A Vue 3 web app for building and playing puzzles for the Sorcery: Contested Real
 ## Features
 
 - 5×4 grid of squares; each square holds one **site** card plus minions on the **surface** or **below** (underground/undersea).
-- Per-player hands, cemeteries, collections, and mana + elemental threshold trackers (air 🜁, earth 🜃, fire 🜂, water 🜄), plus a shared storyline zone.
+- Per-player hands, cemeteries, collections, and life, mana + elemental threshold trackers (air 🜁, earth 🜃, fire 🜂, water 🜄), plus a shared storyline zone.
+- Life totals start at 20; at 0 the readout says **Death's Door** rather than a bare zero, matching the game's own term for that state.
+- The shared storyline and the player's own side (life/mana, hand, cemetery, collection) are docked to the bottom of the viewport, so they stay in reach however far the board is scrolled. The dock folds away when the board needs the room.
+- Every puzzle carries a **title** and a short **brief** saying what kind of puzzle it is and what the solver has to achieve; players see both before they start.
 - Upload card images (they are downscaled and stored inside the puzzle). Mark a card as a site with the ⛰ toggle in the pool — sites dropped on a square fill its site slot (one per square) and render as the square's background.
-- Drag-and-drop cards between all zones.
+- Drag-and-drop cards between all zones — or click a card and then click the zone it should go to, which also works on a touch screen where HTML5 drag-and-drop does not fire.
+- Clicking a card selects it and puts everything it can do (attack, send underground/surface, change control, mark as site/aura, remove) in a docked action bar just above the storyline, at a size that stays usable when the card itself is 40px wide.
 - Hold **Alt** while hovering a card to see it enlarged.
+- Responsive down to tablet size: the layout goes single-column on portrait tablets, the player row wraps instead of overflowing, and touch screens get larger controls.
 - **Editor mode**: set up the board, then *Record solution* — every move you make becomes the answer sequence. Record additional lines for puzzles with more than one valid solution; each recording restarts from the same start position.
 - **Play mode**: the solver makes moves; *Submit solution* passes if the sequence matches any recorded solution line, and otherwise points at the first wrong step against the closest line.
 - Wordle-style attempt limit: regular players get 3 submits per puzzle per day, tracked in the browser's localStorage (soft enforcement — clearing site data resets it). Editors are exempt so they can test freely.
@@ -27,9 +32,9 @@ npm run build    # production bundle in dist/
 ## Creating a puzzle
 
 1. In **Editor** mode, click *Upload cards* and pick card images.
-2. Drag cards from the pool onto the board, hands, or cemeteries to set the starting position.
+2. Drag cards from the pool onto the board, hands, or cemeteries to set the starting position (or click a card, then click its destination). Click a card to select it — its actions appear in the bar above the storyline.
 3. Click *Record solution* and perform the correct sequence of moves, then *Stop recording*. If the puzzle can be solved more than one way (e.g. a unit may approach from two directions), click *Record another solution* and play the alternative — the board snaps back to the start position for each line, and a player passes by matching any of them.
-4. Name the puzzle and *Save* (site-wide in WordPress, this browser when standalone), *Export* (JSON file), or *Copy link*.
+4. Give the puzzle a title and a brief (what kind of puzzle it is and what to achieve), then *Save* (site-wide in WordPress, this browser when standalone), *Export* (JSON file), or *Copy link*.
 5. *Play* to test it yourself.
 
 ## Loading puzzles by URL
@@ -128,7 +133,8 @@ When the app runs standalone (`npm run dev`, or any page without `data-api`), al
 {
   "version": 1,
   "id": "abc123",
-  "name": "Puzzle name",
+  "name": "Puzzle title",
+  "desc": "Lethal: put the opponent at Death's Door this turn.",
   "date": "2026-07-08",
   "cards": { "cardId": { "id": "cardId", "name": "Wolf", "img": "data:image/jpeg;base64,..." } },
   "//": "when stored in WordPress, img is externalized to the Media Library and replaced by an imgId reference; the API resolves imgId back to a URL on read",
@@ -144,4 +150,6 @@ When the app runs standalone (`npm run dev`, or any page without `data-api`), al
 
 Zones per grid square `N` (0–19, row-major, 5 per row): `site:N` (the site card, max 1), `cell:N:top` (surface), `cell:N:bot` (below). Other zones: `hand:player`, `hand:opponent`, `grave:player`, `grave:opponent`, `collection:player`, `collection:opponent`, `storyline` (shared), `pool` (editor-only staging area). Legacy `cell:N` zones load as `cell:N:top`.
 
-The puzzle's `stats` object stores each player's starting mana and thresholds: `{ "player": { "mana": 3, "air": 0, "earth": 0, "fire": 1, "water": 1 }, "opponent": { ... } }`. Counters are adjustable during play and reset with the board, but they are informational — only card moves are part of the checked solution sequence.
+The puzzle's `stats` object stores each player's starting life, mana and thresholds: `{ "player": { "life": 20, "mana": 3, "air": 0, "earth": 0, "fire": 1, "water": 1 }, "opponent": { ... } }`. Missing `life` defaults to 20, so older puzzle files load unchanged. Counters are adjustable during play and reset with the board, but they are informational — only card moves are part of the checked solution sequence.
+
+`desc` is the player-facing brief. It is optional; puzzles saved before it existed simply show no brief.

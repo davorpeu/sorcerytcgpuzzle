@@ -33,12 +33,17 @@ import MoveLog from './components/MoveLog.vue'
 import DropZone from './components/DropZone.vue'
 import CardToken from './components/CardToken.vue'
 import ThresholdIcon from './components/ThresholdIcon.vue'
+import CardActions from './components/CardActions.vue'
 import ArchiveCalendar from './components/ArchiveCalendar.vue'
 
 const saved = ref([])
 const importInput = ref(null)
 const notice = ref('')
 const showArchive = ref(false)
+// The storyline + your hand are docked to the bottom of the viewport so they
+// stay reachable while the board is scrolled; the dock can be folded away
+// when the board needs the room.
+const dockOpen = ref(true)
 
 async function onArchiveSelect(id) {
   if (!(await loadById(id))) flash('That puzzle is not available.')
@@ -156,7 +161,10 @@ function onKeyDown(e) {
     e.preventDefault() // keep the browser from focusing its menu bar
     ui.alt = true
   }
-  if (e.key === 'Escape') ui.attacker = null
+  if (e.key === 'Escape') {
+    ui.attacker = null
+    ui.selected = null
+  }
 }
 
 function onKeyUp(e) {
@@ -258,8 +266,19 @@ const result = computed(() => {
             <input
               v-model="state.puzzleName"
               class="text-input"
-              placeholder="Puzzle name"
+              placeholder="Puzzle title"
             />
+            <textarea
+              v-model="state.puzzleDesc"
+              class="text-input text-area"
+              rows="3"
+              placeholder="Brief — what kind of puzzle is this and what should the player achieve?"
+            ></textarea>
+            <p class="hint">
+              Shown to players before they start. Say what the goal is, e.g.
+              &ldquo;Lethal: put the opponent at Death&rsquo;s Door this
+              turn&rdquo;.
+            </p>
             <label class="field-label">
               Release date
               <input v-model="state.puzzleDate" type="date" class="text-input" />
@@ -337,6 +356,24 @@ const result = computed(() => {
         </template>
 
         <template v-else>
+          <div v-if="state.puzzleName || state.puzzleDesc" class="panel brief">
+            <div class="zone-title">Puzzle</div>
+            <h2 class="brief-title">
+              {{ state.puzzleName || 'Untitled puzzle' }}
+            </h2>
+            <p v-if="state.puzzleDesc" class="brief-desc">
+              {{ state.puzzleDesc }}
+            </p>
+            <p v-else class="hint">No brief was written for this puzzle.</p>
+            <p v-if="state.solutions.length" class="brief-goal">
+              Solve in {{ targetMoves }}
+              {{ targetMoves === 1 ? 'move' : 'moves' }}
+              <template v-if="state.solutions.length > 1">
+                · {{ state.solutions.length }} possible solutions
+              </template>
+            </p>
+          </div>
+
           <div v-if="!state.puzzleName" class="panel">
             <div class="zone-title">No puzzle loaded</div>
             <p class="hint">
@@ -407,19 +444,19 @@ const result = computed(() => {
               Underground card — darkened, use ↧/↥ to send under or surface
             </li>
             <li>
-              <span class="legend-icon">⚔</span>
-              Attack — click ⚔ on a unit, then click a unit or site
+              <span class="legend-icon">☞</span>
+              Click a card to select it — its actions (attack, send below,
+              control) appear above the storyline
+            </li>
+            <li>
+              <span class="legend-icon">→</span>
+              With a card selected, click any zone to move it there (works
+              without dragging, e.g. on a tablet)
             </li>
             <li class="legend-elements">
               <span v-for="el in ['air', 'earth', 'fire', 'water']" :key="el" class="legend-el">
                 <ThresholdIcon :element="el" /> {{ el }}
               </span>
-            </li>
-            <li v-if="state.mode === 'editor'">
-              <span class="legend-icon">⛰</span> site ·
-              <span class="legend-icon">✦</span> aura ·
-              <span class="legend-icon">⇅</span> owner ·
-              <span class="legend-icon">×</span> remove
             </li>
           </ul>
         </div>
@@ -428,18 +465,34 @@ const result = computed(() => {
       <main class="table">
         <Hand side="opponent" />
         <Board />
-        <div class="zone-block storyline-block">
-          <div class="zone-title">Storyline (shared)</div>
-          <DropZone zone="storyline" class="storyline">
-            <CardToken
-              v-for="id in state.zones.storyline"
-              :key="id"
-              :card-id="id"
-              from="storyline"
-            />
-          </DropZone>
+
+        <!-- Sticky footer: the storyline and the player's own side follow the
+             viewport, so they stay in reach however far the board scrolls. -->
+        <div class="table-dock" :class="{ collapsed: !dockOpen }">
+          <button
+            class="dock-toggle"
+            :title="dockOpen ? 'Hide the storyline and your hand' : 'Show the storyline and your hand'"
+            @click="dockOpen = !dockOpen"
+          >
+            <span class="dock-caret">{{ dockOpen ? '▾' : '▴' }}</span>
+            Storyline &amp; your side
+          </button>
+          <CardActions />
+          <div v-show="dockOpen" class="dock-body">
+            <div class="zone-block storyline-block">
+              <div class="zone-title">Storyline (shared)</div>
+              <DropZone zone="storyline" class="storyline">
+                <CardToken
+                  v-for="id in state.zones.storyline"
+                  :key="id"
+                  :card-id="id"
+                  from="storyline"
+                />
+              </DropZone>
+            </div>
+            <Hand side="player" />
+          </div>
         </div>
-        <Hand side="player" />
       </main>
     </div>
 

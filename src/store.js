@@ -47,10 +47,24 @@ export function emptyZones() {
 
 export const ELEMENTS = ['air', 'earth', 'fire', 'water']
 
+// Avatars start at 20 life in Sorcery; 0 is not "dead" but Death's Door,
+// a distinct game state, so the UI never prints a bare 0 for life.
+export const START_LIFE = 20
+
 export function defaultStats() {
-  const side = () => ({ mana: 0, air: 0, earth: 0, fire: 0, water: 0 })
+  const side = () => ({
+    life: START_LIFE,
+    mana: 0,
+    air: 0,
+    earth: 0,
+    fire: 0,
+    water: 0,
+  })
   return { player: side(), opponent: side() }
 }
+
+// A life total of 0 means the avatar is at Death's Door.
+export const lifeLabel = (n) => (Number(n) <= 0 ? "Death's Door" : String(n))
 
 // Host-page configuration (not part of the puzzle data). The WordPress
 // shortcode sets canEdit from the viewer's capability; when false the app is
@@ -91,17 +105,40 @@ export const ui = reactive({
   hoverCard: null, // card id currently under the mouse
   alt: false, // Alt key held -> show enlarged preview of hovered card
   attacker: null, // card id armed to attack; next click on a unit/site targets it
+  // Card whose actions are offered in the docked action bar. Selecting is
+  // also how a card is picked up without dragging: click the card, then
+  // click the zone it should go to.
+  selected: null,
 })
+
+// Which zone currently holds a card. The action bar reads this live rather
+// than remembering where the card was when it got selected, so it stays
+// right after the card moves.
+export function zoneOf(cardId) {
+  for (const [zone, ids] of Object.entries(state.zones)) {
+    if (ids.includes(cardId)) return zone
+  }
+  return null
+}
+
+export function selectCard(cardId) {
+  ui.selected = ui.selected === cardId ? null : cardId
+}
+
+export function clearSelection() {
+  ui.selected = null
+}
 
 export const state = reactive({
   mode: 'editor', // 'editor' | 'play'
   puzzleId: null,
   puzzleName: '',
+  puzzleDesc: '', // short brief: what kind of puzzle this is and what to achieve
   puzzleDate: '', // optional YYYY-MM-DD, used by the daily-puzzle picker
   cards: {}, // id -> { id, name, img, site?, aura?, enemy? }
   zones: emptyZones(), // zoneId -> [cardId, ...]
   initialZones: null, // snapshot taken when the solution recording starts
-  stats: defaultStats(), // mana + elemental thresholds per player
+  stats: defaultStats(), // life, mana + elemental thresholds per player
   initialStats: null,
   // A puzzle can have several valid solutions; each line is a full move
   // sequence recorded from the same start position, and check() accepts an
@@ -343,6 +380,7 @@ export function enterPlay() {
   state.firstWrong = -1
   state.mode = 'play'
   ui.attacker = null
+  ui.selected = null
 }
 
 export function enterEditor() {
@@ -353,6 +391,7 @@ export function enterEditor() {
   state.checked = false
   restoreInitial()
   ui.attacker = null
+  ui.selected = null
 }
 
 export function resetPlay() {
@@ -361,6 +400,7 @@ export function resetPlay() {
   state.checked = false
   state.firstWrong = -1
   ui.attacker = null
+  ui.selected = null
 }
 
 export function adjustStat(side, key, delta) {
@@ -531,6 +571,7 @@ export function removeCard(cardId) {
   state.draft = state.draft.filter((m) => !involves(m))
   state.moves = state.moves.filter((m) => !involves(m))
   if (ui.attacker === cardId) ui.attacker = null
+  if (ui.selected === cardId) ui.selected = null
   if (state.initialZones) {
     for (const zone of Object.values(state.initialZones)) {
       const i = zone.indexOf(cardId)
@@ -546,6 +587,7 @@ export function serialize() {
     version: FORMAT_VERSION,
     id: state.puzzleId || uid(),
     name: state.puzzleName || 'Untitled puzzle',
+    desc: state.puzzleDesc || '',
     date: state.puzzleDate || null,
     cards: clone(state.cards),
     initial: clone(state.initialZones || state.zones),
@@ -580,6 +622,7 @@ function normalizeStats(s) {
 export function loadPuzzle(data, { play = true } = {}) {
   state.puzzleId = data.id || uid()
   state.puzzleName = data.name || ''
+  state.puzzleDesc = data.desc || ''
   state.puzzleDate = data.date || ''
   state.cards = clone(data.cards || {})
   state.initialZones = normalizeZones(data.initial)
@@ -593,12 +636,15 @@ export function loadPuzzle(data, { play = true } = {}) {
   state.checked = false
   state.firstWrong = -1
   state.mode = play || !config.canEdit ? 'play' : 'editor'
+  ui.attacker = null
+  ui.selected = null
   restoreAttempt()
 }
 
 export function newPuzzle() {
   state.puzzleId = null
   state.puzzleName = ''
+  state.puzzleDesc = ''
   state.puzzleDate = ''
   state.cards = {}
   state.zones = emptyZones()
@@ -614,6 +660,8 @@ export function newPuzzle() {
   state.tries = 0
   state.solved = false
   state.mode = config.canEdit ? 'editor' : 'play'
+  ui.attacker = null
+  ui.selected = null
 }
 
 function readStore() {
@@ -816,7 +864,12 @@ export function loadDemo() {
   state.stats.player.mana = 3
   state.stats.player.fire = 1
   state.stats.player.water = 1
+  state.stats.player.life = 17
   state.stats.opponent.mana = 2
   state.stats.opponent.earth = 1
+  state.stats.opponent.life = 4
   state.puzzleName = 'Demo puzzle'
+  state.puzzleDesc =
+    "Lethal puzzle: the opponent is on 4 life. Find the line that drops " +
+    "them to Death's Door this turn."
 }
