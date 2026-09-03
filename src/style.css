@@ -383,7 +383,7 @@ body {
   position: absolute;
   bottom: 3%;
   left: 50%;
-  transform: translateX(-50%);
+  transform: translateX(-50%) rotate(90deg);
   max-width: 82%;
   max-height: 82%;
   border-radius: 8px;
@@ -399,7 +399,7 @@ body {
 .site-bg.flipped {
   bottom: auto;
   top: 3%;
-  transform: translateX(-50%) rotate(180deg);
+  transform: translateX(-50%) rotate(270deg);
 }
 
 .cell-half {
