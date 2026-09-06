@@ -135,7 +135,7 @@ export const state = reactive({
   puzzleName: '',
   puzzleDesc: '', // short brief: what kind of puzzle this is and what to achieve
   puzzleDate: '', // optional YYYY-MM-DD, used by the daily-puzzle picker
-  cards: {}, // id -> { id, name, img, site?, aura?, enemy? }
+  cards: {}, // id -> { id, name, img, imgId?, site?, aura?, enemy? }
   zones: emptyZones(), // zoneId -> [cardId, ...]
   initialZones: null, // snapshot taken when the solution recording starts
   stats: defaultStats(), // life, mana + elemental thresholds per player
@@ -204,7 +204,13 @@ export function setDragGhost(e, imgEl, width = 90) {
   c.getContext('2d').drawImage(imgEl, 0, 0, width, h)
   c.style.cssText = 'position:fixed;top:-1000px;left:-1000px;'
   document.body.appendChild(c)
-  e.dataTransfer.setDragImage(c, width / 2, h / 2)
+  try {
+    e.dataTransfer.setDragImage(c, width / 2, h / 2)
+  } catch {
+    // A card image served from another origin (a CDN in front of the Media
+    // Library) taints the canvas; fall back to the browser's default ghost
+    // rather than breaking the drag.
+  }
   setTimeout(() => c.remove(), 0)
 }
 
@@ -556,6 +562,32 @@ export async function addCardFiles(fileList) {
       console.error('Could not load image', file.name, e)
     }
   }
+}
+
+// Card art already uploaded to the WordPress Media Library, searched by
+// title and filename. Only available when the app runs inside WordPress
+// (config.apiUrl set); the endpoint is editor-only.
+export const canSearchMedia = () => remote()
+
+export async function searchMedia(search, page = 1) {
+  if (!remote()) return { items: [], total: 0, pages: 0 }
+  const q = new URLSearchParams({ search, page: String(page) })
+  return api(`/media?${q}`)
+}
+
+// Add a Media Library image to the pool as a card. The attachment id is
+// kept alongside the URL so saving stores the reference rather than the
+// resolved URL, and the image survives a site move.
+export function addCardFromMedia(item) {
+  const id = uid()
+  state.cards[id] = {
+    id,
+    name: item.name || 'Card',
+    img: item.url,
+    imgId: item.id,
+  }
+  state.zones.pool.push(id)
+  return id
 }
 
 export function removeCard(cardId) {
