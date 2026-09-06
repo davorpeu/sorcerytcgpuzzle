@@ -9,7 +9,7 @@ A Vue 3 web app for building and playing puzzles for the Sorcery: Contested Real
 - Life totals start at 20; at 0 the readout says **Death's Door** rather than a bare zero, matching the game's own term for that state.
 - The shared storyline and the player's own side (life/mana, hand, cemetery, collection) are docked to the bottom of the viewport, so they stay in reach however far the board is scrolled. The dock folds away when the board needs the room.
 - Every puzzle carries a **title** and a short **brief** saying what kind of puzzle it is and what the solver has to achieve; players see both before they start.
-- Upload card images (they are downscaled and stored inside the puzzle). Mark a card as a site with the ⛰ toggle in the pool — sites dropped on a square fill its site slot (one per square) and render as the square's background.
+- Build the card pool by **searching the site's Media Library** (WordPress) for art already uploaded there, or by uploading images from disk. Mark a card as a site with the ⛰ toggle in the pool — sites dropped on a square fill its site slot (one per square) and render as the square's background.
 - Drag-and-drop cards between all zones — or click a card and then click the zone it should go to, which also works on a touch screen where HTML5 drag-and-drop does not fire.
 - Clicking a card selects it and puts everything it can do (attack, send underground/surface, change control, mark as site/aura, remove) in a docked action bar just above the storyline, at a size that stays usable when the card itself is 40px wide.
 - Hold **Alt** while hovering a card to see it enlarged.
@@ -31,7 +31,7 @@ npm run build    # production bundle in dist/
 
 ## Creating a puzzle
 
-1. In **Editor** mode, click *Upload cards* and pick card images.
+1. In **Editor** mode, fill the card pool: type a card name into the pool's search box to find art already in the site's Media Library and click a result to add it, or click *Upload cards* to add images from disk. (The search only appears when the app runs inside WordPress.)
 2. Drag cards from the pool onto the board, hands, or cemeteries to set the starting position (or click a card, then click its destination). Click a card to select it — its actions appear in the bar above the storyline.
 3. Click *Record solution* and perform the correct sequence of moves, then *Stop recording*. If the puzzle can be solved more than one way (e.g. a unit may approach from two directions), click *Record another solution* and play the alternative — the board snaps back to the start position for each line, and a player passes by matching any of them.
 4. Give the puzzle a title and a brief (what kind of puzzle it is and what to achieve), then *Save* (site-wide in WordPress, this browser when standalone), *Export* (JSON file), or *Copy link*.
@@ -99,6 +99,8 @@ Card images are **not** stored inside the puzzle. On save, each inline image is 
 wp eval 'sorcery_puzzle_migrate_inline_images();'   # idempotent; safe to re-run
 ```
 
+The same Media Library is what the card pool's **search** box queries, so art you upload once through wp-admin (or that a previous save interned) can be reused across every puzzle without re-uploading. A card picked from the search stores only its `imgId`, and the board renders WordPress's `large` size rather than the original file.
+
 Endpoints under `/wp-json/sorcery-puzzle/v1/`:
 
 | Endpoint | Who | What |
@@ -108,6 +110,7 @@ Endpoints under `/wp-json/sorcery-puzzle/v1/`:
 | `GET /daily` | anyone | today's puzzle |
 | `POST /puzzles` | Editors/Admins | save — updates when the body's `id` matches an existing puzzle, otherwise creates |
 | `DELETE /puzzles/<id>` | Editors/Admins | delete |
+| `GET /media?search=&page=` | Editors/Admins | Media Library image search for the card pool (id, name, url, thumb) |
 
 Writes are protected two ways: WordPress checks the `edit_others_posts` capability, and the request must carry a REST nonce. The shortcode passes the API base to the app via `data-api`, plus a `data-nonce` for editors only — a *Save* in the editor authenticates as the logged-in WordPress session. Visitors never receive a nonce, and the server rejects their writes regardless.
 

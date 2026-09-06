@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Sorcery Puzzle
  * Description: Embeds the Sorcery TCG puzzle app via the [sorcery_puzzle] shortcode and stores puzzles site-wide through a REST API. Shortcode attributes: src (URL to a puzzle JSON), puzzle (stored puzzle id), daily="1".
- * Version: 0.4.0
+ * Version: 0.5.0
  * Author: davorpeu
  */
 
@@ -178,10 +178,11 @@ function sorcery_puzzle_intern_image($src)
 }
 
 /**
- * Replace each card's inline data: image with an attachment-id reference,
- * for storage. Idempotent: cards already carrying an imgId (or a plain URL)
- * are left alone, so re-saving never duplicates a file. On any intern
- * failure the original data URL is kept, so no image is ever lost.
+ * Reduce each card's image to an attachment-id reference for storage:
+ * inline data: images are interned into the Media Library, and cards picked
+ * from the library already have their id. Idempotent, so re-saving never
+ * duplicates a file. On any intern failure the original data URL is kept,
+ * so no image is ever lost; plain URLs we can't resolve stay as they are.
  */
 function sorcery_puzzle_pack_images(&$data)
 {
@@ -189,9 +190,18 @@ function sorcery_puzzle_pack_images(&$data)
         return;
     }
     foreach ($data['cards'] as &$card) {
+        if (!is_array($card)) {
+            continue;
+        }
+        // Cards picked from the Media Library already reference an
+        // attachment; drop the resolved URL so only the id is stored and the
+        // image keeps working if the site later moves its uploads.
+        if (!empty($card['imgId'])) {
+            unset($card['img']);
+            continue;
+        }
         if (
-            is_array($card)
-            && !empty($card['img'])
+            !empty($card['img'])
             && strpos($card['img'], 'data:') === 0
         ) {
             $id = sorcery_puzzle_intern_image($card['img']);
@@ -205,6 +215,18 @@ function sorcery_puzzle_pack_images(&$data)
 }
 
 /**
+ * The URL a card's image is rendered from. Originals in a Media Library can
+ * be full-resolution scans, so the "large" intermediate is preferred; WP
+ * falls back to the full-size URL when no such size exists (as for the
+ * already-downscaled images this plugin interns itself).
+ */
+function sorcery_puzzle_card_image_url($id)
+{
+    $url = wp_get_attachment_image_url((int) $id, 'large');
+    return $url ? $url : wp_get_attachment_url((int) $id);
+}
+
+/**
  * Resolve each card's stored attachment reference back to its current URL,
  * for output. The app only ever sees img as a plain URL string.
  */
@@ -215,7 +237,7 @@ function sorcery_puzzle_unpack_images(&$data)
     }
     foreach ($data['cards'] as &$card) {
         if (is_array($card) && !empty($card['imgId'])) {
-            $url = wp_get_attachment_url((int) $card['imgId']);
+            $url = sorcery_puzzle_card_image_url($card['imgId']);
             if ($url) {
                 $card['img'] = $url;
             }
@@ -280,6 +302,11 @@ add_action('rest_api_init', function () {
             'callback'            => 'sorcery_puzzle_rest_delete',
             'permission_callback' => 'sorcery_puzzle_can_edit',
         ),
+    ));
+    register_rest_route(SORCERY_PUZZLE_REST_NS, '/media', array(
+        'methods'             => 'GET',
+        'callback'            => 'sorcery_puzzle_rest_media',
+        'permission_callback' => 'sorcery_puzzle_can_edit',
     ));
     register_rest_route(SORCERY_PUZZLE_REST_NS, '/daily', array(
         'methods'             => 'GET',
@@ -373,6 +400,62 @@ function sorcery_puzzle_rest_delete($req)
 }
 
 /**
+ * Search the Media Library for card art, so an editor can pick from images
+ * already uploaded to the site instead of re-uploading them per puzzle.
+ * Editors only (see the route's permission callback): this enumerates
+ * uploads, which are not otherwise public.
+ */
+function sorcery_puzzle_rest_media($req)
+{
+    $search   = sanitize_text_field((string) $req->get_param('search'));
+    $page     = max(1, (int) $req->get_param('page'));
+    $per_page = (int) $req->get_param('per_page');
+    $per_page = $per_page > 0 ? min(100, $per_page) : 40;
+
+    // Card art is usually named after the card, so the filename is often the
+    // only place the name appears. WordPress only searches attachment
+    // filenames when a query opts in via this filter.
+    $by_filename = '__return_true';
+    add_filter('wp_allow_query_attachment_by_filename', $by_filename);
+    $query = new WP_Query(array(
+        'post_type'      => 'attachment',
+        'post_status'    => 'inherit',
+        'post_mime_type' => array_keys(sorcery_puzzle_image_exts()),
+        's'              => $search,
+        'posts_per_page' => $per_page,
+        'paged'          => $page,
+        'orderby'        => $search !== '' ? 'relevance' : 'date',
+        'order'          => 'DESC',
+    ));
+    remove_filter('wp_allow_query_attachment_by_filename', $by_filename);
+
+    $items = array();
+    foreach ($query->posts as $post) {
+        // The same size the board will render, so the picked card looks
+        // exactly like its thumbnail and nothing re-downloads on placement.
+        $url = sorcery_puzzle_card_image_url($post->ID);
+        if (!$url) {
+            continue;
+        }
+        // A smaller size keeps the picker grid light.
+        $thumb = wp_get_attachment_image_url($post->ID, 'medium');
+        $items[] = array(
+            'id'    => (string) $post->ID,
+            'name'  => $post->post_title,
+            'url'   => $url,
+            'thumb' => $thumb ? $thumb : $url,
+        );
+    }
+
+    return array(
+        'items' => $items,
+        'total' => (int) $query->found_posts,
+        'pages' => (int) $query->max_num_pages,
+        'page'  => $page,
+    );
+}
+
+/**
  * The current puzzle: the released puzzle with the latest date (site
  * timezone), tie-broken by highest post ID. Mirrors the client-side
  * localStorage fallback in store.js loadDaily().
@@ -450,7 +533,7 @@ function sorcery_puzzle_shortcode($atts)
         'sorcery-puzzle',
         plugins_url('dist/sorcery-puzzle.js', __FILE__),
         array(),
-        file_exists($bundle) ? (string) filemtime($bundle) : '0.4.0',
+        file_exists($bundle) ? (string) filemtime($bundle) : '0.5.0',
         true
     );
 
