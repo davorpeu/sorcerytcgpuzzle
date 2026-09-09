@@ -50,6 +50,16 @@ body {
 .app {
   --stage-h: max(220px, calc(var(--board-max-h) - var(--tray-top) - var(--tray-bottom)));
 
+  /* The same figure with both trays folded and no action bar. Everything that
+     sets a *width* measures from this rather than from --stage-h, because
+     --stage-h shrinks the moment a tray opens or a card is selected: the app
+     re-centred around a narrower box and the title, the sidebar and every
+     piece on the board slid ~50px sideways. Heights still follow --stage-h,
+     so the mat really does make room for a tray -- it just does it by giving
+     the grid back some felt instead of by moving the whole page. 34px is the
+     two folded tray tabs. */
+  --stage-h-max: max(220px, calc(var(--board-max-h) - 34px));
+
   /* The board is height-bound: a 5:4 grid capped at --stage-h tall can never
      be wider than --stage-h x 1.25, so past that the app has no use for the
      window. Stretched across an ultrawide it just grows dead gaps around the
@@ -57,7 +67,7 @@ body {
      actually fill and centre it. 566px is everything beside the grid: the
      column (340), the rail (150), the mat's padding and border (30) and the
      three gaps. */
-  max-width: min(1700px, calc(var(--stage-h) * 1.25 + 566px));
+  max-width: min(1700px, calc(var(--stage-h-max) * 1.25 + 566px));
   margin: 0 auto;
   padding: 12px;
 }
@@ -127,6 +137,41 @@ body {
   border: 1px solid var(--bad);
 }
 
+/* Screen-reader-only label: the field's own placeholder is not a label, and
+   a visible one would repeat text the placeholder already shows. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---------- keyboard focus ---------- */
+
+/* The board already spends outlines on four other meanings -- selected,
+   targetable, armed to attack, armed to carry -- all of them in accent or red.
+   Focus is white and thicker so it reads as "you are here" against every one
+   of them, and against the artwork underneath. */
+:focus-visible {
+  outline: 3px solid #fff;
+  outline-offset: 2px;
+}
+
+/* Squares clip their contents, so a ring drawn outside a card on the board is
+   simply not painted. These draw theirs inside the box instead. */
+.card-token:focus-visible,
+.site-bg:focus-visible,
+.aura-token:focus-visible,
+.dropzone:focus-visible {
+  outline: 3px solid #fff;
+  outline-offset: -3px;
+}
+
 /* ---------- layout ---------- */
 
 .layout {
@@ -140,6 +185,48 @@ body {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+/* The editor's panels are taller than any window, and as ordinary flow they
+   pushed your hand and storyline ~450px below the fold -- with the mat pinned
+   at the top you could not see the board and your own cards at once, which is
+   the one pairing the app exists to support. So the column is the height of
+   the window, the panels scroll inside it, and your side stays on the floor of
+   the column next to the board. Only above the single-column breakpoint: below
+   it the sidebar is a header strip and there is nothing to pin. */
+@media (min-width: 1001px) {
+  .sidebar {
+    position: sticky;
+    top: 12px;
+    max-height: calc(100vh - var(--app-chrome-h) - 12px);
+    min-height: 0;
+  }
+
+  .sidebar-scroll {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    flex: 1 1 auto;
+    overflow-y: auto;
+    /* The gutter is given back as negative margin, so the panels keep the
+       column's full width and only the scrollbar sits in the extra 6px. */
+    padding-right: 6px;
+    margin-right: -6px;
+    /* Never squeezed to nothing: below this the panels stop being usable and
+       the scroll region may as well not be there. */
+    min-height: 140px;
+  }
+
+  /* Your zones keep their natural height and the panels above absorb the
+     shrinking -- they are the ones with somewhere to put it. The cap is for
+     short windows, where your side scrolls internally rather than pushing the
+     panels off the top of the column. */
+  .your-side {
+    flex: 0 0 auto;
+    max-height: 60%;
+    min-height: 0;
+    overflow-y: auto;
+  }
 }
 
 .panel,
@@ -256,9 +343,12 @@ details[open] > .panel-summary {
   color: #ffb4b4;
 }
 
+/* Still a small button, but 24px tall: the row buttons in the saved list and
+   the pool header were 20px, under the WCAG 2.5.8 minimum. */
 .btn.small {
-  padding: 2px 7px;
+  padding: 4px 7px;
   font-size: 12px;
+  min-height: 24px;
 }
 
 .hint {
@@ -311,7 +401,7 @@ details[open] > .panel-summary {
 .mat-area > .board {
   margin-inline: auto;
   width: 100%;
-  max-width: calc(var(--stage-h) * 1.25 + 30px);
+  max-width: calc(var(--stage-h-max) * 1.25 + 30px);
   /* The felt runs the full height and the trays rest on its margins, so a
      tray covers padding rather than playable squares. */
   padding: var(--tray-top) 14px var(--tray-bottom);
@@ -338,7 +428,7 @@ details[open] > .panel-summary {
   right: 0;
   /* Same width and centring as the mat, so a tray reads as resting on the
      table rather than overhanging it. */
-  max-width: calc(var(--stage-h) * 1.25 + 30px);
+  max-width: calc(var(--stage-h-max) * 1.25 + 30px);
   margin-inline: auto;
   z-index: 20;
   display: flex;
@@ -372,6 +462,7 @@ details[open] > .panel-summary {
   text-transform: uppercase;
   letter-spacing: 1px;
   padding: 4px 12px;
+  min-height: 24px;
   cursor: pointer;
 }
 
@@ -473,7 +564,7 @@ details[open] > .panel-summary {
   left: 0;
   right: 0;
   bottom: 0;
-  max-width: calc(var(--stage-h) * 1.25 + 30px);
+  max-width: calc(var(--stage-h-max) * 1.25 + 30px);
   margin-inline: auto;
   z-index: 20;
 }
@@ -589,7 +680,7 @@ details[open] > .panel-summary {
   position: absolute;
   bottom: 3%;
   left: 50%;
-  transform: translateX(-50%) rotate(90deg);
+  transform: translateX(-50%) rotate(0deg);
   max-width: 82%;
   max-height: 82%;
   border-radius: 8px;
@@ -605,7 +696,7 @@ details[open] > .panel-summary {
 .site-bg.flipped {
   bottom: auto;
   top: 3%;
-  transform: translateX(-50%) rotate(270deg);
+  transform: translateX(-50%) rotate(180deg);
 }
 
 .cell-half {
@@ -619,14 +710,21 @@ details[open] > .panel-summary {
   gap: 4px;
 }
 
-/* Above the site strip (z 1): all cards render on top, and their corner
-   buttons must win the click where they overhang the site image. The site
-   stays clickable/draggable wherever no card covers it. */
+/* No z-index, deliberately: a positioned box without one does not open a
+   stacking context, so the cards inside these bands can sit above the site art
+   (which is above the bands themselves) instead of being trapped under it.
+   The order inside a square is bands -> site art -> cards.
+
+   74%, not 44%: with the site slot no longer a drop target of its own, these
+   two are the square's only zones and have to meet. They used to leave a 30%
+   band between them that only the site slot caught -- and that band was also
+   the sole corridor through which the site art could be clicked, because both
+   halves sit above it. The corridor is gone; the rule below is what keeps the
+   art reachable instead. */
 .cell-half.top {
   top: 0;
-  height: 44%;
+  height: 74%;
   align-content: flex-start;
-  z-index: 3;
 }
 
 /* Drop-only band for sending a card underground; the cards themselves are
@@ -636,7 +734,6 @@ details[open] > .panel-summary {
   height: 26%;
   align-content: flex-end;
   background: rgba(0, 0, 0, 0.18);
-  z-index: 3;
 }
 
 .cell-half.bot::after {
@@ -653,12 +750,48 @@ details[open] > .panel-summary {
   pointer-events: none;
 }
 
-/* Fills the whole square; cards in .cell-half sit above it (z 3) so they
-   still win clicks wherever they overlap the site image. */
+/* A zone only wants the pointer when it can do something with it: while a card
+   is armed for a click-move, or while one is in flight. Idle, the bands step
+   aside so a click on bare felt is not swallowed by a target that would ignore
+   it anyway. */
+.cell-half {
+  pointer-events: none;
+}
+
+.cell-half.armed,
+.board.dragging .cell-half {
+  pointer-events: auto;
+}
+
+/* Cards stay live either way; they are what a click on a square usually means,
+   and the z-index is what lifts them clear of the site art below. */
+.cell-half .card-token {
+  position: relative;
+  z-index: 3;
+  pointer-events: auto;
+}
+
+/* The site's own layer, above both bands. It has to be, or selecting a site
+   would arm the square and bury the art under a zone -- and you could no longer
+   hover it for the Alt preview or drag it anywhere. clickSite hands an armed
+   click back down to the band underneath. The strip itself is just a frame:
+   bare felt is not a target, so only the artwork takes the pointer. */
 .site-strip {
   position: absolute;
   inset: 0;
-  z-index: 1;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.site-strip > * {
+  pointer-events: auto;
+}
+
+/* The one moment the art must not take the pointer: with a card in flight a
+   drop has to reach the band underneath rather than land on a picture that has
+   no drop handler. */
+.board.dragging .site-strip > * {
+  pointer-events: none;
 }
 
 .dropzone.over {
@@ -702,10 +835,16 @@ details[open] > .panel-summary {
 
 /* Sized so a portrait aura card stands roughly as tall as a site card:
    a site is ~82% of a cell (16.4% of the grid); at 4:3 cells and 88x63
-   card art, a 9%-wide portrait card matches the site's height. */
+   card art, a 9%-wide portrait card matches the site's height.
+
+   The floor and ceiling are both in stage terms for a reason. This was
+   `min-width: 64px`, and on a phone the floor won: 64px of aura on a 68px
+   square, taller than the square itself, swallowing the site under it and the
+   cards either side. 12% of the stage is 60% of one square, which is as large
+   as a piece drawn on a crossing can be and still leave the squares readable. */
 .aura-node.occupied {
-  width: 9%;
-  min-width: 64px;
+  width: clamp(9%, 36px, 12%);
+  min-width: 0;
   height: auto;
   border-radius: 8px;
   background: var(--panel-2);
@@ -793,7 +932,7 @@ details[open] > .panel-summary {
 }
 
 .grave .card-token {
-  width: 58px;
+  --card-w: 58px;
 }
 
 /* ---------- stats rail (life, mana, thresholds) ---------- */
@@ -940,9 +1079,12 @@ details[open] > .panel-summary {
   font-variant-numeric: tabular-nums;
 }
 
+/* 24px square is the smallest target WCAG 2.5.8 accepts, and these sit in
+   pairs a couple of pixels apart -- at 18px a trackpad regularly took a life
+   off when it was aimed at mana. Touch screens get 28px further down. */
 .stat-btn {
-  width: 18px;
-  height: 18px;
+  width: 24px;
+  height: 24px;
   border-radius: 4px;
   border: 1px solid var(--border);
   background: var(--panel-2);
@@ -992,59 +1134,110 @@ details[open] > .panel-summary {
 
 /* ---------- carrying ---------- */
 
-/* A carried card is in no zone, so this strip inside its holder's token is the
-   only place it is drawn. Overlapping chips, so a big load stays small. */
+/* A carried card is in no zone, so its holder's own token is the only place it
+   is drawn. Full size rather than a thumbnail -- a load small enough to fit
+   inside the holder is too small to recognise -- and offset down and right the
+   way an overlapped hand of cards reads, so both faces stay legible. One dashed
+   frame is drawn round the whole pile: the offset alone looks like two cards
+   that happen to overlap, the frame is what says they travel together.
+
+   The step is a share of a card's own size, so the pile scales with the token
+   whether it is drawn in a hand or shrunk into a board square. --carry-step is
+   the same fraction as a plain number, for the margin rule below. */
+.card-token {
+  --carry-step: 0.46;
+  --carry-dx: calc(var(--carry-step) * 100%);
+  --carry-dy: 7%;
+  --carry-pad: 4px;
+}
+
 .carry-stack {
   position: absolute;
-  left: 3px;
-  right: 3px;
-  bottom: 3px;
-  display: flex;
-  align-items: flex-end;
+  inset: 0;
   z-index: 5;
   pointer-events: none;
 }
 
+/* Holder and load share one frame, so it grows by exactly the distance the fan
+   travels and the last card in the pile lands just inside it. */
+.carry-frame {
+  position: absolute;
+  left: calc(-1 * var(--carry-pad));
+  top: calc(-1 * var(--carry-pad));
+  width: calc(100% + var(--carry-n, 0) * var(--carry-dx) + 2 * var(--carry-pad));
+  height: calc(100% + var(--carry-n, 0) * var(--carry-dy) + 2 * var(--carry-pad));
+  border: 1px dashed var(--accent);
+  border-radius: 11px;
+  background: rgba(124, 92, 255, 0.1);
+}
+
+/* --i is the card's place in the fan, written by the template. --lift keeps
+   hover out of the transform so it can add to the offset instead of replacing
+   it. */
 .carry-chip {
-  flex: 0 0 auto;
-  width: 44%;
-  min-width: 20px;
+  --lift: 0px;
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
   padding: 0;
-  border: 1px solid var(--accent);
-  border-radius: 3px;
-  background: var(--panel-2);
-  overflow: hidden;
+  border: 0;
+  background: none;
   cursor: pointer;
   pointer-events: auto;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.8);
-}
-
-/* Fanned rather than spaced: the second chip onwards tucks behind the one
-   before it, so ten carried cards take no more room than two. */
-.carry-chip + .carry-chip {
-  margin-left: -22%;
-}
-
-.carry-chip:hover,
-.carry-chip.selected {
-  border-color: var(--text);
-  transform: translateY(-3px);
+  transform: translate(
+    calc(var(--i) * var(--carry-dx)),
+    calc(var(--i) * var(--carry-dy) + var(--lift))
+  );
+  transition: transform 0.15s ease;
 }
 
 .carry-chip img {
   width: 100%;
   height: auto;
   display: block;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.65);
   pointer-events: none;
+}
+
+/* Every card in the pile wears the accent edge, which is the other half of
+   reading it as one object. Outline rather than border: it must not eat into
+   the width that makes the load the same size as its holder. */
+.carry-chip > * {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+  border-radius: 8px;
+}
+
+.carry-chip:hover,
+.carry-chip.selected {
+  --lift: -6px;
+  z-index: 1;
+}
+
+.carry-chip.selected > * {
+  outline: 2px solid var(--text);
 }
 
 .carry-chip-name {
   display: block;
-  font-size: 7px;
-  line-height: 1.1;
+  background: var(--panel-2);
+  padding: 14px 4px;
+  font-size: 11px;
+  line-height: 1.2;
   font-weight: 600;
-  padding: 3px 2px;
   text-align: center;
+  word-break: break-word;
+}
+
+/* The fan is drawn outside the token's own box, so the row it sits in has to
+   pay for it or the pile buries the next card along. A percentage margin would
+   measure the container rather than the card, hence the fraction of --card-w;
+   the vertical share assumes a card's usual portrait aspect, which is close
+   enough for a few px of clearance. */
+.card-token.carrying {
+  margin-right: calc(var(--carry-n, 0) * var(--carry-step) * var(--card-w));
+  margin-bottom: calc(var(--carry-n, 0) * 0.1 * var(--card-w));
 }
 
 /* Sites and auras are drawn straight onto the board rather than as card
@@ -1114,7 +1307,11 @@ details[open] > .panel-summary {
 
 .card-token {
   position: relative;
-  width: 82px;
+  /* Every context sizes a token by writing --card-w rather than `width`, so a
+     rule that has to reason about a card's size -- the carried-card fan below
+     -- can derive from it instead of repeating the number per context. */
+  --card-w: 82px;
+  width: var(--card-w);
   cursor: grab;
   user-select: none;
 }
@@ -1212,9 +1409,14 @@ details[open] > .panel-summary {
   opacity: 0.9;
 }
 
-/* minions inside a square's surface/underground slots stay small */
+/* Minions inside a square's surface/underground slots stay small -- but only
+   as small as the company they keep. A flat 30% reserved room for three cards
+   whatever was standing there, so the ordinary case, one unit, sat at under a
+   third of its square and read as a chip dropped on it rather than a piece
+   standing on it. --n is what the square actually holds, written by the band;
+   the floor is what a card needs to stay recognisable when it is sharing. */
 .cell-half .card-token {
-  width: 30%;
+  --card-w: clamp(30%, calc(88% / var(--n, 1)), 44%);
 }
 
 .site-badge {
@@ -1224,9 +1426,9 @@ details[open] > .panel-summary {
   transform: translateX(-50%);
   background: var(--accent);
   color: #fff;
-  font-size: 8px;
+  font-size: 9px;
   font-weight: 700;
-  letter-spacing: 1px;
+  letter-spacing: 0.5px;
   padding: 1px 5px;
   border-radius: 3px;
   pointer-events: none;
@@ -1411,7 +1613,7 @@ details[open] > .panel-summary {
 .legend-badge {
   background: var(--accent);
   color: #fff;
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 1px;
   padding: 2px 5px;
@@ -1527,6 +1729,39 @@ details[open] > .panel-summary {
   color: var(--muted);
 }
 
+/* A hint that is a warning rather than an aside: the editor needs to notice
+   that a puzzle nobody can solve is about to be saved. */
+.hint.warn {
+  color: #fbbf24;
+}
+
+/* Which recorded line the log is showing. */
+.line-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 6px 0;
+}
+
+/* Alone in its square a card can have a pixel floor as well: 44% of a phone
+   square is 30px, under what a card needs to be recognisable, and with nothing
+   beside it there is room to spare. */
+.cell-half .card-token:only-child {
+  --card-w: max(44%, 34px);
+}
+
+/* Once a square is small enough that the card in it is around 34px, a badge
+   at full size is wider than the card it names -- "AVATAR" ran 11px past both
+   edges and read as a pill floating loose on the felt. Boards this small come
+   from narrow windows, so the width is the signal. */
+@media (max-width: 1100px) {
+  .cell-half .site-badge {
+    font-size: 7px;
+    letter-spacing: 0;
+    padding: 1px 3px;
+  }
+}
+
 /* ---------- responsive ---------- */
 
 /* Tablet landscape: keep the two-column layout but give the board the room. */
@@ -1555,6 +1790,11 @@ details[open] > .panel-summary {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
     align-items: start;
+  }
+
+  /* The panels are the grid's items here, not the wrapper around them. */
+  .sidebar-scroll {
+    display: contents;
   }
 
   .board {
@@ -1629,14 +1869,75 @@ details[open] > .panel-summary {
   }
 }
 
+/* Phone and small-tablet portrait. In one column the sidebar's panels came
+   first, so the board -- the thing the page is for -- started around 1000px
+   down and you scrolled past the brief, the archive, the log, the legend and
+   all four of your own zones to reach it. Ordered like the table instead: what
+   the puzzle asks, then the board, then your own side of it. */
+@media (max-width: 700px) {
+  .layout {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    /* The base rule's `align-items: start` only meant "do not stretch rows"
+       under grid. In a column flex it is the cross axis, so every item would
+       shrink-wrap and the mat would collapse to the width of its tray tab. */
+    align-items: stretch;
+  }
+
+  /* Every wrapper steps aside so the panels, the mat, your zones and the
+     counters are all siblings here and can be ordered against each other. */
+  .sidebar,
+  .table {
+    display: contents;
+  }
+
+  .mat-area {
+    order: 2;
+  }
+
+  /* Directly under the mat, not below 380px of counters: the board and your
+     own hand are the pair you need in view at the same time. */
+  .your-side {
+    order: 3;
+  }
+
+  .stat-rail {
+    order: 4;
+  }
+
+  /* Squares are ~68px wide at this size, so the 3px inset and 4px gutter are
+     nearly a tenth of the room a card has. */
+  .cell-half {
+    padding: 2px;
+    gap: 2px;
+  }
+
+  /* Wrapped onto a phone the action bar is ~185px tall, and floated over the
+     foot of the mat that is half the board -- select a card to see what it can
+     do and you lose sight of where it could go. In flow it sits under the mat
+     and pushes instead of covering. */
+  .mat-area > .card-actions {
+    position: static;
+    max-width: none;
+    margin-inline: 0;
+    margin-top: 8px;
+  }
+
+  /* ...so the mat no longer reserves the strip the bar used to float in. */
+  .app:has(.card-actions) {
+    --tray-bottom: 8px;
+  }
+}
+
 /* Phone-width fallback: the board is still the same 5x4 grid, just small. */
 @media (max-width: 560px) {
   .card-token {
-    width: 64px;
+    --card-w: 64px;
   }
 
   .grave .card-token {
-    width: 48px;
+    --card-w: 48px;
   }
 
   .hand,
@@ -1694,10 +1995,10 @@ details[open] > .panel-summary {
   }
 
   .tray-body .card-token {
-    width: 62px;
+    --card-w: 62px;
   }
 
   .tray-body .grave .card-token {
-    width: 46px;
+    --card-w: 46px;
   }
 }
