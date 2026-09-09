@@ -64,6 +64,10 @@ const cells = computed(() => {
   return out
 })
 
+// Nothing has been released yet, so the grid of bare numbers needs saying
+// out loud -- an empty calendar otherwise reads as a broken one.
+const empty = computed(() => !Object.keys(byDate.value).length)
+
 function shiftMonth(delta) {
   let { year, month } = view.value
   month += delta
@@ -82,9 +86,13 @@ function shiftMonth(delta) {
   <div class="panel archive-cal">
     <div class="zone-title">Puzzle archive</div>
     <div class="cal-nav">
-      <button class="btn small" @click="shiftMonth(-1)">‹</button>
-      <span class="cal-label">{{ monthLabel }}</span>
-      <button class="btn small" @click="shiftMonth(1)">›</button>
+      <button class="btn small" aria-label="Previous month" @click="shiftMonth(-1)">
+        ‹
+      </button>
+      <span class="cal-label" aria-live="polite">{{ monthLabel }}</span>
+      <button class="btn small" aria-label="Next month" @click="shiftMonth(1)">
+        ›
+      </button>
     </div>
     <div class="cal-grid">
       <span v-for="d in WEEKDAYS" :key="d" class="cal-weekday">{{ d }}</span>
@@ -95,6 +103,7 @@ function shiftMonth(delta) {
           class="cal-cell has-puzzle"
           :class="c.classes"
           :title="c.puzzle.name"
+          :aria-label="`${c.day} ${monthLabel} — ${c.puzzle.name}`"
           @click="emit('select', c.puzzle.id)"
         >
           {{ c.day }}
@@ -102,7 +111,11 @@ function shiftMonth(delta) {
         <span v-else class="cal-cell" :class="c.classes">{{ c.day }}</span>
       </template>
     </div>
-    <p class="hint">Click a marked date to play that puzzle.</p>
+    <p v-if="empty" class="hint">
+      No puzzles have been released yet — there is nothing in the archive to
+      play.
+    </p>
+    <p v-else class="hint">Click a marked date to play that puzzle.</p>
   </div>
 </template>
 

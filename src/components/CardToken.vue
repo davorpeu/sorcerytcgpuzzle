@@ -7,8 +7,9 @@ import {
   selectCard,
   targetAttack,
   targetStrike,
+  targetPickup,
   carriedBy,
-  setDragGhost,
+  beginDrag,
 } from '../store.js'
 
 const props = defineProps({
@@ -31,13 +32,36 @@ const targetable = computed(
 const liftable = computed(() => ui.carrier && ui.carrier !== props.cardId)
 const carried = computed(() => carriedBy(props.cardId))
 
+// What a screen reader hears. The badges printed on the face -- unit, site,
+// tapped, below, whose card it is -- are all colour and glyph, so they have
+// to be said out loud here or they do not exist. The trailing clause is what
+// pressing the button will actually do, which changes with what is armed.
+const label = computed(() => {
+  const c = card.value
+  if (!c) return ''
+  const bits = [c.name]
+  if (c.avatar) bits.push('avatar')
+  else if (c.unit) bits.push('unit')
+  if (c.site) bits.push('site')
+  if (c.aura) bits.push('aura')
+  bits.push(c.enemy ? "opponent's" : 'yours')
+  if (isUnder.value) bits.push('below')
+  if (tapped.value) bits.push('tapped')
+  if (carried.value.length) bits.push(`carrying ${carried.value.length}`)
+  const what = bits.join(', ')
+  if (targetable.value) return `${what}. Target of the armed action`
+  if (liftable.value) return `${what}. Pick up`
+  if (ui.selected === props.cardId) return `${what}. Selected — activate to deselect`
+  return `${what}. Select for actions`
+})
+
 function onDragStart(e) {
   e.dataTransfer.setData(
     'text/plain',
     JSON.stringify({ cardId: props.cardId, from: props.from })
   )
   e.dataTransfer.effectAllowed = 'move'
-  setDragGhost(e, e.currentTarget.querySelector('img'))
+  beginDrag(e, e.currentTarget.querySelector('img'))
 }
 
 // A click either lands an armed attack/strike or selects the card, which is what
@@ -47,6 +71,13 @@ function onClick() {
   if (targetable.value) {
     if (ui.attacker) targetAttack(props.cardId)
     else if (ui.striker) targetStrike(props.cardId)
+    return
+  }
+  // An armed pick-up lands here too, or the highlight would be a lie: this is
+  // the only click surface for cards on the board and in hand, and sites and
+  // auras already lift this way from Board.vue.
+  if (liftable.value) {
+    targetPickup(props.cardId)
     return
   }
   selectCard(props.cardId)
@@ -70,18 +101,30 @@ function onClick() {
       selected: ui.selected === cardId,
       targetable,
       liftable,
+      carrying: carried.length > 0,
     }"
+    :style="carried.length ? { '--carry-n': carried.length } : null"
     draggable="true"
+    role="button"
+    tabindex="0"
+    :aria-pressed="ui.selected === cardId"
+    :aria-label="label"
     :title="card.name + ' (click for actions, hold Alt to enlarge)'"
     @dragstart="onDragStart"
     @click.stop="onClick"
+    @keydown.enter.stop.prevent="onClick"
+    @keydown.space.stop.prevent="onClick"
     @mouseenter="ui.hoverCard = cardId"
     @mouseleave="ui.hoverCard === cardId && (ui.hoverCard = null)"
+    @focus="ui.hoverCard = cardId"
+    @blur="ui.hoverCard === cardId && (ui.hoverCard = null)"
   >
+    <!-- The button above carries the name and every badge as its label, so
+         the artwork is decorative here; a real alt would say the name twice. -->
     <img
       v-if="card.img"
       :src="card.img"
-      :alt="card.name"
+      alt=""
       :class="{ flipped: card.enemy }"
       draggable="false"
     />
@@ -94,15 +137,21 @@ function onClick() {
     <span v-if="card.aura" class="site-badge aura-badge">AURA</span>
     <span v-if="isUnder" class="site-badge under-badge">BELOW</span>
 
-    <!-- What this card is holding. A carried card is in no zone, so this strip
-         is the only place it is drawn: clicking one selects it, which is how
-         you reach its Drop button. -->
+    <!-- What this card is holding. A carried card is in no zone, so this is the
+         only place it is drawn: at the holder's own size, fanned down and to
+         the right so every face stays readable, inside one dashed frame that
+         says the pile travels as a unit. Clicking one selects it, which is how
+         you reach its Drop button. `--i` is the position in the fan; the shift
+         is a share of the card's own size, so the pile scales with the token
+         wherever it is drawn. -->
     <div v-if="carried.length" class="carry-stack">
+      <span class="carry-frame" aria-hidden="true"></span>
       <button
-        v-for="id in carried"
+        v-for="(id, i) in carried"
         :key="id"
         class="carry-chip"
         :class="{ selected: ui.selected === id }"
+        :style="{ '--i': i + 1 }"
         :title="`Carrying ${state.cards[id]?.name} — click to select it`"
         @click.stop="selectCard(id)"
         @mouseenter="ui.hoverCard = id"

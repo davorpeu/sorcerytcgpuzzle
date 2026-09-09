@@ -12,6 +12,8 @@ import {
   resetPlay,
   submit,
   outOfTries,
+  hasSolution,
+  hasUnsavedWork,
   MAX_TRIES,
   savePuzzle,
   listPuzzles,
@@ -25,6 +27,7 @@ import {
   loadDemo,
   loadDaily,
   localToday,
+  endDrag,
 } from './store.js'
 import Board from './components/Board.vue'
 import Hand from './components/Hand.vue'
@@ -77,13 +80,43 @@ async function onSave() {
   refreshSaved()
 }
 
-async function onDelete(id) {
+// Deleting a stored puzzle, wiping the board and dropping a recorded line are
+// all one click and none of them are undoable -- Undo only walks back moves.
+// So each one asks first, naming what it is about to destroy.
+async function onDelete(id, name) {
+  if (!confirm(`Delete "${name || 'this puzzle'}" for good? This cannot be undone.`))
+    return
   try {
     await deletePuzzle(id)
   } catch (e) {
     flash(`Delete failed: ${e.message}`)
   }
   refreshSaved()
+}
+
+function onNew() {
+  if (
+    hasUnsavedWork() &&
+    !confirm('Start a blank puzzle? The cards, board and solutions here have not been saved.')
+  )
+    return
+  newPuzzle()
+  flash('New blank puzzle.')
+}
+
+function onLoadDemo() {
+  if (
+    hasUnsavedWork() &&
+    !confirm('Load the demo puzzle? The unsaved work here will be replaced.')
+  )
+    return
+  loadDemo()
+  flash('Demo puzzle loaded.')
+}
+
+function onRemoveSolution(i) {
+  if (!confirm(`Delete solution ${i + 1}? This cannot be undone.`)) return
+  removeSolutionLine(i)
 }
 
 async function onLoadDaily() {
@@ -130,7 +163,14 @@ async function onCopyLink() {
 
 function onSubmit() {
   const ok = submit()
-  if (ok === null) return // no try available; the banner already explains
+  if (ok === null) {
+    // Either there is nothing to check against or there is no try left. The
+    // banner explains the second case; the first one has no banner, because
+    // nothing was checked.
+    if (!hasSolution())
+      flash('This puzzle has no recorded solution, so there is nothing to check.')
+    return
+  }
   if (ok) {
     flash('Correct — puzzle solved!')
   } else if (config.canEdit) {
@@ -145,10 +185,17 @@ function onSubmit() {
   }
 }
 
-// Non-editors can no longer submit once solved or out of tries.
+// Non-editors can no longer submit once solved or out of tries. Nobody can
+// submit against a puzzle with no recorded line: there is no answer to be
+// measured against, and pressing it used to report a win.
 const submitLocked = computed(
-  () => !config.canEdit && (state.solved || outOfTries())
+  () => !hasSolution() || (!config.canEdit && (state.solved || outOfTries()))
 )
+
+const submitTitle = computed(() => {
+  if (!hasSolution()) return 'This puzzle has no recorded solution to check against'
+  return config.canEdit ? 'Unlimited submits in editor preview' : ''
+})
 
 // Shortest recorded solution line; what the play header advertises.
 const targetMoves = computed(() =>
@@ -156,6 +203,8 @@ const targetMoves = computed(() =>
     ? Math.min(...state.solutions.map((l) => l.length))
     : 0
 )
+
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
 
 // The selected card also shows in the middle of the stats rail, so you can
 // read what you are holding without hunting for it on the mat.
@@ -193,10 +242,25 @@ function onBlur() {
   ui.alt = false
 }
 
+// There is no autosave, and Undo does not survive a page load, so a reload
+// with an unsaved board on screen loses the whole puzzle. Browsers only show
+// their own generic wording here, but the prompt is what matters.
+function onBeforeUnload(e) {
+  if (!hasUnsavedWork()) return
+  e.preventDefault()
+  e.returnValue = ''
+}
+
 onMounted(() => {
   window.addEventListener('keydown', onKeyDown)
   window.addEventListener('keyup', onKeyUp)
   window.addEventListener('blur', onBlur)
+  window.addEventListener('beforeunload', onBeforeUnload)
+  // A drag can end anywhere, including outside the board, so the flag that
+  // wakes the board's drop zones is cleared from the window rather than from
+  // whatever happened to be under the pointer.
+  window.addEventListener('dragend', endDrag)
+  window.addEventListener('drop', endDrag)
   stopDragScroll = enableDragScroll()
   if (config.canEdit) refreshSaved()
 })
@@ -205,6 +269,9 @@ onUnmounted(() => {
   window.removeEventListener('keydown', onKeyDown)
   window.removeEventListener('keyup', onKeyUp)
   window.removeEventListener('blur', onBlur)
+  window.removeEventListener('beforeunload', onBeforeUnload)
+  window.removeEventListener('dragend', endDrag)
+  window.removeEventListener('drop', endDrag)
   stopDragScroll?.()
 })
 
@@ -268,7 +335,7 @@ const result = computed(() => {
         <button
           class="btn primary"
           :disabled="submitLocked"
-          :title="config.canEdit ? 'Unlimited submits in editor preview' : ''"
+          :title="submitTitle"
           @click="onSubmit"
         >
           Submit solution
@@ -281,31 +348,50 @@ const result = computed(() => {
       <div v-if="state.puzzleName && state.mode === 'play'" class="puzzle-title">
         {{ state.puzzleName }}
         <span v-if="state.solutions.length" class="target">
-          · solve in {{ targetMoves }} moves<template
+          · solve in {{ plural(targetMoves, 'move') }}<template
             v-if="state.solutions.length > 1"
           >
             · {{ state.solutions.length }} possible solutions</template
           >
         </span>
       </div>
-      <span v-if="notice" class="notice">{{ notice }}</span>
+      <!-- Both of these appear without the user moving focus, so they have to
+           be announced rather than merely drawn. The wrappers stay in the DOM
+           when empty: a live region inserted at the same moment as its text is
+           not reliably read. -->
+      <span class="notice" role="status" aria-live="polite">{{ notice }}</span>
     </header>
 
-    <div v-if="result" class="result-banner" :class="result.ok ? 'ok' : 'bad'">
-      {{ result.msg }}
+    <div aria-live="polite">
+      <div v-if="result" class="result-banner" :class="result.ok ? 'ok' : 'bad'">
+        {{ result.msg }}
+      </div>
     </div>
 
     <div class="layout">
       <aside class="sidebar">
+        <!-- Everything above your own zones scrolls inside the column, so the
+             editor's panels can be as tall as they like without pushing your
+             hand off the bottom of the window. Your side stays pinned to the
+             foot of the column, beside the board, where it is in reach
+             whatever the panels above it are doing. -->
+        <div class="sidebar-scroll">
         <template v-if="state.mode === 'editor'">
           <div class="panel">
             <div class="zone-title">Puzzle</div>
+            <label class="sr-only" for="puzzle-title">Puzzle title</label>
             <input
+              id="puzzle-title"
               v-model="state.puzzleName"
               class="text-input"
               placeholder="Puzzle title"
             />
+            <label class="sr-only" for="puzzle-brief">
+              Brief — what kind of puzzle is this and what should the player
+              achieve?
+            </label>
             <textarea
+              id="puzzle-brief"
               v-model="state.puzzleDesc"
               class="text-input text-area"
               rows="3"
@@ -316,9 +402,14 @@ const result = computed(() => {
               &ldquo;Lethal: put the opponent at Death&rsquo;s Door this
               turn&rdquo;.
             </p>
-            <label class="field-label">
+            <label class="field-label" for="puzzle-date">
               Release date
-              <input v-model="state.puzzleDate" type="date" class="text-input" />
+              <input
+                id="puzzle-date"
+                v-model="state.puzzleDate"
+                type="date"
+                class="text-input"
+              />
             </label>
             <p class="hint">
               Players see this puzzle from this date. Leave empty to keep it
@@ -341,24 +432,29 @@ const result = computed(() => {
             <ul v-if="state.solutions.length" class="saved-list">
               <li v-for="(line, i) in state.solutions" :key="i">
                 <span class="saved-name">
-                  Solution {{ i + 1 }} · {{ line.length }} moves
+                  Solution {{ i + 1 }} · {{ plural(line.length, 'move') }}
                 </span>
                 <button
                   class="btn small danger"
-                  title="Delete this solution"
-                  @click="removeSolutionLine(i)"
+                  :title="`Delete solution ${i + 1}`"
+                  :aria-label="`Delete solution ${i + 1}`"
+                  @click="onRemoveSolution(i)"
                 >
                   🗑
                 </button>
               </li>
             </ul>
+            <p v-if="!state.solutions.length && !state.recording" class="hint warn">
+              No solution recorded yet — until you record one, players can move
+              cards but <em>Submit solution</em> has nothing to check.
+            </p>
             <div class="btn-row">
               <button class="btn" @click="onSave">Save</button>
               <button class="btn" @click="onExport">Export</button>
               <button class="btn" @click="importInput.click()">Import</button>
               <button class="btn" @click="onCopyLink">Copy link</button>
-              <button class="btn" @click="newPuzzle(); flash('New blank puzzle.')">New</button>
-              <button class="btn" @click="loadDemo(); flash('Demo puzzle loaded.')">Demo</button>
+              <button class="btn" @click="onNew">New</button>
+              <button class="btn" @click="onLoadDemo">Demo</button>
             </div>
             <input
               ref="importInput"
@@ -380,9 +476,30 @@ const result = computed(() => {
                   <span v-if="!p.date" class="saved-badge">draft</span>
                   <span v-else-if="p.date > localToday()" class="saved-badge">upcoming</span>
                 </span>
-                <button class="btn small" title="Play" @click="loadById(p.id)">▶</button>
-                <button class="btn small" title="Edit" @click="loadById(p.id, { play: false })">✎</button>
-                <button class="btn small danger" title="Delete" @click="onDelete(p.id)">🗑</button>
+                <button
+                  class="btn small"
+                  :title="`Play ${p.name}`"
+                  :aria-label="`Play ${p.name}`"
+                  @click="loadById(p.id)"
+                >
+                  ▶
+                </button>
+                <button
+                  class="btn small"
+                  :title="`Edit ${p.name}`"
+                  :aria-label="`Edit ${p.name}`"
+                  @click="loadById(p.id, { play: false })"
+                >
+                  ✎
+                </button>
+                <button
+                  class="btn small danger"
+                  :title="`Delete ${p.name}`"
+                  :aria-label="`Delete ${p.name}`"
+                  @click="onDelete(p.id, p.name)"
+                >
+                  🗑
+                </button>
               </li>
             </ul>
             <p v-else class="hint">Nothing saved yet.</p>
@@ -403,38 +520,43 @@ const result = computed(() => {
             </p>
             <p v-else class="hint">No brief was written for this puzzle.</p>
             <p v-if="state.solutions.length" class="brief-goal">
-              Solve in {{ targetMoves }}
-              {{ targetMoves === 1 ? 'move' : 'moves' }}
+              Solve in {{ plural(targetMoves, 'move') }}
               <template v-if="state.solutions.length > 1">
                 · {{ state.solutions.length }} possible solutions
               </template>
             </p>
+            <p v-else class="hint warn">
+              This puzzle has no recorded solution, so there is nothing to
+              submit against.
+            </p>
           </div>
 
-          <div v-if="!state.puzzleName" class="panel">
-            <div class="zone-title">No puzzle loaded</div>
-            <p class="hint">
-              Pick a puzzle to play — load the current one, or browse the
+          <!-- One panel, whichever state you are in. Loaded or not, the two
+               things you can do are the same: play the current puzzle or open
+               the archive. Two panels offering both, a row apart and under two
+               names for the same button, only made you read them twice. -->
+          <div class="panel">
+            <div class="zone-title">
+              {{ state.puzzleName ? 'Puzzles' : 'No puzzle loaded' }}
+            </div>
+            <p v-if="!state.puzzleName" class="hint">
+              Pick a puzzle to play — the current one, or any date in the
               archive.
             </p>
             <div class="btn-row">
-              <button class="btn primary" @click="onLoadDaily">
+              <button
+                class="btn"
+                :class="{ primary: !state.puzzleName }"
+                @click="onLoadDaily"
+              >
                 Play current puzzle
               </button>
-              <button class="btn" @click="showArchive = !showArchive">
+              <button
+                class="btn"
+                :aria-expanded="showArchive"
+                @click="showArchive = !showArchive"
+              >
                 {{ showArchive ? 'Hide archive' : 'Archive' }}
-              </button>
-            </div>
-          </div>
-
-          <div class="panel">
-            <div class="zone-title">Puzzles</div>
-            <div class="btn-row">
-              <button class="btn" @click="showArchive = !showArchive">
-                {{ showArchive ? 'Hide archive' : 'Archive' }}
-              </button>
-              <button class="btn" @click="onLoadDaily">
-                Load current puzzle
               </button>
             </div>
           </div>
@@ -448,6 +570,13 @@ const result = computed(() => {
           <summary class="panel-summary">Legend</summary>
           <ul class="legend-list">
             <li><kbd class="legend-kbd">Alt</kbd> hover a card to enlarge it</li>
+            <li>
+              <kbd class="legend-kbd">Tab</kbd> to a card and
+              <kbd class="legend-kbd">Enter</kbd> to select it, then
+              <kbd class="legend-kbd">Tab</kbd> to a zone and
+              <kbd class="legend-kbd">Enter</kbd> to move it there.
+              <kbd class="legend-kbd">Esc</kbd> deselects
+            </li>
             <li>
               <span class="legend-badge unit">UNIT</span>
               Unit — can move (taps), strike, attack (taps), or tap
@@ -498,6 +627,7 @@ const result = computed(() => {
             </li>
           </ul>
         </details>
+        </div>
 
         <!-- Your side of the table, nearest you, exactly as it sits on a real
              one. The cemetery and collection wrap onto their own row here

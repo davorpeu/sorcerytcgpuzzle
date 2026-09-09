@@ -39,14 +39,32 @@ const moving = computed(() => ui.moving && ui.moving === ui.selected)
 const attacking = computed(() => ui.attacker && ui.attacker === ui.selected)
 const striking = computed(() => ui.striker && ui.striker === ui.selected)
 const carrying = computed(() => ui.carrier && ui.carrier === ui.selected)
+// Pick up and put down are logged moves, so they belong wherever moves are
+// being written down: while recording a solution, and while playing one.
+const logging = computed(() => state.recording || state.mode === 'play')
 // What this card holds, and who holds it -- the two sides of the same relation
 // and the two buttons the bar has to offer.
 const holding = computed(() => (ui.selected ? carriedBy(ui.selected) : []))
 const heldBy = computed(() => (ui.selected ? carrierOf(ui.selected) : null))
+
+// Removing a card takes it out of the puzzle for good -- Undo walks back
+// moves, not deletions -- and the button sits in a row of harmless toggles,
+// so it asks first.
+function onRemove() {
+  if (!card.value) return
+  if (!confirm(`Remove "${card.value.name}" from the puzzle? This cannot be undone.`))
+    return
+  removeCard(ui.selected)
+}
 </script>
 
 <template>
-  <div v-if="card" class="card-actions">
+  <div
+    v-if="card"
+    class="card-actions"
+    role="group"
+    :aria-label="`Actions for ${card.name}`"
+  >
     <!-- No card art here on purpose: this bar was the app's only image sized
          in absolute pixels, so a host theme's `img { width: 100% }` blew it up
          to the full width of the bar. The card itself is highlighted on the
@@ -160,7 +178,7 @@ const heldBy = computed(() => (ui.selected ? carrierOf(ui.selected) : null))
       >
         ✦ {{ card.aura ? 'Not an aura' : 'Mark as aura' }}
       </button>
-      <button v-if="editing" class="btn danger" @click="removeCard(ui.selected)">
+      <button v-if="editing" class="btn danger" @click="onRemove">
         × Remove card
       </button>
     </div>
@@ -177,7 +195,12 @@ const heldBy = computed(() => (ui.selected ? carrierOf(ui.selected) : null))
     </p>
     <p v-else class="ca-hint">Click any zone to move without tapping, or choose an action above.</p>
 
-    <button class="ca-close" title="Deselect (Esc)" @click="clearSelection">
+    <button
+      class="ca-close"
+      title="Deselect (Esc)"
+      aria-label="Deselect this card (Escape)"
+      @click="clearSelection"
+    >
       ×
     </button>
   </div>

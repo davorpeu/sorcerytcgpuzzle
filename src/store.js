@@ -105,6 +105,10 @@ export const ui = reactive({
   carrier: null, // card id armed to pick up; next click on a card carries it
   striker: null, // card id armed to strike; next click on a unit/site targets it
   moving: null, // card id armed for formal Move action; next zone click moves & taps unit
+  // A card is in flight. The board's drop zones only take the pointer while
+  // this is true or while a card is armed for a click-move; the rest of the
+  // time they step aside so the site art underneath them stays clickable.
+  dragging: false,
   // Card whose actions are offered in the docked action bar. Selecting is
   // also how a card is picked up without dragging: click the card, then
   // click the zone it should go to.
@@ -206,6 +210,17 @@ function intersectionLabel(i) {
 export function cardName(cardId) {
   const c = state.cards[cardId]
   return c ? c.name : cardId
+}
+
+// Every dragstart in the app goes through here: it arms the drag flag the
+// board reads to decide whether its zones are listening, then sets the ghost.
+export function beginDrag(e, imgEl, width) {
+  ui.dragging = true
+  setDragGhost(e, imgEl, width)
+}
+
+export function endDrag() {
+  ui.dragging = false
 }
 
 // Use the card's artwork as the drag image: the default ghost is a snapshot
@@ -372,6 +387,7 @@ export function beginMove(cardId) {
   ui.moving = ui.moving === cardId ? null : cardId
   ui.attacker = null
   ui.striker = null
+  ui.carrier = null
 }
 
 // Attacks and strikes don't change the board; they are logged as their own entry types
@@ -380,12 +396,14 @@ export function beginAttack(cardId) {
   ui.attacker = ui.attacker === cardId ? null : cardId
   ui.striker = null
   ui.moving = null
+  ui.carrier = null
 }
 
 export function beginStrike(cardId) {
   ui.striker = ui.striker === cardId ? null : cardId
   ui.attacker = null
   ui.moving = null
+  ui.carrier = null
 }
 
 export function targetAttack(targetId) {
@@ -461,7 +479,13 @@ function logEntry(entry) {
 // flag would block the one case that most needs carrying.
 export function beginPickup(cardId) {
   ui.carrier = ui.carrier === cardId ? null : cardId
-  if (ui.carrier) ui.attacker = null
+  if (ui.carrier) {
+    // Only one action is ever armed: a leftover striker or move would swallow
+    // the next click that was meant to name the card being lifted.
+    ui.attacker = null
+    ui.striker = null
+    ui.moving = null
+  }
 }
 
 export function targetPickup(targetId) {
@@ -778,15 +802,23 @@ function divergence(sol, mv) {
   return -1
 }
 
+// Whether this puzzle has anything to be checked against. A puzzle can reach
+// a player with no recorded line -- an editor who forgot to record, a daily
+// that failed to load -- and there is no verdict to give in that case.
+export const hasSolution = () => state.solutions.length > 0
+
 // The attempt is correct if it fully matches any solution line. Otherwise
 // feedback is given against the closest line: the one the attempt follows
-// deepest (ties broken by fewer remaining moves).
+// deepest (ties broken by fewer remaining moves). Returns null when there is
+// no recorded solution: "no lines" used to stand in as "the empty line", so
+// submitting an untouched board -- or a board with no puzzle on it at all --
+// matched it and reported a win.
 export function check() {
+  if (!hasSolution()) return null
   state.checked = true
   const mv = state.moves
-  const lines = state.solutions.length ? state.solutions : [[]]
   let best = null
-  for (const sol of lines) {
+  for (const sol of state.solutions) {
     const fw = divergence(sol, mv)
     if (fw === -1) {
       state.firstWrong = -1
@@ -848,8 +880,12 @@ function restoreAttempt() {
 }
 
 // A submit is a checked attempt that consumes a try (for non-editors).
-// Returns true/false like check(), or null when no try was available.
+// Returns true/false like check(), or null when there was nothing to check --
+// no recorded solution, or no try left. A puzzle with no solution must not
+// spend a try or set `solved`, or one click on an empty board would lock the
+// player out for the rest of the day.
 export function submit() {
+  if (!hasSolution()) return null
   if (triesLimited() && (state.solved || state.tries >= MAX_TRIES)) return null
   const ok = check()
   if (triesLimited()) {
@@ -955,6 +991,36 @@ export function removeCard(cardId) {
 
 // ---------- serialization / persistence ----------
 
+// Everything a save would write, minus the timestamp and the generated id --
+// both change on every call and would make the puzzle look permanently dirty.
+// Taken on demand (a page unload, a New) rather than watched, so editing pays
+// nothing for it.
+export function fingerprint() {
+  return JSON.stringify({
+    name: state.puzzleName,
+    desc: state.puzzleDesc,
+    date: state.puzzleDate,
+    cards: state.cards,
+    initial: state.initialZones || state.zones,
+    tapped: state.initialTapped || state.tapped,
+    carry: state.initialCarry || state.carry,
+    stats: state.initialStats || state.stats,
+    solutions: state.solutions,
+  })
+}
+
+// The fingerprint as of the last save, load or New. Everything since then is
+// work a reload would silently destroy -- there is no autosave and no undo
+// that reaches across a page load.
+let savedPrint = fingerprint()
+
+export function markSaved() {
+  savedPrint = fingerprint()
+}
+
+export const hasUnsavedWork = () =>
+  config.canEdit && !!Object.keys(state.cards).length && fingerprint() !== savedPrint
+
 export function serialize() {
   return {
     version: FORMAT_VERSION,
@@ -1027,6 +1093,7 @@ export function loadPuzzle(data, { play = true } = {}) {
   ui.carrier = null
   ui.selected = null
   restoreAttempt()
+  markSaved()
 }
 
 export function newPuzzle() {
@@ -1057,6 +1124,7 @@ export function newPuzzle() {
   ui.moving = null
   ui.carrier = null
   ui.selected = null
+  markSaved()
 }
 
 function readStore() {
@@ -1086,12 +1154,14 @@ export async function savePuzzle() {
       body: JSON.stringify(data),
     })
     state.puzzleId = saved.id
+    markSaved()
     return saved
   }
   state.puzzleId = data.id
   const map = readStore()
   map[data.id] = data
   writeStore(map)
+  markSaved()
   return data
 }
 
