@@ -163,6 +163,8 @@ function onKeyDown(e) {
   }
   if (e.key === 'Escape') {
     ui.attacker = null
+    ui.striker = null
+    ui.moving = null
     ui.selected = null
   }
 }
@@ -428,12 +430,24 @@ const result = computed(() => {
           <ul class="legend-list">
             <li><kbd class="legend-kbd">Alt</kbd> hover a card to enlarge it</li>
             <li>
+              <span class="legend-badge unit">UNIT</span>
+              Unit — can move (taps), strike, attack (taps), or tap
+            </li>
+            <li>
+              <span class="legend-badge avatar">AVATAR</span>
+              Avatar — special unit representing the player
+            </li>
+            <li>
               <span class="legend-badge">SITE</span>
               Site — occupies a square of the grid
             </li>
             <li>
               <span class="legend-badge aura">AURA</span>
               Aura — sits on an intersection, always drawn on top
+            </li>
+            <li>
+              <span class="legend-badge tap">TAP</span>
+              Tapped card — turned 90° after moving, attacking, or playing a site
             </li>
             <li>
               <span class="legend-icon">🂠</span>
@@ -445,7 +459,7 @@ const result = computed(() => {
             </li>
             <li>
               <span class="legend-icon">☞</span>
-              Click a card to select it — its actions (attack, send below,
+              Click a card to select it — its actions (move, attack, strike, send below,
               control) appear above the storyline
             </li>
             <li>
