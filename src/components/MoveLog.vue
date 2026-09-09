@@ -34,6 +34,10 @@ function entryClass(i) {
           <strong>{{ cardName(m.cardId) }}</strong>
           ⚔ attacks <strong>{{ cardName(m.targetId) }}</strong>
         </template>
+        <template v-else-if="m.type === 'strike'">
+          <strong>{{ cardName(m.cardId) }}</strong>
+          💥 strikes <strong>{{ cardName(m.targetId) }}</strong>
+        </template>
         <template v-else>
           <strong>{{ cardName(m.cardId) }}</strong>
           {{ zoneLabel(m.from) }} → {{ zoneLabel(m.to) }}
