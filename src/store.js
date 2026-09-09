@@ -63,9 +63,6 @@ export function defaultStats() {
   return { player: side(), opponent: side() }
 }
 
-// A life total of 0 means the avatar is at Death's Door.
-export const lifeLabel = (n) => (Number(n) <= 0 ? "Death's Door" : String(n))
-
 // Host-page configuration (not part of the puzzle data). The WordPress
 // shortcode sets canEdit from the viewer's capability; when false the app is
 // locked to play mode and the editor UI is never shown. When apiUrl is set
@@ -105,6 +102,7 @@ export const ui = reactive({
   hoverCard: null, // card id currently under the mouse
   alt: false, // Alt key held -> show enlarged preview of hovered card
   attacker: null, // card id armed to attack; next click on a unit/site targets it
+  carrier: null, // card id armed to pick up; next click on a card carries it
   striker: null, // card id armed to strike; next click on a unit/site targets it
   moving: null, // card id armed for formal Move action; next zone click moves & taps unit
   // Card whose actions are offered in the docked action bar. Selecting is
@@ -119,6 +117,15 @@ export const ui = reactive({
 export function zoneOf(cardId) {
   for (const [zone, ids] of Object.entries(state.zones)) {
     if (ids.includes(cardId)) return zone
+  }
+  // A carried card is in no zone of its own -- it is wherever its carrier is.
+  // The loop guard is belt and braces: pickUp already refuses to make a cycle.
+  let n = state.carry[cardId]
+  for (let hops = 0; n && hops < 64; hops++) {
+    for (const [zone, ids] of Object.entries(state.zones)) {
+      if (ids.includes(n)) return zone
+    }
+    n = state.carry[n]
   }
   return null
 }
@@ -139,7 +146,14 @@ export const state = reactive({
   puzzleDate: '', // optional YYYY-MM-DD, used by the daily-puzzle picker
   cards: {}, // id -> { id, name, img, imgId?, site?, aura?, unit?, avatar?, enemy? }
   zones: emptyZones(), // zoneId -> [cardId, ...]
+  // Who is carrying what: itemId -> carrierId. A carried card is removed from
+  // its zone entirely and lives only here, so it has no position of its own
+  // and every zone rule (one site per square, auras only on intersections)
+  // stops applying to it. Moving a carrier therefore needs no special case --
+  // there is nothing to drag along, because the load was never in a zone.
+  carry: {},
   initialZones: null, // snapshot taken when the solution recording starts
+  initialCarry: null,
   stats: defaultStats(), // life, mana + elemental thresholds per player
   initialStats: null,
   tapped: {}, // cardId -> true
@@ -283,6 +297,11 @@ function findSitePlayerUnit(side, siteZone) {
 }
 
 export function moveCard(cardId, from, to, { tapOnMove } = {}) {
+  // A carried card has no zone of its own, so it cannot be moved out of one:
+  // it has to be put down first. Bailing here rather than letting the splice
+  // below fail also keeps it out of the pool branch, which would otherwise
+  // answer a move request by placing a *copy* of it.
+  if (state.carry[cardId]) return
   to = routeZone(cardId, to)
   if (from === to || !state.zones[to]) return
   if (state.mode === 'play' && to === 'pool') return
@@ -386,6 +405,103 @@ export function targetAttack(targetId) {
   ui.attacker = null
 }
 
+// ---------- carrying ----------
+
+// What this card is holding, outermost first. Derived from state.carry rather
+// than stored on the carrier so there is only one place to keep consistent.
+export function carriedBy(cardId) {
+  return Object.keys(state.carry).filter((id) => state.carry[id] === cardId)
+}
+
+export function carrierOf(cardId) {
+  return state.carry[cardId] || null
+}
+
+// Would picking targetId up with carrierId close a loop? Walk the carrier's
+// own chain of holders: if the target is anywhere in it, refuse.
+function wouldCycle(carrierId, targetId) {
+  for (let n = carrierId, hops = 0; n && hops < 64; n = state.carry[n], hops++) {
+    if (n === targetId) return true
+  }
+  return false
+}
+
+// Where a dropped card lands. Normally the carrier's own zone, but an
+// intersection holds one aura and nothing else, so anything else dropped by an
+// aura goes to the square up and left of the crossing.
+function dropTarget(itemId, zone) {
+  const card = state.cards[itemId]
+  let m
+  if ((m = zone.match(/^aura:(\d+)$/))) {
+    if (card && card.aura && !state.zones[zone].length) return zone
+    const i = Number(m[1])
+    const r = Math.floor(i / INTERSECTION_COLS)
+    const c = i % INTERSECTION_COLS
+    return `cell:${r * GRID_COLS + c}:top`
+  }
+  const routed = routeZone(itemId, zone)
+  if ((m = routed.match(/^site:(\d+)$/)) && state.zones[routed].length) {
+    return `cell:${m[1]}:top`
+  }
+  return routed
+}
+
+function logEntry(entry) {
+  if (state.recording) {
+    state.draft.push(entry)
+  } else if (state.mode === 'play') {
+    state.moves.push(entry)
+    state.checked = false
+  }
+}
+
+// Arm a card to pick something up; the next click on another card carries it.
+// Sites are deliberately not excluded: the app has no notion of a site that
+// has become a unit -- card.site stays true either way -- so refusing by that
+// flag would block the one case that most needs carrying.
+export function beginPickup(cardId) {
+  ui.carrier = ui.carrier === cardId ? null : cardId
+  if (ui.carrier) ui.attacker = null
+}
+
+export function targetPickup(targetId) {
+  const carrier = ui.carrier
+  if (!carrier || carrier === targetId) return
+  if (wouldCycle(carrier, targetId)) return
+  const from = zoneOf(targetId)
+  // The pool is a palette: its cards stay in it so one upload can be used many
+  // times, so nothing is ever lifted out of it.
+  if (from === 'pool') return
+  const held = state.carry[targetId]
+  // Taking something out of another card's hands is a pick-up too, so the
+  // item may already be carried rather than sitting in a zone.
+  if (held) {
+    if (held === carrier) return
+  } else {
+    const src = state.zones[from]
+    const i = src ? src.indexOf(targetId) : -1
+    if (i === -1) return
+    src.splice(i, 1)
+  }
+  state.carry[targetId] = carrier
+  logEntry({ type: 'pickup', cardId: carrier, targetId, from, held })
+  ui.carrier = null
+}
+
+// The holder puts it down: it lands in the holder's zone and is a free card
+// again.
+export function dropCarried(itemId) {
+  const carrierId = state.carry[itemId]
+  if (!carrierId) return
+  const zone = zoneOf(carrierId)
+  if (!zone) return
+  const to = dropTarget(itemId, zone)
+  if (!state.zones[to]) return
+  delete state.carry[itemId]
+  state.zones[to].push(itemId)
+  logEntry({ type: 'drop', cardId: itemId, to, carrierId })
+}
+
 export function targetStrike(targetId) {
   if (!ui.striker || ui.striker === targetId) return
   const strikerId = ui.striker
@@ -416,6 +532,23 @@ export function undo() {
     state.checked = false
     return
   }
+  if (m.type === 'pickup') {
+    if (m.held) state.carry[m.targetId] = m.held
+    else {
+      delete state.carry[m.targetId]
+      if (state.zones[m.from]) state.zones[m.from].push(m.targetId)
+    }
+    state.checked = false
+    return
+  }
+  if (m.type === 'drop') {
+    const z = state.zones[m.to]
+    const i = z ? z.indexOf(m.cardId) : -1
+    if (i !== -1) z.splice(i, 1)
+    state.carry[m.cardId] = m.carrierId
+    state.checked = false
+    return
+  }
   const src = state.zones[m.to]
   const i = src.indexOf(m.cardId)
   if (i !== -1) {
@@ -433,7 +566,8 @@ function restoreZones(snapshot) {
   const z = clone(snapshot)
   const placed = new Set(Object.values(z).flat())
   for (const id of Object.keys(state.cards)) {
-    if (!placed.has(id)) z.pool.push(id)
+    // A carried card is in no zone on purpose -- don't sweep it into the pool.
+    if (!placed.has(id) && !state.carry[id]) z.pool.push(id)
   }
   return z
 }
@@ -446,6 +580,7 @@ export function startRecording() {
   } else {
     // First line: the board as it stands becomes the start position.
     state.initialZones = clone(state.zones)
+    state.initialCarry = clone(state.carry)
     state.initialStats = clone(state.stats)
     state.initialTapped = clone(state.tapped)
     state.solutions = []
@@ -455,20 +590,24 @@ export function startRecording() {
 }
 
 function restoreInitial() {
-  if (state.initialZones) state.zones = restoreZones(state.initialZones)
+  if (state.initialZones) {
+    state.carry = clone(state.initialCarry || {})
+    state.zones = restoreZones(state.initialZones)
+  }
   if (state.initialStats) state.stats = clone(state.initialStats)
   state.tapped = clone(state.initialTapped || {})
 }
 
+// `from`, `held` and `carrierId` are recorded for undo but deliberately not
+// compared: they are consequences of the position, so two attempts that reach
+// the same point by the same moves always agree on them.
 const sameEntry = (a, b) => {
   if (!a || !b) return false
-  const typeA = a.type || 'move'
-  const typeB = b.type || 'move'
-  if (typeA !== typeB) return false
+  const type = a.type || 'move'
+  if (type !== (b.type || 'move')) return false
   if (a.cardId !== b.cardId) return false
-  if (typeA === 'attack' || typeA === 'strike') {
-    return a.targetId === b.targetId
-  }
+  if (type === 'attack' || type === 'pickup') return a.targetId === b.targetId
+  if (type === 'drop') return a.to === b.to
   return a.from === b.from && a.to === b.to
 }
 
@@ -495,6 +634,7 @@ export function enterPlay() {
   if (state.recording) stopRecording()
   if (!state.initialZones) {
     state.initialZones = clone(state.zones)
+    state.initialCarry = clone(state.carry)
     state.initialStats = clone(state.stats)
     state.initialTapped = clone(state.tapped)
   }
@@ -506,6 +646,7 @@ export function enterPlay() {
   ui.attacker = null
   ui.striker = null
   ui.moving = null
+  ui.carrier = null
   ui.selected = null
 }
 
@@ -517,6 +658,7 @@ export function enterEditor() {
   state.checked = false
   restoreInitial()
   ui.attacker = null
+  ui.carrier = null
   ui.striker = null
   ui.moving = null
   ui.selected = null
@@ -528,6 +670,7 @@ export function resetPlay() {
   state.checked = false
   state.firstWrong = -1
   ui.attacker = null
+  ui.carrier = null
   ui.striker = null
   ui.moving = null
   ui.selected = null
@@ -780,6 +923,10 @@ export function addCardFromMedia(item) {
 }
 
 export function removeCard(cardId) {
+  // Whatever it was holding is put down where it stood, rather than vanishing
+  // with it into no zone at all.
+  for (const itemId of carriedBy(cardId)) dropCarried(itemId)
+  delete state.carry[cardId]
   delete state.cards[cardId]
   delete state.tapped[cardId]
   if (state.initialTapped) delete state.initialTapped[cardId]
@@ -794,6 +941,7 @@ export function removeCard(cardId) {
   state.draft = state.draft.filter((m) => !involves(m))
   state.moves = state.moves.filter((m) => !involves(m))
   if (ui.attacker === cardId) ui.attacker = null
+  if (ui.carrier === cardId) ui.carrier = null
   if (ui.striker === cardId) ui.striker = null
   if (ui.moving === cardId) ui.moving = null
   if (ui.selected === cardId) ui.selected = null
@@ -817,6 +965,7 @@ export function serialize() {
     cards: clone(state.cards),
     initial: clone(state.initialZones || state.zones),
     initialTapped: clone(state.initialTapped || state.tapped || {}),
+    carry: clone(state.initialCarry || state.carry),
     stats: clone(state.initialStats || state.stats),
     solutions: clone(state.solutions),
     savedAt: new Date().toISOString(),
@@ -858,6 +1007,8 @@ export function loadPuzzle(data, { play = true } = {}) {
     c.aura = !!c.aura
   }
   state.initialZones = normalizeZones(data.initial)
+  state.initialCarry = { ...(data.carry || {}) }
+  state.carry = clone(state.initialCarry)
   state.zones = restoreZones(state.initialZones)
   state.initialStats = normalizeStats(data.stats)
   state.stats = clone(state.initialStats)
@@ -873,6 +1024,7 @@ export function loadPuzzle(data, { play = true } = {}) {
   ui.attacker = null
   ui.striker = null
   ui.moving = null
+  ui.carrier = null
   ui.selected = null
   restoreAttempt()
 }
@@ -884,7 +1036,9 @@ export function newPuzzle() {
   state.puzzleDate = ''
   state.cards = {}
   state.zones = emptyZones()
+  state.carry = {}
   state.initialZones = null
+  state.initialCarry = null
   state.stats = defaultStats()
   state.initialStats = null
   state.tapped = {}
@@ -901,6 +1055,7 @@ export function newPuzzle() {
   ui.attacker = null
   ui.striker = null
   ui.moving = null
+  ui.carrier = null
   ui.selected = null
 }
 

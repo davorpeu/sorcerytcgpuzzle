@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from 'vue'
-import { state, adjustStat, lifeLabel, ELEMENTS } from '../store.js'
+import { state, adjustStat, ELEMENTS } from '../store.js'
 import ThresholdIcon from './ThresholdIcon.vue'
 
 const props = defineProps({
@@ -8,28 +8,26 @@ const props = defineProps({
 })
 
 const life = computed(() => state.stats[props.side].life)
-// 0 life is not "dead" in Sorcery but Death's Door, a state of its own, so
-// the readout names it instead of showing a bare zero.
+// 0 life is not "dead" in Sorcery but Death's Door, a state of its own. The
+// rail is too narrow for that phrase inline, so the row keeps the number and
+// names the state on a caption line beneath it.
 const atDoor = computed(() => life.value <= 0)
-const lifeTitle = computed(() =>
-  atDoor.value ? "At Death's Door" : `${life.value} life`
-)
 </script>
 
 <template>
-  <div class="zone-block stats-block">
-    <div class="zone-title">
-      {{ side === 'player' ? 'You' : 'Opponent' }} — life &amp; mana
+  <div class="stat-card">
+    <div class="stat-side">
+      {{ side === 'player' ? 'You' : 'Opponent' }}
     </div>
     <div class="stat-row life-row" :class="{ 'at-door': atDoor }">
       <span class="stat-label">Life</span>
       <button class="stat-btn" @click="adjustStat(side, 'life', -1)">−</button>
-      <span class="stat-value life-value" :title="lifeTitle">
-        <span v-if="atDoor" class="door-icon">☠</span>
-        {{ lifeLabel(life) }}
+      <span class="stat-value life-value" :title="`${life} life`">
+        <span v-if="atDoor" class="door-icon">☠</span>{{ life }}
       </span>
       <button class="stat-btn" @click="adjustStat(side, 'life', 1)">+</button>
     </div>
+    <div v-if="atDoor" class="door-note">At Death&rsquo;s Door</div>
     <div class="stat-row mana-row">
       <span class="stat-label">Mana</span>
       <button class="stat-btn" @click="adjustStat(side, 'mana', -1)">−</button>
@@ -38,7 +36,7 @@ const lifeTitle = computed(() =>
     </div>
     <div class="threshold-grid">
       <div v-for="el in ELEMENTS" :key="el" class="stat-row" :title="el">
-        <ThresholdIcon :element="el" />
+        <span class="stat-label th-cell"><ThresholdIcon :element="el" /></span>
         <button class="stat-btn" @click="adjustStat(side, el, -1)">−</button>
         <span class="stat-value">{{ state.stats[side][el] }}</span>
         <button class="stat-btn" @click="adjustStat(side, el, 1)">+</button>

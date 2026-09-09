@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: Sorcery Puzzle
- * Description: Embeds the Sorcery TCG puzzle app via the [sorcery_puzzle] shortcode and stores puzzles site-wide through a REST API. Shortcode attributes: src (URL to a puzzle JSON), puzzle (stored puzzle id), daily="1".
- * Version: 0.5.0
+ * Description: Embeds the Sorcery TCG puzzle app via the [sorcery_puzzle] shortcode and stores puzzles site-wide through a REST API. Shortcode attributes: src (URL to a puzzle JSON), puzzle (stored puzzle id), daily="1", fullwidth="0".
+ * Version: 1.3.0
  * Author: davorpeu
  */
 
@@ -520,6 +520,10 @@ function sorcery_puzzle_shortcode($atts)
             'src'    => '',
             'puzzle' => '',
             'daily'  => '',
+            // The embed widens past the theme's content column by default,
+            // because the board is sized from the space it is given. Pass
+            // fullwidth="0" to leave it inside the column instead.
+            'fullwidth' => '',
         ),
         $atts,
         'sorcery_puzzle'
@@ -553,6 +557,9 @@ function sorcery_puzzle_shortcode($atts)
     }
     if ($atts['daily']) {
         $attrs .= ' data-daily="1"';
+    }
+    if (in_array(strtolower((string) $atts['fullwidth']), array('0', 'false', 'no'), true)) {
+        $attrs .= ' data-fullwidth="0"';
     }
 
     return '<div id="sorcery-puzzle-root"' . $attrs . '></div>';

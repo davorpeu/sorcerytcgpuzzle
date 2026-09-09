@@ -34,16 +34,22 @@ import DropZone from './components/DropZone.vue'
 import CardToken from './components/CardToken.vue'
 import ThresholdIcon from './components/ThresholdIcon.vue'
 import CardActions from './components/CardActions.vue'
+import StatsBar from './components/StatsBar.vue'
 import ArchiveCalendar from './components/ArchiveCalendar.vue'
+import { enableDragScroll } from './dragScroll.js'
 
 const saved = ref([])
 const importInput = ref(null)
+let stopDragScroll = null
 const notice = ref('')
 const showArchive = ref(false)
-// The storyline + your hand are docked to the bottom of the viewport so they
-// stay reachable while the board is scrolled; the dock can be folded away
-// when the board needs the room.
-const dockOpen = ref(true)
+// Your side lives in the left column, which had 550px of nothing under the
+// folded panels; as a band under the mat it cost the grid 210px of height.
+// The opponent's zones are reference rather than workspace, so they stay a
+// tray over the mat's top edge and start shut.
+const oppOpen = ref(false)
+
+const count = (zone) => state.zones[zone].length
 
 async function onArchiveSelect(id) {
   if (!(await loadById(id))) flash('That puzzle is not available.')
@@ -151,6 +157,12 @@ const targetMoves = computed(() =>
     : 0
 )
 
+// The selected card also shows in the middle of the stats rail, so you can
+// read what you are holding without hunting for it on the mat.
+const selectedCard = computed(() =>
+  ui.selected ? state.cards[ui.selected] : null
+)
+
 // Hold Alt while hovering a card to see it enlarged.
 const previewCard = computed(() =>
   ui.alt && ui.hoverCard ? state.cards[ui.hoverCard] : null
@@ -163,6 +175,7 @@ function onKeyDown(e) {
   }
   if (e.key === 'Escape') {
     ui.attacker = null
+    ui.carrier = null
     ui.striker = null
     ui.moving = null
     ui.selected = null
@@ -184,6 +197,7 @@ onMounted(() => {
   window.addEventListener('keydown', onKeyDown)
   window.addEventListener('keyup', onKeyUp)
   window.addEventListener('blur', onBlur)
+  stopDragScroll = enableDragScroll()
   if (config.canEdit) refreshSaved()
 })
 
@@ -191,6 +205,7 @@ onUnmounted(() => {
   window.removeEventListener('keydown', onKeyDown)
   window.removeEventListener('keyup', onKeyUp)
   window.removeEventListener('blur', onBlur)
+  stopDragScroll?.()
 })
 
 const result = computed(() => {
@@ -243,6 +258,26 @@ const result = computed(() => {
           Play
         </button>
       </div>
+      <!-- Undo, Reset and Submit are what you reach for on every move, so
+           they sit next to Play rather than in a sidebar panel. -->
+      <div v-if="state.mode === 'play'" class="topbar-actions">
+        <button class="btn" :disabled="!state.moves.length" @click="undo">
+          Undo
+        </button>
+        <button class="btn" @click="resetPlay">Reset</button>
+        <button
+          class="btn primary"
+          :disabled="submitLocked"
+          :title="config.canEdit ? 'Unlimited submits in editor preview' : ''"
+          @click="onSubmit"
+        >
+          Submit solution
+        </button>
+        <span v-if="!config.canEdit" class="tries">
+          {{ state.tries }}/{{ MAX_TRIES }} tries
+        </span>
+      </div>
+
       <div v-if="state.puzzleName && state.mode === 'play'" class="puzzle-title">
         {{ state.puzzleName }}
         <span v-if="state.solutions.length" class="target">
@@ -393,17 +428,8 @@ const result = computed(() => {
           </div>
 
           <div class="panel">
-            <div class="zone-title">Controls</div>
+            <div class="zone-title">Puzzles</div>
             <div class="btn-row">
-              <button class="btn" :disabled="!state.moves.length" @click="undo">Undo</button>
-              <button class="btn" @click="resetPlay">Reset</button>
-              <button
-                class="btn primary"
-                :disabled="submitLocked"
-                @click="onSubmit"
-              >
-                Submit solution
-              </button>
               <button class="btn" @click="showArchive = !showArchive">
                 {{ showArchive ? 'Hide archive' : 'Archive' }}
               </button>
@@ -411,13 +437,6 @@ const result = computed(() => {
                 Load current puzzle
               </button>
             </div>
-            <p v-if="!config.canEdit" class="hint">
-              {{ state.tries }}/{{ MAX_TRIES }} tries used today
-            </p>
-            <p v-else class="hint">
-              Unlimited submits (editor preview) — players get
-              {{ MAX_TRIES }} per day.
-            </p>
           </div>
 
           <ArchiveCalendar v-if="showArchive" @select="onArchiveSelect" />
@@ -425,8 +444,8 @@ const result = computed(() => {
 
         <MoveLog />
 
-        <div class="panel legend">
-          <div class="zone-title">Legend</div>
+        <details class="panel legend">
+          <summary class="panel-summary">Legend</summary>
           <ul class="legend-list">
             <li><kbd class="legend-kbd">Alt</kbd> hover a card to enlarge it</li>
             <li>
@@ -463,6 +482,11 @@ const result = computed(() => {
               control) appear above the storyline
             </li>
             <li>
+              <span class="legend-icon">✋</span>
+              Carried card — picked up by another card, travels with it until
+              its holder drops it
+            </li>
+            <li>
               <span class="legend-icon">→</span>
               With a card selected, click any zone to move it there (works
               without dragging, e.g. on a tablet)
@@ -473,39 +497,84 @@ const result = computed(() => {
               </span>
             </li>
           </ul>
+        </details>
+
+        <!-- Your side of the table, nearest you, exactly as it sits on a real
+             one. The cemetery and collection wrap onto their own row here
+             because the column is too narrow for three zones abreast. -->
+        <div class="your-side">
+          <div class="zone-block storyline-block">
+            <div class="zone-title">Storyline (shared)</div>
+            <DropZone zone="storyline" class="storyline">
+              <CardToken
+                v-for="id in state.zones.storyline"
+                :key="id"
+                :card-id="id"
+                from="storyline"
+              />
+            </DropZone>
+          </div>
+          <Hand side="player" />
         </div>
       </aside>
 
       <main class="table">
-        <Hand side="opponent" />
-        <Board />
-
-        <!-- Sticky footer: the storyline and the player's own side follow the
-             viewport, so they stay in reach however far the board scrolls. -->
-        <div class="table-dock" :class="{ collapsed: !dockOpen }">
-          <button
-            class="dock-toggle"
-            :title="dockOpen ? 'Hide the storyline and your hand' : 'Show the storyline and your hand'"
-            @click="dockOpen = !dockOpen"
-          >
-            <span class="dock-caret">{{ dockOpen ? '▾' : '▴' }}</span>
-            Storyline &amp; your side
-          </button>
-          <CardActions />
-          <div v-show="dockOpen" class="dock-body">
-            <div class="zone-block storyline-block">
-              <div class="zone-title">Storyline (shared)</div>
-              <DropZone zone="storyline" class="storyline">
-                <CardToken
-                  v-for="id in state.zones.storyline"
-                  :key="id"
-                  :card-id="id"
-                  from="storyline"
-                />
-              </DropZone>
+        <div class="mat-area">
+          <!-- The opponent's zones are reference, not workspace, so they ride
+               over the top edge of the mat as a count bar and open only when
+               you actually need to look. -->
+          <div class="zone-tray opp-tray" :class="{ open: oppOpen }">
+            <button
+              class="tray-toggle"
+              :title="oppOpen ? 'Hide the opponent zones' : 'Show the opponent zones'"
+              @click="oppOpen = !oppOpen"
+            >
+              <span class="tray-caret">{{ oppOpen ? '▴' : '▾' }}</span>
+              Opponent
+              <span class="tray-counts">
+                hand {{ count('hand:opponent') }} &middot; cemetery
+                {{ count('grave:opponent') }} &middot; collection
+                {{ count('collection:opponent') }}
+              </span>
+            </button>
+            <div v-show="oppOpen" class="tray-body">
+              <Hand side="opponent" />
             </div>
-            <Hand side="player" />
           </div>
+
+          <Board />
+
+          <!-- The one thing that still wants to be near the mat. It exists
+               only while a card is selected, so it costs the grid height
+               only while you are actually using it. -->
+          <CardActions />
+        </div>
+
+        <!-- Life, mana and thresholds sit beside the board rather than inside
+             the hand rows: no vertical cost, and each side's numbers sit on
+             that side's edge of the table. -->
+        <div class="stat-rail">
+          <StatsBar side="opponent" />
+
+          <!-- The gap between the two sides is the one piece of rail nothing
+               else wants, so the selected card sits there. -->
+          <div v-if="selectedCard" class="rail-preview">
+            <div class="zone-title">Selected</div>
+            <div class="rail-preview-frame">
+              <img
+                v-if="selectedCard.img"
+                :src="selectedCard.img"
+                :alt="selectedCard.name"
+                draggable="false"
+              />
+              <span v-else class="rail-preview-fallback">
+                {{ selectedCard.name }}
+              </span>
+            </div>
+            <div class="rail-preview-name">{{ selectedCard.name }}</div>
+          </div>
+
+          <StatsBar side="player" />
         </div>
       </main>
     </div>

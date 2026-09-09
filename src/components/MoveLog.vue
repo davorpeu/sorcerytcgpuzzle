@@ -26,8 +26,8 @@ function entryClass(i) {
 </script>
 
 <template>
-  <div class="move-log">
-    <div class="zone-title">{{ title }}</div>
+  <details class="move-log" :open="state.mode !== 'play'">
+    <summary class="panel-summary">{{ title }}</summary>
     <ol v-if="entries.length">
       <li v-for="(m, i) in entries" :key="i" :class="entryClass(i)">
         <template v-if="m.type === 'attack'">
@@ -37,6 +37,15 @@ function entryClass(i) {
         <template v-else-if="m.type === 'strike'">
           <strong>{{ cardName(m.cardId) }}</strong>
           💥 strikes <strong>{{ cardName(m.targetId) }}</strong>
+        </template>
+        <template v-else-if="m.type === 'pickup'">
+          <strong>{{ cardName(m.cardId) }}</strong>
+          ✋ picks up <strong>{{ cardName(m.targetId) }}</strong>
+        </template>
+        <template v-else-if="m.type === 'drop'">
+          <strong>{{ cardName(m.carrierId) }}</strong>
+          ▽ drops <strong>{{ cardName(m.cardId) }}</strong>
+          {{ zoneLabel(m.to) }}
         </template>
         <template v-else>
           <strong>{{ cardName(m.cardId) }}</strong>
@@ -51,5 +60,5 @@ function entryClass(i) {
           : 'No solution recorded yet.'
       }}
     </p>
-  </div>
+  </details>
 </template>

@@ -9,6 +9,26 @@
   --aura: #0ea5b7;
   --ok: #22c55e;
   --bad: #ef4444;
+  /* An open tray's panel is a fixed height rather than content-sized, so the
+     mat can reserve exactly the margin it needs and the grid never ends up
+     underneath one. Zones scroll inside it. */
+  --tray-body-h: 184px;
+
+  /* What each tray takes out of the mat: a folded tab, or a tab plus panel.
+     .mat-area raises these when a tray opens. */
+  --tray-top: 26px;
+  --tray-bottom: 8px;
+
+  /* Everything above the mat that the window has to pay for: the app's own
+     top bar and page padding (69px) plus the mat border (2px). Embedded in a
+     page there is a site header above that too, so main.js raises this to the
+     measured offset -- otherwise a mat sized to the whole window runs off the
+     bottom of the screen. */
+  --app-chrome-h: 71px;
+
+  /* How tall the mat may be. What is left for the grid once the trays take
+     their margin is --stage-h, derived on .app. */
+  --board-max-h: max(220px, calc(100vh - var(--app-chrome-h)));
   color-scheme: dark;
 }
 
@@ -24,8 +44,20 @@ body {
   font-size: 14px;
 }
 
+/* A custom property substitutes var() where it is declared, so --stage-h has
+   to live on the element the :has() rules below write --tray-top and
+   --tray-bottom to. Declared at :root it would freeze at the folded values. */
 .app {
-  max-width: 1700px;
+  --stage-h: max(220px, calc(var(--board-max-h) - var(--tray-top) - var(--tray-bottom)));
+
+  /* The board is height-bound: a 5:4 grid capped at --stage-h tall can never
+     be wider than --stage-h x 1.25, so past that the app has no use for the
+     window. Stretched across an ultrawide it just grows dead gaps around the
+     mat and strands the stats rail at the far edge, so hug what the layout can
+     actually fill and centre it. 566px is everything beside the grid: the
+     column (340), the rail (150), the mat's padding and border (30) and the
+     three gaps. */
+  max-width: min(1700px, calc(var(--stage-h) * 1.25 + 566px));
   margin: 0 auto;
   padding: 12px;
 }
@@ -50,6 +82,18 @@ body {
 .mode-switch {
   display: flex;
   gap: 4px;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tries {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .puzzle-title {
@@ -87,7 +131,7 @@ body {
 
 .layout {
   display: grid;
-  grid-template-columns: 300px 1fr;
+  grid-template-columns: 340px 1fr;
   gap: 12px;
   align-items: start;
 }
@@ -105,6 +149,42 @@ body {
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 10px;
+}
+
+/* A panel that folds. The summary carries the same weight as a .zone-title
+   so a folded panel reads as a heading rather than as a control. */
+.panel-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  list-style: none;
+  cursor: pointer;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--muted);
+}
+
+.panel-summary::-webkit-details-marker {
+  display: none;
+}
+
+.panel-summary::before {
+  content: '\25B8';
+  font-size: 10px;
+  line-height: 1;
+}
+
+details[open] > .panel-summary::before {
+  content: '\25BE';
+}
+
+details[open] > .panel-summary {
+  margin-bottom: 6px;
+}
+
+.panel-summary:hover {
+  color: var(--text);
 }
 
 .zone-title {
@@ -210,35 +290,83 @@ body {
 /* ---------- table / board ---------- */
 
 .table {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
+  align-items: start;
 }
 
-/* ---------- bottom dock (storyline + player side) ---------- */
+/* The mat, plus the two trays that ride over it. It is exactly as tall as the
+   mat, so the trays can anchor to the mat's own top and bottom edges. */
+.mat-area {
+  position: relative;
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
+}
 
-/* Sticks to the bottom of the viewport while the board scrolls above it.
-   It keeps its place in the flow, so nothing is ever hidden underneath. */
-.table-dock {
-  position: sticky;
-  bottom: 0;
+/* The mat hugs the stage rather than stretching: when the window is short and
+   wide the board cannot grow taller, and a full-width panel would be mostly
+   empty felt. 30px is the horizontal padding and border either side. */
+.mat-area > .board {
+  margin-inline: auto;
+  width: 100%;
+  max-width: calc(var(--stage-h) * 1.25 + 30px);
+  /* The felt runs the full height and the trays rest on its margins, so a
+     tray covers padding rather than playable squares. */
+  padding: var(--tray-top) 14px var(--tray-bottom);
+}
+
+.app:has(.opp-tray.open) {
+  --tray-top: calc(var(--tray-body-h) + 26px);
+}
+
+/* The action bar is the only thing left below the mat, and only while a card
+   is selected, so the bottom margin is nearly nothing the rest of the time. */
+.app:has(.card-actions) {
+  --tray-bottom: 66px;
+}
+
+/* ---------- zone trays (over the mat, not beside it) ---------- */
+
+/* Both sides float over the mat rather than reserving a row above and below
+   it. That is what buys the board the window height: reserved rows cost
+   ~380px of every viewport, a folded tray costs 26px of the mat edge. */
+.zone-tray {
+  position: absolute;
+  left: 0;
+  right: 0;
+  /* Same width and centring as the mat, so a tray reads as resting on the
+     table rather than overhanging it. */
+  max-width: calc(var(--stage-h) * 1.25 + 30px);
+  margin-inline: auto;
   z-index: 20;
   display: flex;
   flex-direction: column;
-  background: var(--bg);
-  padding-bottom: 4px;
-  box-shadow: 0 -14px 22px -14px rgba(0, 0, 0, 0.95);
+  gap: 0;
+  pointer-events: none;
 }
 
-.dock-toggle {
+/* The opponent hangs from the top edge and opens downward; your side sits on
+   the bottom edge and opens upward. Both put the tab above the body, so the
+   tab stays put and only the panel moves. */
+.opp-tray {
+  top: 0;
+}
+
+.zone-tray > * {
+  pointer-events: auto;
+}
+
+.tray-toggle {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 8px;
   align-self: flex-start;
+  max-width: 100%;
   background: var(--panel-2);
   border: 1px solid var(--border);
-  border-bottom: none;
-  border-radius: 8px 8px 0 0;
+  border-radius: 8px;
   color: var(--muted);
   font-size: 11px;
   text-transform: uppercase;
@@ -247,30 +375,92 @@ body {
   cursor: pointer;
 }
 
-.dock-toggle:hover {
+.tray-toggle:hover {
   color: var(--text);
   border-color: var(--accent);
 }
 
-.table-dock.collapsed .dock-toggle {
-  border-bottom: 1px solid var(--border);
-  border-radius: 8px;
+/* Open, the tab merges into the panel below it. */
+.zone-tray.open .tray-toggle {
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
 }
 
-.dock-caret {
+.tray-caret {
   font-size: 12px;
   line-height: 1;
 }
 
-/* Capped so a crowded hand can never push the board off screen; it scrolls
-   inside the dock instead. */
-.dock-body {
+/* Folded, the tab still says what is in the zones, so nothing is hidden
+   without a trace. */
+.tray-counts {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 11px;
+  opacity: 0.75;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Opaque, because it sits on top of the artwork: the zones have to read as a
+   panel over the table, not as clutter mixed into the board. */
+.tray-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 10px;
+  height: var(--tray-body-h);
+  overflow-y: auto;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 0 10px 10px 10px;
+  padding: 8px;
+  box-shadow: 0 8px 34px rgba(0, 0, 0, 0.85);
+}
+
+.storyline-block {
+  min-width: 0;
+}
+
+/* Your side of the table, stacked in the column. */
+.your-side {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  max-height: 58vh;
-  overflow-y: auto;
-  padding-top: 4px;
+  gap: 12px;
+}
+
+/* In a column the hand takes a whole row -- at three cards abreast it reads
+   as a hand -- and the two usually-empty zones share the row beneath it.
+   Left to wrap on their own the cemetery would sit beside the hand and cut
+   it to two cards. */
+.your-side .hand-block {
+  flex: 1 1 100%;
+}
+
+.your-side .grave-block {
+  flex: 1 1 calc(50% - 5px);
+  max-width: none;
+}
+
+/* Every pixel of chrome inside a tray is a pixel of grid, so the zones give
+   up padding rather than the cards giving up size: at these paddings a full
+   82px card row fits --tray-body-h exactly, with no inner scrollbar. */
+.tray-body .zone-block {
+  padding: 6px;
+}
+
+.tray-body .hand,
+.tray-body .grave,
+.tray-body .storyline {
+  padding: 6px;
+}
+
+/* In your tray the storyline sits beside the hand rather than above it; in
+   the opponent tray the row is the only child, so it just fills the width. */
+.tray-body > .hand-row {
+  flex: 2 1 360px;
+  min-width: 0;
 }
 
 /* ---------- selected-card action bar ---------- */
@@ -278,6 +468,16 @@ body {
 /* Everything a card can do, at a size a finger can hit, docked where the
    eye already is. It rides above the storyline and survives the dock being
    folded away, so the actions are never more than one tap from the board. */
+.mat-area > .card-actions {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  max-width: calc(var(--stage-h) * 1.25 + 30px);
+  margin-inline: auto;
+  z-index: 20;
+}
+
 .card-actions {
   position: relative;
   display: flex;
@@ -289,17 +489,6 @@ body {
   border-radius: 10px;
   padding: 8px 36px 8px 10px;
   margin-bottom: 6px;
-}
-
-.ca-thumb {
-  width: 44px;
-  border-radius: 5px;
-  display: block;
-  flex-shrink: 0;
-}
-
-.ca-thumb.flipped {
-  transform: rotate(180deg);
 }
 
 .ca-id {
@@ -352,28 +541,45 @@ body {
 
 /* 5x4 grid of actual squares. */
 .board {
-  position: relative;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 14px;
+  display: flex;
+  justify-content: center;
+}
+
+/* The grid used to take its height from its own width (5 square cells wide),
+   so a wider window made a taller board and pushed the hands off screen.
+   The stage keeps the 5:4 shape but is capped by the height available, and
+   its max-width follows from that -- so the board shrinks to fit instead of
+   demanding more page. The aura overlay shares the stage, which is what
+   keeps the nodes on the grid lines at every size. */
+.board-stage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 5 / 4;
+  max-height: var(--stage-h);
+  max-width: calc(var(--stage-h) * 1.25);
 }
 
 .board-grid {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
+  grid-template-rows: repeat(4, 1fr);
+  height: 100%;
   border: 1px solid var(--border);
   border-radius: 6px;
   overflow: hidden;
 }
 
 .cell {
-  aspect-ratio: 1 / 1;
   background: var(--panel-2);
   border: 1px solid var(--border);
   position: relative;
   overflow: hidden;
   min-width: 0;
+  min-height: 0;
 }
 
 /* max-width/max-height (rather than object-fit) keep the img box hugging the
@@ -473,11 +679,11 @@ body {
 
 /* ---------- intersections / auras ---------- */
 
-/* Overlay matching the grid area (inset = board padding) so the nodes sit
-   exactly on the crossings of the grid lines. */
+/* Overlay covering the stage, which is the grid, so the nodes sit exactly on
+   the crossings of the grid lines however the board is scaled. */
 .intersections {
   position: absolute;
-  inset: 14px;
+  inset: 0;
   pointer-events: none;
 }
 
@@ -566,8 +772,11 @@ body {
   min-width: 0;
 }
 
+/* The cemetery and collection are usually empty, so they yield width to the
+   hand rather than splitting it evenly -- at 118px the two of them squeezed
+   a two-card hand onto two rows, which overflowed the tray. */
 .grave-block {
-  flex: 1 1 118px;
+  flex: 1 1 96px;
   max-width: 160px;
 }
 
@@ -587,12 +796,92 @@ body {
   width: 58px;
 }
 
-/* ---------- mana & thresholds ---------- */
+/* ---------- stats rail (life, mana, thresholds) ---------- */
 
-.stats-block {
-  /* Wide enough that the life readout still fits when it reads
-     "Death's Door" instead of a number. */
-  flex: 0 0 224px;
+/* A narrow column beside the board instead of a slab inside each hand row:
+   the opponent's numbers sit at the top of the table and yours at the
+   bottom, matching the end of the board each belongs to. It fills height the
+   board already occupies, so it costs no rows -- and it does not need to be
+   stuck to the viewport, because the capped board keeps it on screen. */
+.stat-rail {
+  grid-column: 2;
+  grid-row: 1;
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.stat-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px;
+}
+
+.stat-side {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+/* ---------- selected card, mid-rail ---------- */
+
+.rail-preview {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px;
+}
+
+/* The frame owns the size, never the image. On a host page a theme rule as
+   ordinary as `.entry-content img { width: 100% }` would otherwise stretch
+   the card or blow it up; here the box is capped in both directions and the
+   image can only ever fit inside it. */
+.rail-preview-frame {
+  width: 100%;
+  max-width: 120px;
+  aspect-ratio: 63 / 88;
+  max-height: min(168px, 20vh);
+  margin-inline: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 6px;
+  background: var(--panel-2);
+}
+
+/* object-fit keeps the art undistorted even if the host page forces a width
+   or a height onto it. */
+.rail-preview-frame img {
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.rail-preview-fallback {
+  font-size: 10px;
+  font-weight: 600;
+  text-align: center;
+  padding: 4px;
+  overflow: hidden;
+}
+
+.rail-preview-name {
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+  margin-top: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .stat-row {
@@ -620,19 +909,24 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/* At 0 the number is replaced by the state's name, which needs room and
-   should read as a warning rather than a score. */
+/* At 0 the count still reads as a count; the state it means is named on its
+   own line, which is the only way the phrase fits the rail's width. */
 .life-row.at-door .life-value {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.3px;
-  text-transform: uppercase;
   color: var(--bad);
-  white-space: nowrap;
 }
 
 .door-icon {
   margin-right: 2px;
+}
+
+.door-note {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  color: var(--bad);
+  text-align: center;
+  padding-bottom: 4px;
 }
 
 .mana-row .stat-value {
@@ -665,15 +959,17 @@ body {
 
 .threshold-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 2px 12px;
+  grid-template-columns: 1fr;
   margin-top: 6px;
   padding-top: 6px;
   border-top: 1px solid var(--border);
 }
 
-.threshold-grid .stat-row {
-  justify-content: space-between;
+/* The icon sits in a label-width cell so the counters line up with the ones
+   on the life and mana rows above. */
+.th-cell {
+  display: flex;
+  align-items: center;
 }
 
 .th-icon {
@@ -692,6 +988,89 @@ body {
   flex-wrap: wrap;
   gap: 6px;
   align-items: flex-start;
+}
+
+/* ---------- carrying ---------- */
+
+/* A carried card is in no zone, so this strip inside its holder's token is the
+   only place it is drawn. Overlapping chips, so a big load stays small. */
+.carry-stack {
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  bottom: 3px;
+  display: flex;
+  align-items: flex-end;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.carry-chip {
+  flex: 0 0 auto;
+  width: 44%;
+  min-width: 20px;
+  padding: 0;
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  background: var(--panel-2);
+  overflow: hidden;
+  cursor: pointer;
+  pointer-events: auto;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.8);
+}
+
+/* Fanned rather than spaced: the second chip onwards tucks behind the one
+   before it, so ten carried cards take no more room than two. */
+.carry-chip + .carry-chip {
+  margin-left: -22%;
+}
+
+.carry-chip:hover,
+.carry-chip.selected {
+  border-color: var(--text);
+  transform: translateY(-3px);
+}
+
+.carry-chip img {
+  width: 100%;
+  height: auto;
+  display: block;
+  pointer-events: none;
+}
+
+.carry-chip-name {
+  display: block;
+  font-size: 7px;
+  line-height: 1.1;
+  font-weight: 600;
+  padding: 3px 2px;
+  text-align: center;
+}
+
+/* Sites and auras are drawn straight onto the board rather than as card
+   tokens, so they get a count instead of a strip. */
+.carry-badge {
+  /* .site-badge centres itself with left/transform; this one hugs the corner
+     so it can sit alongside the SITE and AURA badges rather than under them. */
+  left: auto;
+  transform: none;
+  bottom: 2px;
+  right: 2px;
+}
+
+/* Armed to pick something up, and everything it could pick up. */
+.card-token.carrier {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.card-token.liftable {
+  cursor: copy;
+}
+
+.card-token.liftable:hover {
+  outline: 2px dashed var(--accent);
+  outline-offset: 2px;
 }
 
 /* ---------- alt-key card preview ---------- */
@@ -910,14 +1289,22 @@ body {
   gap: 8px;
 }
 
+/* A pool of twenty cards is seven rows tall, which pushes the board off the
+   screen and leaves the sidebar as a long scroll. It scrolls inside its own
+   panel instead -- the same treatment .media-results already gets -- and
+   dragScroll.js is what makes that box reachable while a card is in flight. */
 .pool {
   min-height: 80px;
+  max-height: 320px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border: 1px dashed var(--border);
   border-radius: 8px;
   padding: 12px;
   margin-top: 6px;
   display: flex;
   flex-wrap: wrap;
+  align-content: flex-start;
   gap: 10px;
 }
 
@@ -1145,7 +1532,7 @@ body {
 /* Tablet landscape: keep the two-column layout but give the board the room. */
 @media (max-width: 1200px) {
   .layout {
-    grid-template-columns: 250px 1fr;
+    grid-template-columns: 300px 1fr;
   }
 }
 
@@ -1155,6 +1542,9 @@ body {
 @media (max-width: 1000px) {
   .app {
     padding: 8px;
+    /* One column here, so the sidebar is a full-width header strip and the
+       board is no longer what the app's width should be measured against. */
+    max-width: 1700px;
   }
 
   .layout {
@@ -1171,8 +1561,67 @@ body {
     padding: 8px;
   }
 
-  .intersections {
-    inset: 8px;
+  /* Single column: the rail lies down as a strip under the mat, still with
+     the opponent's card first and yours second. */
+  .table {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* The sidebar sits above the mat here, so the page scrolls regardless.
+     The mat still wants to fit one screen on its own -- trays included, which
+     they now reserve for -- so it only gives up a little breathing room. */
+  :root {
+    --board-max-h: max(240px, calc(100vh - var(--app-chrome-h) - 19px));
+  }
+
+  .stat-rail {
+    grid-column: 1;
+    grid-row: 2;
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .stat-rail .stat-card {
+    flex: 1 1 150px;
+  }
+
+  /* The sidebar is a header strip at this width, not a column, so your side
+     lies down as a band across it rather than stacking into a tower that
+     pushes the mat off the screen. */
+  .your-side {
+    grid-column: 1 / -1;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .your-side > .storyline-block {
+    flex: 1 1 220px;
+  }
+
+  .your-side > .hand-row {
+    flex: 2 1 380px;
+    min-width: 0;
+  }
+
+  .your-side .hand-block {
+    flex: 1 1 200px;
+  }
+
+  .your-side .grave-block {
+    flex: 1 1 96px;
+    max-width: 160px;
+  }
+
+  /* Laid out in a row the preview must not grow; it keeps card width. */
+  .rail-preview {
+    flex: 0 0 auto;
+    width: 136px;
+  }
+
+  .threshold-grid {
+    grid-template-columns: 1fr 1fr;
+    gap: 2px 12px;
   }
 
   .move-log ol {
@@ -1196,13 +1645,10 @@ body {
     min-height: 76px;
   }
 
-  .stats-block {
-    flex: 1 1 100%;
-  }
-
-  /* At this width the dock would otherwise cover most of the board. */
-  .dock-body {
-    max-height: 42vh;
+  /* At this width a full-height panel would take the whole mat, so it is
+     shorter and scrolls inside. */
+  :root {
+    --tray-body-h: 140px;
   }
 }
 
@@ -1233,12 +1679,11 @@ body {
   }
 }
 
-/* Short viewports (landscape tablets): the dock must not swallow the board,
-   so its zones and the cards inside them tighten up rather than the dock
-   growing and pushing the grid off screen. */
+/* Short viewports (landscape tablets): an open tray must not swallow the
+   whole board, so its panel and the cards inside it tighten up. */
 @media (max-height: 820px) {
-  .dock-body {
-    max-height: 48vh;
+  :root {
+    --tray-body-h: 148px;
   }
 
   .hand,
@@ -1248,15 +1693,11 @@ body {
     padding: 6px;
   }
 
-  .dock-body .card-token {
+  .tray-body .card-token {
     width: 62px;
   }
 
-  .dock-body .grave .card-token {
+  .tray-body .grave .card-token {
     width: 46px;
-  }
-
-  .ca-thumb {
-    width: 36px;
   }
 }
