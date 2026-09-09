@@ -19,6 +19,10 @@ import {
   beginMove,
   beginAttack,
   beginStrike,
+  beginPickup,
+  dropCarried,
+  carriedBy,
+  carrierOf,
 } from '../store.js'
 
 // Everything a card can do lives here rather than on postage-stamp buttons
@@ -34,25 +38,32 @@ const canAct = computed(() => !!card.value && !inPool.value)
 const moving = computed(() => ui.moving && ui.moving === ui.selected)
 const attacking = computed(() => ui.attacker && ui.attacker === ui.selected)
 const striking = computed(() => ui.striker && ui.striker === ui.selected)
+const carrying = computed(() => ui.carrier && ui.carrier === ui.selected)
+// What this card holds, and who holds it -- the two sides of the same relation
+// and the two buttons the bar has to offer.
+const holding = computed(() => (ui.selected ? carriedBy(ui.selected) : []))
+const heldBy = computed(() => (ui.selected ? carrierOf(ui.selected) : null))
 </script>
 
 <template>
   <div v-if="card" class="card-actions">
-    <img
-      v-if="card.img"
-      class="ca-thumb"
-      :src="card.img"
-      :alt="card.name"
-      :class="{ flipped: card.enemy }"
-    />
+    <!-- No card art here on purpose: this bar was the app's only image sized
+         in absolute pixels, so a host theme's `img { width: 100% }` blew it up
+         to the full width of the bar. The card itself is highlighted on the
+         board, and its name is right here, so the thumbnail earned nothing. -->
     <div class="ca-id">
       <div class="ca-name">{{ card.name }}</div>
-      <div class="ca-zone">{{ zone ? zoneLabel(zone) : 'Nowhere' }}</div>
+      <div class="ca-zone">
+        {{ zone ? zoneLabel(zone) : 'Nowhere' }}
+        <template v-if="heldBy">
+          · carried by {{ state.cards[heldBy]?.name }}
+        </template>
+      </div>
     </div>
 
     <div class="ca-buttons">
       <button
-        v-if="onBoard"
+        v-if="onBoard && !heldBy"
         class="btn"
         @click="toggleUnderOver(ui.selected, zone)"
       >
@@ -89,6 +100,30 @@ const striking = computed(() => ui.striker && ui.striker === ui.selected)
         @click="toggleTap(ui.selected)"
       >
         {{ isTapped(ui.selected) ? '⟳ Untap' : '↷ Tap' }}
+      </button>
+      <button
+        v-if="logging || editing"
+        class="btn"
+        :class="{ danger: carrying }"
+        @click="beginPickup(ui.selected)"
+      >
+        {{ carrying ? ' Cancel pick up' : ' Pick up' }}
+      </button>
+      <button
+        v-if="(logging || editing) && heldBy"
+        class="btn"
+        @click="dropCarried(ui.selected)"
+      >
+        ▽ Put down
+      </button>
+      <button
+        v-for="id in holding"
+        :key="id"
+        class="btn"
+        :title="`Put down ${state.cards[id]?.name}`"
+        @click="dropCarried(id)"
+      >
+        ▽ Drop {{ state.cards[id]?.name }}
       </button>
       <button v-if="editing" class="btn" @click="toggleControl(ui.selected)">
         ⇅ {{ card.enemy ? 'Give to player' : 'Give to opponent' }}
@@ -133,6 +168,13 @@ const striking = computed(() => ui.striker && ui.striker === ui.selected)
     <p v-if="moving" class="ca-hint">Now click a destination square to move and tap this unit.</p>
     <p v-else-if="attacking" class="ca-hint">Now click the unit or site to attack (will tap).</p>
     <p v-else-if="striking" class="ca-hint">Now click the unit or site to strike (does not tap).</p>
+    <p v-else-if="carrying" class="ca-hint">
+      Now click the card to pick up — it travels with this one until dropped.
+    </p>
+    <p v-else-if="heldBy" class="ca-hint">
+      Carried by {{ state.cards[heldBy]?.name }} and travelling with it. Put it
+      down to move it on its own.
+    </p>
     <p v-else class="ca-hint">Click any zone to move without tapping, or choose an action above.</p>
 
     <button class="ca-close" title="Deselect (Esc)" @click="clearSelection">
