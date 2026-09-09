@@ -3,6 +3,7 @@ import {
   state,
   ui,
   targetAttack,
+  targetStrike,
   selectCard,
   setDragGhost,
   GRID_SIZE,
@@ -52,6 +53,7 @@ function clickSite(idx) {
   const card = siteCard(idx)
   if (!card) return
   if (ui.attacker && ui.attacker !== card.id) targetAttack(card.id)
+  else if (ui.striker && ui.striker !== card.id) targetStrike(card.id)
   else selectCard(card.id)
 }
 
@@ -85,7 +87,9 @@ function nodeStyle(idx) {
             :class="{
               flipped: siteCard(n - 1).enemy,
               selected: ui.selected === siteCard(n - 1).id,
-              targetable: ui.attacker && ui.attacker !== siteCard(n - 1).id,
+              targetable:
+                (ui.attacker && ui.attacker !== siteCard(n - 1).id) ||
+                (ui.striker && ui.striker !== siteCard(n - 1).id),
             }"
             :src="siteCard(n - 1).img"
             :alt="siteCard(n - 1).name"
