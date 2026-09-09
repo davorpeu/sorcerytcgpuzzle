@@ -8,7 +8,7 @@ const over = ref(false)
 // A zone is "armed" while a card is selected: clicking it moves that card
 // here. This is the touch-friendly counterpart to dragging, and the only way
 // to play on a tablet, where HTML5 drag-and-drop does not fire at all.
-const armed = computed(() => !!ui.selected && !ui.attacker)
+const armed = computed(() => !!ui.selected && !ui.attacker && !ui.striker)
 
 function onDrop(e) {
   over.value = false

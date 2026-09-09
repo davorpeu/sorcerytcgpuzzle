@@ -105,6 +105,8 @@ export const ui = reactive({
   hoverCard: null, // card id currently under the mouse
   alt: false, // Alt key held -> show enlarged preview of hovered card
   attacker: null, // card id armed to attack; next click on a unit/site targets it
+  striker: null, // card id armed to strike; next click on a unit/site targets it
+  moving: null, // card id armed for formal Move action; next zone click moves & taps unit
   // Card whose actions are offered in the docked action bar. Selecting is
   // also how a card is picked up without dragging: click the card, then
   // click the zone it should go to.
@@ -135,11 +137,13 @@ export const state = reactive({
   puzzleName: '',
   puzzleDesc: '', // short brief: what kind of puzzle this is and what to achieve
   puzzleDate: '', // optional YYYY-MM-DD, used by the daily-puzzle picker
-  cards: {}, // id -> { id, name, img, imgId?, site?, aura?, enemy? }
+  cards: {}, // id -> { id, name, img, imgId?, site?, aura?, unit?, avatar?, enemy? }
   zones: emptyZones(), // zoneId -> [cardId, ...]
   initialZones: null, // snapshot taken when the solution recording starts
   stats: defaultStats(), // life, mana + elemental thresholds per player
   initialStats: null,
+  tapped: {}, // cardId -> true
+  initialTapped: null,
   // A puzzle can have several valid solutions; each line is a full move
   // sequence recorded from the same start position, and check() accepts an
   // attempt that matches any of them.
@@ -229,7 +233,56 @@ function routeZone(cardId, to) {
   return to
 }
 
-export function moveCard(cardId, from, to) {
+function areAdjacent(idxA, idxB) {
+  idxA = Number(idxA)
+  idxB = Number(idxB)
+  const rowA = Math.floor(idxA / GRID_COLS)
+  const colA = idxA % GRID_COLS
+  const rowB = Math.floor(idxB / GRID_COLS)
+  const colB = idxB % GRID_COLS
+  return Math.abs(rowA - rowB) + Math.abs(colA - colB) <= 1
+}
+
+function findSitePlayerUnit(side, siteZone) {
+  const isEnemySide = side === 'opponent'
+  const m = siteZone.match(/^site:(\d+)$/)
+  const targetIdx = m ? Number(m[1]) : -1
+
+  const candidateUnits = []
+  for (let i = 0; i < GRID_SIZE; i++) {
+    for (const slot of [`cell:${i}:top`, `cell:${i}:bot`]) {
+      for (const id of state.zones[slot] || []) {
+        const c = state.cards[id]
+        if (c && isUnit(c) && (isEnemySide ? c.enemy : !c.enemy)) {
+          candidateUnits.push({ id, card: c, cellIdx: i })
+        }
+      }
+    }
+  }
+
+  if (!candidateUnits.length) return null
+
+  // 1. Prefer Avatars
+  const avatars = candidateUnits.filter((u) => isAvatar(u.card))
+  if (avatars.length) {
+    if (targetIdx !== -1) {
+      const adjacentAvatar = avatars.find((u) => areAdjacent(u.cellIdx, targetIdx))
+      if (adjacentAvatar) return adjacentAvatar.id
+    }
+    return avatars[0].id
+  }
+
+  // 2. Units on/adjacent to site square
+  if (targetIdx !== -1) {
+    const adjacentUnit = candidateUnits.find((u) => areAdjacent(u.cellIdx, targetIdx))
+    if (adjacentUnit) return adjacentUnit.id
+  }
+
+  // 3. Any friendly unit on board
+  return candidateUnits[0].id
+}
+
+export function moveCard(cardId, from, to, { tapOnMove } = {}) {
   to = routeZone(cardId, to)
   if (from === to || !state.zones[to]) return
   if (state.mode === 'play' && to === 'pool') return
@@ -254,9 +307,31 @@ export function moveCard(cardId, from, to) {
   const src = state.zones[from]
   const i = src ? src.indexOf(cardId) : -1
   if (i === -1) return
+  const prevTapped = clone(state.tapped)
   src.splice(i, 1)
   state.zones[to].push(cardId)
-  const move = { cardId, from, to }
+
+  const card = state.cards[cardId]
+  const shouldTap = tapOnMove || ui.moving === cardId
+  ui.moving = null
+
+  // When a unit moves via the dedicated "Move" action, it taps.
+  // Standard moves (spells, abilities, placement) do not tap automatically.
+  if (card && isUnit(card) && shouldTap) {
+    if (from.startsWith('cell:') && to.startsWith('cell:')) {
+      state.tapped[cardId] = true
+    }
+  }
+  // When playing a site from off-board, the controlling unit / avatar on the board taps
+  if (card && card.site && !from.startsWith('site:') && to.startsWith('site:')) {
+    const side = from.includes('opponent') || card.enemy ? 'opponent' : 'player'
+    const unitId = findSitePlayerUnit(side, to)
+    if (unitId) {
+      state.tapped[unitId] = true
+    }
+  }
+
+  const move = { cardId, from, to, prevTapped }
   if (state.recording) {
     state.draft.push(move)
   } else if (state.mode === 'play') {
@@ -272,17 +347,36 @@ export function toggleUnderOver(cardId, from) {
   moveCard(cardId, from, `cell:${m[1]}:${m[2] === 'top' ? 'bot' : 'top'}`)
 }
 
-// ---------- attacks ----------
+// ---------- moves, attacks & strikes ----------
 
-// Attacks don't change the board; they are logged as their own entry type
+export function beginMove(cardId) {
+  ui.moving = ui.moving === cardId ? null : cardId
+  ui.attacker = null
+  ui.striker = null
+}
+
+// Attacks and strikes don't change the board; they are logged as their own entry types
 // so a solution can require them in sequence with moves.
 export function beginAttack(cardId) {
   ui.attacker = ui.attacker === cardId ? null : cardId
+  ui.striker = null
+  ui.moving = null
+}
+
+export function beginStrike(cardId) {
+  ui.striker = ui.striker === cardId ? null : cardId
+  ui.attacker = null
+  ui.moving = null
 }
 
 export function targetAttack(targetId) {
   if (!ui.attacker || ui.attacker === targetId) return
-  const entry = { type: 'attack', cardId: ui.attacker, targetId }
+  const attackerId = ui.attacker
+  const prevTapped = clone(state.tapped)
+  if (isUnit(attackerId)) {
+    state.tapped[attackerId] = true
+  }
+  const entry = { type: 'attack', cardId: attackerId, targetId, prevTapped }
   if (state.recording) {
     state.draft.push(entry)
   } else if (state.mode === 'play') {
@@ -290,6 +384,21 @@ export function targetAttack(targetId) {
     state.checked = false
   }
   ui.attacker = null
+}
+
+export function targetStrike(targetId) {
+  if (!ui.striker || ui.striker === targetId) return
+  const strikerId = ui.striker
+  const prevTapped = clone(state.tapped)
+  // Strike deals strike damage / ability without automatically tapping the card
+  const entry = { type: 'strike', cardId: strikerId, targetId, prevTapped }
+  if (state.recording) {
+    state.draft.push(entry)
+  } else if (state.mode === 'play') {
+    state.moves.push(entry)
+    state.checked = false
+  }
+  ui.striker = null
 }
 
 export function undo() {
@@ -300,7 +409,10 @@ export function undo() {
       : null
   if (!list || !list.length) return
   const m = list.pop()
-  if (m.type === 'attack') {
+  if (m.prevTapped) {
+    state.tapped = clone(m.prevTapped)
+  }
+  if (m.type === 'attack' || m.type === 'strike') {
     state.checked = false
     return
   }
@@ -335,6 +447,7 @@ export function startRecording() {
     // First line: the board as it stands becomes the start position.
     state.initialZones = clone(state.zones)
     state.initialStats = clone(state.stats)
+    state.initialTapped = clone(state.tapped)
     state.solutions = []
   }
   state.draft = []
@@ -344,16 +457,20 @@ export function startRecording() {
 function restoreInitial() {
   if (state.initialZones) state.zones = restoreZones(state.initialZones)
   if (state.initialStats) state.stats = clone(state.initialStats)
+  state.tapped = clone(state.initialTapped || {})
 }
 
-const sameEntry = (a, b) =>
-  a &&
-  b &&
-  (a.type || 'move') === (b.type || 'move') &&
-  a.cardId === b.cardId &&
-  (a.type === 'attack'
-    ? a.targetId === b.targetId
-    : a.from === b.from && a.to === b.to)
+const sameEntry = (a, b) => {
+  if (!a || !b) return false
+  const typeA = a.type || 'move'
+  const typeB = b.type || 'move'
+  if (typeA !== typeB) return false
+  if (a.cardId !== b.cardId) return false
+  if (typeA === 'attack' || typeA === 'strike') {
+    return a.targetId === b.targetId
+  }
+  return a.from === b.from && a.to === b.to
+}
 
 const sameLine = (a, b) =>
   a.length === b.length && a.every((m, i) => sameEntry(m, b[i]))
@@ -379,6 +496,7 @@ export function enterPlay() {
   if (!state.initialZones) {
     state.initialZones = clone(state.zones)
     state.initialStats = clone(state.stats)
+    state.initialTapped = clone(state.tapped)
   }
   restoreInitial()
   state.moves = []
@@ -386,6 +504,8 @@ export function enterPlay() {
   state.firstWrong = -1
   state.mode = 'play'
   ui.attacker = null
+  ui.striker = null
+  ui.moving = null
   ui.selected = null
 }
 
@@ -397,6 +517,8 @@ export function enterEditor() {
   state.checked = false
   restoreInitial()
   ui.attacker = null
+  ui.striker = null
+  ui.moving = null
   ui.selected = null
 }
 
@@ -406,6 +528,8 @@ export function resetPlay() {
   state.checked = false
   state.firstWrong = -1
   ui.attacker = null
+  ui.striker = null
+  ui.moving = null
   ui.selected = null
 }
 
@@ -414,12 +538,73 @@ export function adjustStat(side, key, delta) {
   s[key] = Math.max(0, (s[key] || 0) + delta)
 }
 
-// Site and aura are mutually exclusive designations.
+export function isUnit(cardOrId) {
+  const card = typeof cardOrId === 'string' ? state.cards[cardOrId] : cardOrId
+  return !!(card && (card.unit || card.avatar))
+}
+
+export function isAvatar(cardOrId) {
+  const card = typeof cardOrId === 'string' ? state.cards[cardOrId] : cardOrId
+  return !!(card && card.avatar)
+}
+
+export function isTapped(cardId) {
+  return !!(state.tapped && state.tapped[cardId])
+}
+
+export function tapCard(cardId) {
+  state.tapped[cardId] = true
+}
+
+export function untapCard(cardId) {
+  delete state.tapped[cardId]
+}
+
+export function toggleTap(cardId) {
+  if (state.tapped[cardId]) {
+    delete state.tapped[cardId]
+  } else {
+    state.tapped[cardId] = true
+  }
+}
+
+// Site, aura, and unit/avatar designations.
 export function toggleSite(cardId) {
   const card = state.cards[cardId]
   if (!card) return
   card.site = !card.site
-  if (card.site) card.aura = false
+  if (card.site) {
+    card.aura = false
+    card.unit = false
+    card.avatar = false
+  }
+}
+
+export function toggleUnit(cardId) {
+  const card = state.cards[cardId]
+  if (!card) return
+  if (card.unit && !card.avatar) {
+    card.unit = false
+  } else {
+    card.unit = true
+    card.avatar = false
+    card.site = false
+    card.aura = false
+  }
+}
+
+export function toggleAvatar(cardId) {
+  const card = state.cards[cardId]
+  if (!card) return
+  if (card.avatar) {
+    card.avatar = false
+    card.unit = false
+  } else {
+    card.avatar = true
+    card.unit = true
+    card.site = false
+    card.aura = false
+  }
 }
 
 // Cards controlled by the opponent render upside down, like on the mat.
@@ -433,7 +618,11 @@ export function toggleAura(cardId) {
   const card = state.cards[cardId]
   if (!card) return
   card.aura = !card.aura
-  if (card.aura) card.site = false
+  if (card.aura) {
+    card.site = false
+    card.unit = false
+    card.avatar = false
+  }
 }
 
 // First index where the attempt diverges from a solution line; -1 = full
@@ -592,6 +781,8 @@ export function addCardFromMedia(item) {
 
 export function removeCard(cardId) {
   delete state.cards[cardId]
+  delete state.tapped[cardId]
+  if (state.initialTapped) delete state.initialTapped[cardId]
   for (const zone of Object.values(state.zones)) {
     const i = zone.indexOf(cardId)
     if (i !== -1) zone.splice(i, 1)
@@ -603,6 +794,8 @@ export function removeCard(cardId) {
   state.draft = state.draft.filter((m) => !involves(m))
   state.moves = state.moves.filter((m) => !involves(m))
   if (ui.attacker === cardId) ui.attacker = null
+  if (ui.striker === cardId) ui.striker = null
+  if (ui.moving === cardId) ui.moving = null
   if (ui.selected === cardId) ui.selected = null
   if (state.initialZones) {
     for (const zone of Object.values(state.initialZones)) {
@@ -623,6 +816,7 @@ export function serialize() {
     date: state.puzzleDate || null,
     cards: clone(state.cards),
     initial: clone(state.initialZones || state.zones),
+    initialTapped: clone(state.initialTapped || state.tapped || {}),
     stats: clone(state.initialStats || state.stats),
     solutions: clone(state.solutions),
     savedAt: new Date().toISOString(),
@@ -657,10 +851,18 @@ export function loadPuzzle(data, { play = true } = {}) {
   state.puzzleDesc = data.desc || ''
   state.puzzleDate = data.date || ''
   state.cards = clone(data.cards || {})
+  for (const c of Object.values(state.cards)) {
+    c.unit = !!(c.unit || c.avatar)
+    c.avatar = !!c.avatar
+    c.site = !!c.site
+    c.aura = !!c.aura
+  }
   state.initialZones = normalizeZones(data.initial)
   state.zones = restoreZones(state.initialZones)
   state.initialStats = normalizeStats(data.stats)
   state.stats = clone(state.initialStats)
+  state.initialTapped = clone(data.initialTapped || {})
+  state.tapped = clone(state.initialTapped)
   state.solutions = clone(data.solutions || [])
   state.draft = []
   state.moves = []
@@ -669,6 +871,8 @@ export function loadPuzzle(data, { play = true } = {}) {
   state.firstWrong = -1
   state.mode = play || !config.canEdit ? 'play' : 'editor'
   ui.attacker = null
+  ui.striker = null
+  ui.moving = null
   ui.selected = null
   restoreAttempt()
 }
@@ -683,6 +887,8 @@ export function newPuzzle() {
   state.initialZones = null
   state.stats = defaultStats()
   state.initialStats = null
+  state.tapped = {}
+  state.initialTapped = null
   state.solutions = []
   state.draft = []
   state.moves = []
@@ -693,6 +899,8 @@ export function newPuzzle() {
   state.solved = false
   state.mode = config.canEdit ? 'editor' : 'play'
   ui.attacker = null
+  ui.striker = null
+  ui.moving = null
   ui.selected = null
 }
 
@@ -872,11 +1080,12 @@ function svgCard(name, color) {
 export function loadDemo() {
   newPuzzle()
   const defs = [
-    ['Squire', '#2563eb', 'hand:player', ''],
+    ['Avatar of Fire', '#f59e0b', 'cell:8:top', 'avatar'],
+    ['Squire', '#2563eb', 'hand:player', 'unit'],
     ['Fire Bolt', '#dc2626', 'hand:player', ''],
-    ['Wolf Pack', '#57534e', 'cell:7:top', ''],
-    ['River Sprite', '#0891b2', 'cell:12:bot', ''],
-    ['Ogre', '#65a30d', 'hand:opponent', ''],
+    ['Wolf Pack', '#57534e', 'cell:7:top', 'unit'],
+    ['River Sprite', '#0891b2', 'cell:12:bot', 'unit'],
+    ['Ogre', '#65a30d', 'hand:opponent', 'unit'],
     ['Dark Tower', '#7c3aed', 'site:2', 'site'],
     ['Steppe', '#a16207', 'site:7', 'site'],
     ['Lake', '#0e7490', 'site:12', 'site'],
@@ -890,6 +1099,8 @@ export function loadDemo() {
       img: svgCard(name, color),
       site: kind === 'site',
       aura: kind === 'aura',
+      unit: kind === 'unit' || kind === 'avatar',
+      avatar: kind === 'avatar',
     }
     state.zones[zone].push(id)
   }
