@@ -24,7 +24,6 @@ import {
   loadPuzzle,
   serialize,
   shareLink,
-  loadDemo,
   loadDaily,
   localToday,
   endDrag,
@@ -102,16 +101,6 @@ function onNew() {
     return
   newPuzzle()
   flash('New blank puzzle.')
-}
-
-function onLoadDemo() {
-  if (
-    hasUnsavedWork() &&
-    !confirm('Load the demo puzzle? The unsaved work here will be replaced.')
-  )
-    return
-  loadDemo()
-  flash('Demo puzzle loaded.')
 }
 
 function onRemoveSolution(i) {
@@ -359,7 +348,7 @@ const result = computed(() => {
            be announced rather than merely drawn. The wrappers stay in the DOM
            when empty: a live region inserted at the same moment as its text is
            not reliably read. -->
-      <span class="notice" role="status" aria-live="polite">{{ notice }}</span>
+      <output class="notice" aria-live="polite">{{ notice }}</output>
     </header>
 
     <div aria-live="polite">
@@ -454,9 +443,10 @@ const result = computed(() => {
               <button class="btn" @click="importInput.click()">Import</button>
               <button class="btn" @click="onCopyLink">Copy link</button>
               <button class="btn" @click="onNew">New</button>
-              <button class="btn" @click="onLoadDemo">Demo</button>
             </div>
+            <label class="sr-only" for="import-file">Import a puzzle JSON file</label>
             <input
+              id="import-file"
               ref="importInput"
               type="file"
               accept="application/json"
@@ -570,7 +560,7 @@ const result = computed(() => {
           <summary class="panel-summary">Legend</summary>
           <ul class="legend-list">
             <li><kbd class="legend-kbd">Alt</kbd> hover a card to enlarge it</li>
-            <li>
+            <li class="legend-keys">
               <kbd class="legend-kbd">Tab</kbd> to a card and
               <kbd class="legend-kbd">Enter</kbd> to select it, then
               <kbd class="legend-kbd">Tab</kbd> to a zone and

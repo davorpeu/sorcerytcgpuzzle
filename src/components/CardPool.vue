@@ -84,7 +84,9 @@ async function run(term) {
     <div class="pool-header">
       <span class="zone-title">Card pool</span>
       <button class="btn small" @click="fileInput.click()">Upload cards</button>
+      <label class="sr-only" for="pool-upload">Upload card images from disk</label>
       <input
+        id="pool-upload"
         ref="fileInput"
         type="file"
         accept="image/*"
@@ -95,7 +97,9 @@ async function run(term) {
     </div>
 
     <div v-if="searchable" class="pool-search">
+      <label class="sr-only" for="pool-search">Search uploaded card images</label>
       <input
+        id="pool-search"
         v-model="query"
         class="text-input"
         type="search"
