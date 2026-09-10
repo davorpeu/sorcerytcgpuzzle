@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Sorcery Puzzle
  * Description: Embeds the Sorcery TCG puzzle app via the [sorcery_puzzle] shortcode and stores puzzles site-wide through a REST API. Shortcode attributes: src (URL to a puzzle JSON), puzzle (stored puzzle id), daily="1", fullwidth="0".
- * Version: 1.3.0
+ * Version: 1.6.0
  * Author: davorpeu
  */
 
