@@ -93,8 +93,8 @@ function sorcery_puzzle_summary($post)
  * Card images are stored once in the Media Library and referenced by
  * attachment id, rather than inlined as base64 in every puzzle. This keeps
  * the database small, lets the browser cache each image across puzzles, and
- * deduplicates identical art. Raster types only; SVG (demo cards) stays
- * inline, which is harmless.
+ * deduplicates identical art. Raster types only; any SVG art stays inline,
+ * which is harmless.
  */
 function sorcery_puzzle_image_exts()
 {

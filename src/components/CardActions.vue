@@ -34,7 +34,11 @@ const onBoard = computed(() => /^cell:\d+:(top|bot)$/.test(zone.value || ''))
 const isUnder = computed(() => (zone.value || '').endsWith(':bot'))
 const editing = computed(() => state.mode === 'editor' && !state.recording)
 const inPool = computed(() => zone.value === 'pool')
-const canAct = computed(() => !!card.value && !inPool.value)
+// Attacking and striking are realm actions: only a unit in play fights, and it
+// can only hit something at its own location. A card sitting in a hand,
+// cemetery or the storyline has nothing to attack, so the buttons stay hidden
+// until it is a unit on the board.
+const canFight = computed(() => onBoard.value && isUnit(ui.selected))
 const moving = computed(() => ui.moving && ui.moving === ui.selected)
 const attacking = computed(() => ui.attacker && ui.attacker === ui.selected)
 const striking = computed(() => ui.striker && ui.striker === ui.selected)
@@ -42,6 +46,13 @@ const carrying = computed(() => ui.carrier && ui.carrier === ui.selected)
 // Pick up and put down are logged moves, so they belong wherever moves are
 // being written down: while recording a solution, and while playing one.
 const logging = computed(() => state.recording || state.mode === 'play')
+// Picking something up is a unit's realm basic ability, like move and attack:
+// only a unit already on the board reaches for an artifact at its location.
+// A card in a hand or cemetery is not in play, and a site or aura is not a
+// unit, so none of them offer Pick up.
+const canPickUp = computed(
+  () => (logging.value || editing.value) && onBoard.value && isUnit(ui.selected)
+)
 // What this card holds, and who holds it -- the two sides of the same relation
 // and the two buttons the bar has to offer.
 const holding = computed(() => (ui.selected ? carriedBy(ui.selected) : []))
@@ -62,7 +73,7 @@ function onRemove() {
   <div
     v-if="card"
     class="card-actions"
-    role="group"
+    role="toolbar"
     :aria-label="`Actions for ${card.name}`"
   >
     <!-- No card art here on purpose: this bar was the app's only image sized
@@ -96,7 +107,7 @@ function onRemove() {
         {{ moving ? '🏃 Cancel move' : '🏃 Move' }}
       </button>
       <button
-        v-if="canAct"
+        v-if="canFight"
         class="btn"
         :class="{ danger: attacking }"
         @click="beginAttack(ui.selected)"
@@ -104,7 +115,7 @@ function onRemove() {
         {{ attacking ? '⚔ Cancel attack' : '⚔ Attack' }}
       </button>
       <button
-        v-if="canAct"
+        v-if="canFight"
         class="btn"
         :class="{ danger: striking }"
         @click="beginStrike(ui.selected)"
@@ -120,7 +131,7 @@ function onRemove() {
         {{ isTapped(ui.selected) ? '⟳ Untap' : '↷ Tap' }}
       </button>
       <button
-        v-if="logging || editing"
+        v-if="canPickUp"
         class="btn"
         :class="{ danger: carrying }"
         @click="beginPickup(ui.selected)"

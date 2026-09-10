@@ -1606,8 +1606,22 @@ details[open] > .panel-summary {
 
 .legend-list li {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 7px;
+}
+
+/* The keyboard walkthrough is a sentence with <kbd> chips in it, not a
+   badge + label row. As a flex line every bare text run ("to a card and",
+   "to select it, then") became its own non-wrapping flex item and collapsed
+   into a narrow stack of columns. Let it flow as ordinary wrapping text with
+   the chips sitting inline. */
+.legend-list .legend-keys {
+  display: block;
+  line-height: 1.7;
+}
+
+.legend-keys .legend-kbd {
+  margin: 0 1px;
 }
 
 .legend-badge {
@@ -1652,6 +1666,9 @@ details[open] > .panel-summary {
 }
 
 .legend-kbd {
+  display: inline-block;
+  vertical-align: baseline;
+  white-space: nowrap;
   border: 1px solid var(--border);
   background: var(--panel-2);
   border-radius: 4px;
@@ -1904,6 +1921,18 @@ details[open] > .panel-summary {
 
   .stat-rail {
     order: 4;
+  }
+
+  /* Reference panels, not the board: the move log and the legend default to
+     order 0 and so landed above the mat, the very thing this block reorders
+     away. Send them below your own side so the brief -> board -> hand run is
+     unbroken and the reference material trails it. */
+  .move-log {
+    order: 5;
+  }
+
+  .panel.legend {
+    order: 6;
   }
 
   /* Squares are ~68px wide at this size, so the 3px inset and 4px gutter are
