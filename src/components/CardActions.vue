@@ -104,7 +104,7 @@ function onRemove() {
         :class="{ active: moving }"
         @click="beginMove(ui.selected)"
       >
-        {{ moving ? '🏃 Cancel move' : '🏃 Move' }}
+        {{ moving ? ' Cancel move' : ' Move' }}
       </button>
       <button
         v-if="canFight"
@@ -112,7 +112,7 @@ function onRemove() {
         :class="{ danger: attacking }"
         @click="beginAttack(ui.selected)"
       >
-        {{ attacking ? '⚔ Cancel attack' : '⚔ Attack' }}
+        {{ attacking ? ' Cancel attack' : ' Attack' }}
       </button>
       <button
         v-if="canFight"
@@ -120,7 +120,7 @@ function onRemove() {
         :class="{ danger: striking }"
         @click="beginStrike(ui.selected)"
       >
-        {{ striking ? '💥 Cancel strike' : '💥 Strike' }}
+        {{ striking ? ' Cancel strike' : ' Strike' }}
       </button>
       <button
         v-if="onBoard"
@@ -171,7 +171,7 @@ function onRemove() {
         :class="{ active: card.avatar }"
         @click="toggleAvatar(ui.selected)"
       >
-        👑 {{ card.avatar ? 'Not an avatar' : 'Mark as avatar' }}
+       {{ card.avatar ? 'Not an avatar' : 'Mark as avatar' }}
       </button>
       <button
         v-if="editing && inPool"
