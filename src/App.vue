@@ -195,12 +195,6 @@ const targetMoves = computed(() =>
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
 
-// The selected card also shows in the middle of the stats rail, so you can
-// read what you are holding without hunting for it on the mat.
-const selectedCard = computed(() =>
-  ui.selected ? state.cards[ui.selected] : null
-)
-
 // Hold Alt while hovering a card to see it enlarged.
 const previewCard = computed(() =>
   ui.alt && ui.hoverCard ? state.cards[ui.hoverCard] : null
@@ -568,24 +562,20 @@ const result = computed(() => {
               <kbd class="legend-kbd">Esc</kbd> deselects
             </li>
             <li>
-              <span class="legend-badge unit">UNIT</span>
-              Unit — can move (taps), strike, attack (taps), or tap
+              <span class="legend-swatch unit"></span>
+              Minion (blue border) — can move (taps), strike, attack (taps), or tap
             </li>
             <li>
-              <span class="legend-badge avatar">AVATAR</span>
-              Avatar — special unit representing the player
+              <span class="legend-swatch avatar"></span>
+              Avatar (orange border) — special minion representing the player
             </li>
             <li>
-              <span class="legend-badge">SITE</span>
-              Site — occupies a square of the grid
+              <span class="legend-swatch"></span>
+              Site (violet border) — occupies a square of the grid
             </li>
             <li>
-              <span class="legend-badge aura">AURA</span>
-              Aura — sits on an intersection, always drawn on top
-            </li>
-            <li>
-              <span class="legend-badge tap">TAP</span>
-              Tapped card — turned 90° after moving, attacking, or playing a site
+              <span class="legend-swatch aura"></span>
+              Aura (teal border) — sits on an intersection, always drawn on top
             </li>
             <li>
               <span class="legend-icon">🂠</span>
@@ -675,24 +665,6 @@ const result = computed(() => {
              that side's edge of the table. -->
         <div class="stat-rail">
           <StatsBar side="opponent" />
-
-          <!-- The gap between the two sides is the one piece of rail nothing
-               else wants, so the selected card sits there. -->
-          <div v-if="selectedCard" class="rail-preview">
-            <div class="zone-title">Selected</div>
-            <div class="rail-preview-frame">
-              <img
-                v-if="selectedCard.img"
-                :src="selectedCard.img"
-                :alt="selectedCard.name"
-                draggable="false"
-              />
-              <span v-else class="rail-preview-fallback">
-                {{ selectedCard.name }}
-              </span>
-            </div>
-            <div class="rail-preview-name">{{ selectedCard.name }}</div>
-          </div>
 
           <StatsBar side="player" />
         </div>

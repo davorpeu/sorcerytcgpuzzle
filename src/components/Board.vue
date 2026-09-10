@@ -70,17 +70,20 @@ function dragAura(e, idx) {
 // the stylesheet rather than restating it here.
 function clickSite(idx, e) {
   const card = siteCard(idx)
-  const armedMove =
-    ui.selected && !ui.attacker && !ui.striker && !ui.carrier && !ui.moving
-  if (armedMove && (!card || ui.selected !== card.id)) {
+  // Only the formal Move action turns a click anywhere on the square -- bare
+  // felt, the site art, or a unit standing here -- into a move; moveCard taps
+  // the moving unit because ui.moving is set. A plain selection leaves the
+  // site clickable to select (the else branch) so you can switch between
+  // pieces without moving. The band under the pointer picks surface vs below.
+  if (ui.moving && (!card || ui.moving !== card.id)) {
     const band = document
       .elementsFromPoint(e.clientX, e.clientY)
       .find((el) => el.classList && el.classList.contains('cell-half'))
     const to = band && band.classList.contains('bot')
       ? `cell:${idx}:bot`
       : `cell:${idx}:top`
-    const from = zoneOf(ui.selected)
-    if (from) moveCard(ui.selected, from, to)
+    const from = zoneOf(ui.moving)
+    if (from) moveCard(ui.moving, from, to)
     return
   }
   if (!card) return

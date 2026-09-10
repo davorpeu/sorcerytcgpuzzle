@@ -163,7 +163,7 @@ function onRemove() {
         :class="{ active: card.unit && !card.avatar }"
         @click="toggleUnit(ui.selected)"
       >
-        ♟ {{ (card.unit && !card.avatar) ? 'Not a unit' : 'Mark as unit' }}
+        ♟ {{ (card.unit && !card.avatar) ? 'Not a minion' : 'Mark as minion' }}
       </button>
       <button
         v-if="editing && inPool"
@@ -194,9 +194,9 @@ function onRemove() {
       </button>
     </div>
 
-    <p v-if="moving" class="ca-hint">Now click a destination square to move and tap this unit.</p>
-    <p v-else-if="attacking" class="ca-hint">Now click the unit or site to attack (will tap).</p>
-    <p v-else-if="striking" class="ca-hint">Now click the unit or site to strike (does not tap).</p>
+    <p v-if="moving" class="ca-hint">Now click a destination square to move and tap this minion.</p>
+    <p v-else-if="attacking" class="ca-hint">Now click the minion or site to attack (will tap).</p>
+    <p v-else-if="striking" class="ca-hint">Now click the minion or site to strike (does not tap).</p>
     <p v-else-if="carrying" class="ca-hint">
       Now click the card to pick up — it travels with this one until dropped.
     </p>
