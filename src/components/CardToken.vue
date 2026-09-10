@@ -10,6 +10,8 @@ import {
   targetPickup,
   carriedBy,
   beginDrag,
+  moveCard,
+  zoneOf,
 } from '../store.js'
 
 const props = defineProps({
@@ -31,6 +33,17 @@ const targetable = computed(
 // a card in hand is as liftable as one on the board.
 const liftable = computed(() => ui.carrier && ui.carrier !== props.cardId)
 const carried = computed(() => carriedBy(props.cardId))
+// Only the formal Move action makes a click on a unit mean "move here". A
+// plain selection leaves other units clickable to select instead, so you can
+// switch between cards without moving. So clicking a unit standing in a square
+// sends the moving card onto that square -- the same as clicking the bare felt
+// or the site there -- rather than reselecting the card under the pointer.
+// Only board squares are destinations; tokens in a hand or cemetery still
+// select. Tokens live in the surface band, so that is where the move lands;
+// the below band is a separate strip of its own that catches its own clicks.
+const moveArmed = computed(
+  () => ui.moving && ui.moving !== props.cardId && onBoard.value
+)
 
 // What a screen reader hears. The badges printed on the face -- unit, site,
 // tapped, below, whose card it is -- are all colour and glyph, so they have
@@ -41,7 +54,7 @@ const label = computed(() => {
   if (!c) return ''
   const bits = [c.name]
   if (c.avatar) bits.push('avatar')
-  else if (c.unit) bits.push('unit')
+  else if (c.unit) bits.push('minion')
   if (c.site) bits.push('site')
   if (c.aura) bits.push('aura')
   bits.push(c.enemy ? "opponent's" : 'yours')
@@ -79,6 +92,16 @@ function onClick() {
   if (liftable.value) {
     targetPickup(props.cardId)
     return
+  }
+  // A click on a unit while the Move action is armed drops the moving card
+  // onto this unit's square (surface band) instead of reselecting.
+  if (moveArmed.value) {
+    const m = props.from.match(/^cell:(\d+):(top|bot)$/)
+    const from = zoneOf(ui.moving)
+    if (m && from) {
+      moveCard(ui.moving, from, `cell:${m[1]}:top`)
+      return
+    }
   }
   selectCard(props.cardId)
 }
@@ -131,10 +154,8 @@ function onClick() {
     <span v-else class="card-name" :class="{ flipped: card.enemy }">
       {{ card.name }}
     </span>
-    <span v-if="card.avatar" class="site-badge avatar-badge">AVATAR</span>
-    <span v-else-if="card.unit" class="site-badge unit-badge">UNIT</span>
-    <span v-if="card.site" class="site-badge">SITE</span>
-    <span v-if="card.aura" class="site-badge aura-badge">AURA</span>
+    <!-- Card type reads from the coloured ring around the art (see the type
+         border rules in the stylesheet), not a text badge. -->
     <span v-if="isUnder" class="site-badge under-badge">BELOW</span>
 
     <!-- What this card is holding. A carried card is in no zone, so this is the
@@ -166,6 +187,5 @@ function onClick() {
         <span v-else class="carry-chip-name">{{ state.cards[id]?.name }}</span>
       </button>
     </div>
-    <span v-if="tapped" class="site-badge tap-badge">TAP</span>
   </div>
 </template>
