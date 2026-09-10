@@ -17,8 +17,14 @@ const FORMAT_VERSION = 1
 // tracked in the browser's localStorage.
 export const MAX_TRIES = 3
 
-const clone = (o) => JSON.parse(JSON.stringify(o))
-const uid = () => Math.random().toString(36).slice(2, 10)
+const clone = (o) => structuredClone(o)
+// Short opaque ids for cards and puzzles. Sourced from the platform CSPRNG
+// rather than Math.random -- not for secrecy, but so ids stay well-distributed
+// and a static analyzer doesn't flag a weak generator. 8 base36 chars.
+const uid = () =>
+  Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) =>
+    (b % 36).toString(36)
+  ).join('')
 
 export function emptyZones() {
   const z = {
@@ -76,11 +82,19 @@ export const config = reactive({
 
 const remote = () => !!config.apiUrl
 
+// Strip any trailing slashes from the REST base without a backtracking regex,
+// so `${base}${path}` never doubles the separator.
+function trimTrailingSlashes(url) {
+  let end = url.length
+  while (end > 0 && url[end - 1] === '/') end--
+  return url.slice(0, end)
+}
+
 async function api(path, options = {}) {
   const headers = {}
   if (options.body) headers['Content-Type'] = 'application/json'
   if (config.nonce) headers['X-WP-Nonce'] = config.nonce
-  const res = await fetch(config.apiUrl.replace(/\/+$/, '') + path, {
+  const res = await fetch(trimTrailingSlashes(config.apiUrl) + path, {
     credentials: 'same-origin',
     ...options,
     headers: { ...headers, ...options.headers },
@@ -176,22 +190,29 @@ export const state = reactive({
   solved: false, // this puzzle was solved today (non-editors only)
 })
 
+const FIXED_ZONE_LABELS = {
+  'hand:player': 'Player hand',
+  'hand:opponent': 'Opponent hand',
+  'grave:player': 'Player cemetery',
+  'grave:opponent': 'Opponent cemetery',
+  'collection:player': 'Player collection',
+  'collection:opponent': 'Opponent collection',
+  storyline: 'Storyline',
+  pool: 'Card pool',
+}
+
 export function zoneLabel(zone) {
-  if (zone === 'hand:player') return 'Player hand'
-  if (zone === 'hand:opponent') return 'Opponent hand'
-  if (zone === 'grave:player') return 'Player cemetery'
-  if (zone === 'grave:opponent') return 'Opponent cemetery'
-  if (zone === 'collection:player') return 'Player collection'
-  if (zone === 'collection:opponent') return 'Opponent collection'
-  if (zone === 'storyline') return 'Storyline'
-  if (zone === 'pool') return 'Card pool'
-  let m
-  if ((m = zone.match(/^site:(\d+)$/))) return `${squareLabel(m[1])} (site)`
-  if ((m = zone.match(/^cell:(\d+):top$/)))
-    return `${squareLabel(m[1])} (surface)`
-  if ((m = zone.match(/^cell:(\d+):bot$/))) return `${squareLabel(m[1])} (below)`
-  if ((m = zone.match(/^cell:(\d+)$/))) return squareLabel(m[1])
-  if ((m = zone.match(/^aura:(\d+)$/))) return intersectionLabel(m[1])
+  if (FIXED_ZONE_LABELS[zone]) return FIXED_ZONE_LABELS[zone]
+  let m = /^site:(\d+)$/.exec(zone)
+  if (m) return `${squareLabel(m[1])} (site)`
+  m = /^cell:(\d+):top$/.exec(zone)
+  if (m) return `${squareLabel(m[1])} (surface)`
+  m = /^cell:(\d+):bot$/.exec(zone)
+  if (m) return `${squareLabel(m[1])} (below)`
+  m = /^cell:(\d+)$/.exec(zone)
+  if (m) return squareLabel(m[1])
+  m = /^aura:(\d+)$/.exec(zone)
+  if (m) return intersectionLabel(m[1])
   return zone
 }
 
@@ -229,7 +250,7 @@ export function endDrag() {
 // already-rendered <img>, because a freshly created img may not be decoded at
 // dragstart and would fall back to its huge natural size.
 export function setDragGhost(e, imgEl, width = 90) {
-  if (!imgEl || !imgEl.naturalWidth) return
+  if (!imgEl?.naturalWidth) return
   const h = Math.round((width * imgEl.naturalHeight) / imgEl.naturalWidth)
   const c = document.createElement('canvas')
   c.width = width
@@ -253,12 +274,10 @@ export function setDragGhost(e, imgEl, width = 90) {
 // cards dropped on a site slot land on the surface instead.
 function routeZone(cardId, to) {
   const card = state.cards[cardId]
-  let m
-  if ((m = to.match(/^cell:(\d+):(top|bot)$/))) {
-    if (card && card.site) return `site:${m[1]}`
-  } else if ((m = to.match(/^site:(\d+)$/))) {
-    if (!card || !card.site) return `cell:${m[1]}:top`
-  }
+  const cellMatch = /^cell:(\d+):(top|bot)$/.exec(to)
+  if (cellMatch) return card?.site ? `site:${cellMatch[1]}` : to
+  const siteMatch = /^site:(\d+)$/.exec(to)
+  if (siteMatch) return card?.site ? to : `cell:${siteMatch[1]}:top`
   return to
 }
 
@@ -272,43 +291,79 @@ function areAdjacent(idxA, idxB) {
   return Math.abs(rowA - rowB) + Math.abs(colA - colB) <= 1
 }
 
-function findSitePlayerUnit(side, siteZone) {
-  const isEnemySide = side === 'opponent'
-  const m = siteZone.match(/^site:(\d+)$/)
-  const targetIdx = m ? Number(m[1]) : -1
-
-  const candidateUnits = []
+// All units of one side currently on the board, tagged with the square they
+// sit in, surface and below both.
+function unitsOnBoard(isEnemySide) {
+  const units = []
   for (let i = 0; i < GRID_SIZE; i++) {
     for (const slot of [`cell:${i}:top`, `cell:${i}:bot`]) {
       for (const id of state.zones[slot] || []) {
         const c = state.cards[id]
         if (c && isUnit(c) && (isEnemySide ? c.enemy : !c.enemy)) {
-          candidateUnits.push({ id, card: c, cellIdx: i })
+          units.push({ id, card: c, cellIdx: i })
         }
       }
     }
   }
+  return units
+}
 
-  if (!candidateUnits.length) return null
+function findSitePlayerUnit(side, siteZone) {
+  const candidates = unitsOnBoard(side === 'opponent')
+  if (!candidates.length) return null
+  const m = /^site:(\d+)$/.exec(siteZone)
+  const targetIdx = m ? Number(m[1]) : -1
+  const nearTarget = (u) => targetIdx !== -1 && areAdjacent(u.cellIdx, targetIdx)
 
-  // 1. Prefer Avatars
-  const avatars = candidateUnits.filter((u) => isAvatar(u.card))
-  if (avatars.length) {
-    if (targetIdx !== -1) {
-      const adjacentAvatar = avatars.find((u) => areAdjacent(u.cellIdx, targetIdx))
-      if (adjacentAvatar) return adjacentAvatar.id
-    }
-    return avatars[0].id
+  // 1. Prefer Avatars, closest to the site if we know where it is.
+  const avatars = candidates.filter((u) => isAvatar(u.card))
+  if (avatars.length) return (avatars.find(nearTarget) || avatars[0]).id
+  // 2. A unit on/adjacent to the site square, else 3. any friendly unit.
+  return (candidates.find(nearTarget) || candidates[0]).id
+}
+
+// Whether a card may land in `to` (already routed). Enforces the per-zone
+// limits: no dropping into the pool while playing, one site per square, and
+// only aura cards on an intersection, one per crossing.
+function canPlace(cardId, to) {
+  if (!state.zones[to]) return false
+  if (state.mode === 'play' && to === 'pool') return false
+  if (to.startsWith('site:') && state.zones[to].length) return false
+  if (to.startsWith('aura:')) {
+    const card = state.cards[cardId]
+    if (!card?.aura || state.zones[to].length) return false
   }
+  return true
+}
 
-  // 2. Units on/adjacent to site square
-  if (targetIdx !== -1) {
-    const adjacentUnit = candidateUnits.find((u) => areAdjacent(u.cellIdx, targetIdx))
-    if (adjacentUnit) return adjacentUnit.id
+// In the editor the pool is a palette: dragging a card out places a copy and
+// the original stays in the pool, so one upload can be used many times.
+function placePoolCopy(cardId, to) {
+  const card = state.cards[cardId]
+  if (!card) return
+  const copyId = uid()
+  state.cards[copyId] = { ...card, id: copyId }
+  state.zones[to].push(copyId)
+}
+
+// Tapping that a move can trigger. A unit moved cell-to-cell via the dedicated
+// "Move" action taps; ordinary moves (spells, abilities, placement) do not.
+// Playing a site from off-board taps the controlling unit / avatar instead.
+function applyMoveTaps(card, from, to, shouldTap) {
+  if (!card) return
+  if (
+    isUnit(card) &&
+    shouldTap &&
+    from.startsWith('cell:') &&
+    to.startsWith('cell:')
+  ) {
+    state.tapped[card.id] = true
   }
-
-  // 3. Any friendly unit on board
-  return candidateUnits[0].id
+  if (card.site && !from.startsWith('site:') && to.startsWith('site:')) {
+    const side = from.includes('opponent') || card.enemy ? 'opponent' : 'player'
+    const unitId = findSitePlayerUnit(side, to)
+    if (unitId) state.tapped[unitId] = true
+  }
 }
 
 export function moveCard(cardId, from, to, { tapOnMove } = {}) {
@@ -318,28 +373,13 @@ export function moveCard(cardId, from, to, { tapOnMove } = {}) {
   // answer a move request by placing a *copy* of it.
   if (state.carry[cardId]) return
   to = routeZone(cardId, to)
-  if (from === to || !state.zones[to]) return
-  if (state.mode === 'play' && to === 'pool') return
-  // Only one site per square.
-  if (to.startsWith('site:') && state.zones[to].length) return
-  // Intersections only hold aura cards, one per intersection.
-  if (to.startsWith('aura:')) {
-    const card = state.cards[cardId]
-    if (!card || !card.aura) return
-    if (state.zones[to].length) return
-  }
-  // In the editor the pool is a palette: dragging a card out places a copy
-  // and the original stays in the pool, so one upload can be used many times.
+  if (from === to || !canPlace(cardId, to)) return
   if (from === 'pool' && state.mode === 'editor' && !state.recording) {
-    const card = state.cards[cardId]
-    if (!card) return
-    const copyId = uid()
-    state.cards[copyId] = { ...card, id: copyId }
-    state.zones[to].push(copyId)
+    placePoolCopy(cardId, to)
     return
   }
   const src = state.zones[from]
-  const i = src ? src.indexOf(cardId) : -1
+  const i = src?.indexOf(cardId) ?? -1
   if (i === -1) return
   const prevTapped = clone(state.tapped)
   src.splice(i, 1)
@@ -348,37 +388,9 @@ export function moveCard(cardId, from, to, { tapOnMove } = {}) {
   const card = state.cards[cardId]
   const shouldTap = tapOnMove || ui.moving === cardId
   ui.moving = null
+  applyMoveTaps(card, from, to, shouldTap)
 
-  // When a unit moves via the dedicated "Move" action, it taps.
-  // Standard moves (spells, abilities, placement) do not tap automatically.
-  if (card && isUnit(card) && shouldTap) {
-    if (from.startsWith('cell:') && to.startsWith('cell:')) {
-      state.tapped[cardId] = true
-    }
-  }
-  // When playing a site from off-board, the controlling unit / avatar on the board taps
-  if (card && card.site && !from.startsWith('site:') && to.startsWith('site:')) {
-    const side = from.includes('opponent') || card.enemy ? 'opponent' : 'player'
-    const unitId = findSitePlayerUnit(side, to)
-    if (unitId) {
-      state.tapped[unitId] = true
-    }
-  }
-
-  const move = { cardId, from, to, prevTapped }
-  if (state.recording) {
-    state.draft.push(move)
-  } else if (state.mode === 'play') {
-    state.moves.push(move)
-    state.checked = false
-  }
-}
-
-// Flip a board card between the square's surface and underground slots.
-export function toggleUnderOver(cardId, from) {
-  const m = from.match(/^cell:(\d+):(top|bot)$/)
-  if (!m) return
-  moveCard(cardId, from, `cell:${m[1]}:${m[2] === 'top' ? 'bot' : 'top'}`)
+  logEntry({ cardId, from, to, prevTapped })
 }
 
 // ---------- moves, attacks & strikes ----------
@@ -449,17 +461,18 @@ function wouldCycle(carrierId, targetId) {
 // aura goes to the square up and left of the crossing.
 function dropTarget(itemId, zone) {
   const card = state.cards[itemId]
-  let m
-  if ((m = zone.match(/^aura:(\d+)$/))) {
-    if (card && card.aura && !state.zones[zone].length) return zone
-    const i = Number(m[1])
+  const auraMatch = /^aura:(\d+)$/.exec(zone)
+  if (auraMatch) {
+    if (card?.aura && !state.zones[zone].length) return zone
+    const i = Number(auraMatch[1])
     const r = Math.floor(i / INTERSECTION_COLS)
     const c = i % INTERSECTION_COLS
     return `cell:${r * GRID_COLS + c}:top`
   }
   const routed = routeZone(itemId, zone)
-  if ((m = routed.match(/^site:(\d+)$/)) && state.zones[routed].length) {
-    return `cell:${m[1]}:top`
+  const siteMatch = /^site:(\d+)$/.exec(routed)
+  if (siteMatch && state.zones[routed].length) {
+    return `cell:${siteMatch[1]}:top`
   }
   return routed
 }
@@ -503,7 +516,7 @@ export function targetPickup(targetId) {
     if (held === carrier) return
   } else {
     const src = state.zones[from]
-    const i = src ? src.indexOf(targetId) : -1
+    const i = src?.indexOf(targetId) ?? -1
     if (i === -1) return
     src.splice(i, 1)
   }
@@ -541,44 +554,51 @@ export function targetStrike(targetId) {
   ui.striker = null
 }
 
-export function undo() {
-  const list = state.recording
-    ? state.draft
-    : state.mode === 'play'
-      ? state.moves
-      : null
-  if (!list || !list.length) return
-  const m = list.pop()
-  if (m.prevTapped) {
-    state.tapped = clone(m.prevTapped)
+// Reverse a pickup: give the item back to its previous holder, or return it to
+// the zone it was lifted from.
+function undoPickup(m) {
+  if (m.held) {
+    state.carry[m.targetId] = m.held
+  } else {
+    delete state.carry[m.targetId]
+    if (state.zones[m.from]) state.zones[m.from].push(m.targetId)
   }
-  if (m.type === 'attack' || m.type === 'strike') {
-    state.checked = false
-    return
-  }
-  if (m.type === 'pickup') {
-    if (m.held) state.carry[m.targetId] = m.held
-    else {
-      delete state.carry[m.targetId]
-      if (state.zones[m.from]) state.zones[m.from].push(m.targetId)
-    }
-    state.checked = false
-    return
-  }
-  if (m.type === 'drop') {
-    const z = state.zones[m.to]
-    const i = z ? z.indexOf(m.cardId) : -1
-    if (i !== -1) z.splice(i, 1)
-    state.carry[m.cardId] = m.carrierId
-    state.checked = false
-    return
-  }
+}
+
+// Reverse a drop: take the item back out of the zone and into its carrier.
+function undoDrop(m) {
+  const z = state.zones[m.to]
+  const i = z?.indexOf(m.cardId) ?? -1
+  if (i !== -1) z.splice(i, 1)
+  state.carry[m.cardId] = m.carrierId
+}
+
+// Reverse a plain move: pull the card back from `to` and put it in `from`.
+function undoMove(m) {
   const src = state.zones[m.to]
   const i = src.indexOf(m.cardId)
   if (i !== -1) {
     src.splice(i, 1)
     state.zones[m.from].push(m.cardId)
   }
+}
+
+function undoEntry(m) {
+  if (m.type === 'attack' || m.type === 'strike') return
+  if (m.type === 'pickup') return undoPickup(m)
+  if (m.type === 'drop') return undoDrop(m)
+  undoMove(m)
+}
+
+export function undo() {
+  let list
+  if (state.recording) list = state.draft
+  else if (state.mode === 'play') list = state.moves
+  else return
+  if (!list.length) return
+  const m = list.pop()
+  if (m.prevTapped) state.tapped = clone(m.prevTapped)
+  undoEntry(m)
   state.checked = false
 }
 
@@ -707,16 +727,16 @@ export function adjustStat(side, key, delta) {
 
 export function isUnit(cardOrId) {
   const card = typeof cardOrId === 'string' ? state.cards[cardOrId] : cardOrId
-  return !!(card && (card.unit || card.avatar))
+  return !!(card?.unit || card?.avatar)
 }
 
 export function isAvatar(cardOrId) {
   const card = typeof cardOrId === 'string' ? state.cards[cardOrId] : cardOrId
-  return !!(card && card.avatar)
+  return !!card?.avatar
 }
 
 export function isTapped(cardId) {
-  return !!(state.tapped && state.tapped[cardId])
+  return !!state.tapped?.[cardId]
 }
 
 export function tapCard(cardId) {
@@ -867,9 +887,7 @@ function restoreAttempt() {
   state.solved = false
   if (!triesLimited()) return
   try {
-    const rec = (JSON.parse(localStorage.getItem(ATTEMPTS_KEY)) || {})[
-      attemptKey()
-    ]
+    const rec = JSON.parse(localStorage.getItem(ATTEMPTS_KEY))?.[attemptKey()]
     if (rec) {
       state.tries = rec.tries || 0
       state.solved = !!rec.solved
@@ -958,6 +976,23 @@ export function addCardFromMedia(item) {
   return id
 }
 
+// Remove every occurrence of a card from a set of zones in place.
+function removeFromZones(zones, cardId) {
+  for (const zone of Object.values(zones)) {
+    const i = zone.indexOf(cardId)
+    if (i !== -1) zone.splice(i, 1)
+  }
+}
+
+// Clear any armed action or selection that was pointing at this card.
+function clearArmed(cardId) {
+  if (ui.attacker === cardId) ui.attacker = null
+  if (ui.carrier === cardId) ui.carrier = null
+  if (ui.striker === cardId) ui.striker = null
+  if (ui.moving === cardId) ui.moving = null
+  if (ui.selected === cardId) ui.selected = null
+}
+
 export function removeCard(cardId) {
   // Whatever it was holding is put down where it stood, rather than vanishing
   // with it into no zone at all.
@@ -966,27 +1001,15 @@ export function removeCard(cardId) {
   delete state.cards[cardId]
   delete state.tapped[cardId]
   if (state.initialTapped) delete state.initialTapped[cardId]
-  for (const zone of Object.values(state.zones)) {
-    const i = zone.indexOf(cardId)
-    if (i !== -1) zone.splice(i, 1)
-  }
+  removeFromZones(state.zones, cardId)
   const involves = (m) => m.cardId === cardId || m.targetId === cardId
   state.solutions = state.solutions.map((line) =>
     line.filter((m) => !involves(m))
   )
   state.draft = state.draft.filter((m) => !involves(m))
   state.moves = state.moves.filter((m) => !involves(m))
-  if (ui.attacker === cardId) ui.attacker = null
-  if (ui.carrier === cardId) ui.carrier = null
-  if (ui.striker === cardId) ui.striker = null
-  if (ui.moving === cardId) ui.moving = null
-  if (ui.selected === cardId) ui.selected = null
-  if (state.initialZones) {
-    for (const zone of Object.values(state.initialZones)) {
-      const i = zone.indexOf(cardId)
-      if (i !== -1) zone.splice(i, 1)
-    }
-  }
+  clearArmed(cardId)
+  if (state.initialZones) removeFromZones(state.initialZones, cardId)
 }
 
 // ---------- serialization / persistence ----------
@@ -1045,8 +1068,8 @@ function normalizeZones(z) {
       out[k] = [...v]
     } else {
       // Legacy format: plain cell:N becomes the square's surface slot.
-      const m = k.match(/^cell:(\d+)$/)
-      if (m && out[`cell:${m[1]}:top`]) out[`cell:${m[1]}:top`].push(...v)
+      const m = /^cell:(\d+)$/.exec(k)
+      if (m) out[`cell:${m[1]}:top`]?.push(...v)
     }
   }
   return out
@@ -1055,7 +1078,7 @@ function normalizeZones(z) {
 function normalizeStats(s) {
   const out = defaultStats()
   for (const side of ['player', 'opponent']) {
-    Object.assign(out[side], (s || {})[side] || {})
+    Object.assign(out[side], s?.[side])
   }
   return out
 }
@@ -1073,7 +1096,7 @@ export function loadPuzzle(data, { play = true } = {}) {
     c.aura = !!c.aura
   }
   state.initialZones = normalizeZones(data.initial)
-  state.initialCarry = { ...(data.carry || {}) }
+  state.initialCarry = { ...data.carry }
   state.carry = clone(state.initialCarry)
   state.zones = restoreZones(state.initialZones)
   state.initialStats = normalizeStats(data.stats)
@@ -1235,6 +1258,13 @@ export async function deletePuzzle(id) {
 // The current puzzle is the released one with the latest date, tie-broken
 // by id, so a weekly (or daily) schedule just means saving puzzles with
 // the right release dates. The server's /daily mirrors this exactly.
+// Newest release first, ties broken by id descending -- the same order the
+// server's /daily endpoint uses to pick the current puzzle.
+function byReleaseDesc(a, b) {
+  if (a.date !== b.date) return a.date < b.date ? 1 : -1
+  return a.id < b.id ? 1 : -1
+}
+
 export async function loadDaily() {
   if (remote()) {
     try {
@@ -1244,11 +1274,7 @@ export async function loadDaily() {
       return false
     }
   }
-  const current = (await listPuzzles())
-    .filter(released)
-    .sort((a, b) =>
-      a.date === b.date ? (a.id < b.id ? 1 : -1) : a.date < b.date ? 1 : -1
-    )[0]
+  const current = (await listPuzzles()).filter(released).sort(byReleaseDesc)[0]
   if (!current) return false
   loadPuzzle(current)
   return true
@@ -1256,8 +1282,17 @@ export async function loadDaily() {
 
 // ---------- share links / URL loading ----------
 
-const b64encode = (s) => btoa(unescape(encodeURIComponent(s)))
-const b64decode = (s) => decodeURIComponent(escape(atob(s)))
+// UTF-8-safe base64. btoa/atob only handle Latin-1, so the string is taken
+// through its byte representation rather than the deprecated escape/unescape.
+const b64encode = (s) => {
+  const bytes = new TextEncoder().encode(s)
+  const binary = Array.from(bytes, (b) => String.fromCodePoint(b)).join('')
+  return btoa(binary)
+}
+const b64decode = (s) => {
+  const bytes = Uint8Array.from(atob(s), (ch) => ch.codePointAt(0))
+  return new TextDecoder().decode(bytes)
+}
 
 export function shareLink() {
   const data = b64encode(JSON.stringify(serialize()))

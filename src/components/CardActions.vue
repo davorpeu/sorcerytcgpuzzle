@@ -15,7 +15,6 @@ import {
   isTapped,
   isUnit,
   toggleControl,
-  toggleUnderOver,
   beginMove,
   beginAttack,
   beginStrike,
@@ -31,7 +30,6 @@ import {
 const card = computed(() => (ui.selected ? state.cards[ui.selected] : null))
 const zone = computed(() => (ui.selected ? zoneOf(ui.selected) : null))
 const onBoard = computed(() => /^cell:\d+:(top|bot)$/.test(zone.value || ''))
-const isUnder = computed(() => (zone.value || '').endsWith(':bot'))
 const editing = computed(() => state.mode === 'editor' && !state.recording)
 const inPool = computed(() => zone.value === 'pool')
 // Attacking and striking are realm actions: only a unit in play fights, and it
@@ -91,13 +89,6 @@ function onRemove() {
     </div>
 
     <div class="ca-buttons">
-      <button
-        v-if="onBoard && !heldBy"
-        class="btn"
-        @click="toggleUnderOver(ui.selected, zone)"
-      >
-        {{ isUnder ? '↥ Bring to surface' : '↧ Send underground' }}
-      </button>
       <button
         v-if="onBoard && isUnit(ui.selected)"
         class="btn"

@@ -168,7 +168,7 @@ function onSubmit() {
     const left = MAX_TRIES - state.tries
     flash(
       left > 0
-        ? `Not quite — ${left} ${left === 1 ? 'try' : 'tries'} left.`
+        ? `Not quite — ${tries(left)} left.`
         : 'Out of tries for today.'
     )
   }
@@ -194,6 +194,9 @@ const targetMoves = computed(() =>
 )
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
+
+// "try" pluralizes irregularly, so it gets its own helper rather than plural().
+const tries = (n) => `${n} ${n === 1 ? 'try' : 'tries'}`
 
 // Hold Alt while hovering a card to see it enlarged.
 const previewCard = computed(() =>
@@ -277,7 +280,7 @@ const result = computed(() => {
   // For limited players every wrong verdict states what it cost.
   const left = config.canEdit
     ? ''
-    : ` — ${MAX_TRIES - state.tries} ${MAX_TRIES - state.tries === 1 ? 'try' : 'tries'} left today.`
+    : ` — ${tries(MAX_TRIES - state.tries)} left today.`
   if (state.firstWrong >= state.moves.length)
     return {
       ok: false,
@@ -583,7 +586,8 @@ const result = computed(() => {
             </li>
             <li>
               <span class="legend-badge under">BELOW</span>
-              Underground card — darkened, use ↧/↥ to send under or surface
+              Underground card — darkened; drag or move it onto the lower strip
+              of a square to send it below, the upper part to surface it
             </li>
             <li>
               <span class="legend-icon">☞</span>
