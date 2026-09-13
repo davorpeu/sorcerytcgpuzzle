@@ -45,5 +45,16 @@ defineProps({
         />
       </DropZone>
     </div>
+    <div class="zone-block grave-block">
+      <div class="zone-title">Banished</div>
+      <DropZone :zone="`banished:${side}`" class="grave">
+        <CardToken
+          v-for="id in state.zones[`banished:${side}`]"
+          :key="id"
+          :card-id="id"
+          :from="`banished:${side}`"
+        />
+      </DropZone>
+    </div>
   </div>
 </template>

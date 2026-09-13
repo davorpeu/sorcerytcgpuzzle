@@ -1,4 +1,4 @@
-import { reactive } from 'vue'
+import { reactive, computed } from 'vue'
 
 export const GRID_COLS = 5
 export const GRID_ROWS = 4
@@ -17,7 +17,12 @@ const FORMAT_VERSION = 1
 // tracked in the browser's localStorage.
 export const MAX_TRIES = 3
 
-const clone = (o) => structuredClone(o)
+// Deep clone via JSON, not structuredClone: everything cloned here is reactive
+// (a Vue reactive() Proxy or a subtree of one), and structuredClone throws
+// DataCloneError on Proxy objects. The whole puzzle state is JSON-safe by design
+// -- it is exactly what gets written to localStorage / the REST API -- so a JSON
+// round-trip is both correct and the same shape the store already serializes to.
+const clone = (o) => JSON.parse(JSON.stringify(o))
 // Short opaque ids for cards and puzzles. Sourced from the platform CSPRNG
 // rather than Math.random -- not for secrecy, but so ids stay well-distributed
 // and a static analyzer doesn't flag a weak generator. 8 base36 chars.
@@ -34,6 +39,10 @@ export function emptyZones() {
     'grave:opponent': [],
     'collection:player': [],
     'collection:opponent': [],
+    // Removed-from-game cards. In the physical game these are just set aside;
+    // here they get their own off-board zone, per player like the cemetery.
+    'banished:player': [],
+    'banished:opponent': [],
     storyline: [],
     pool: [],
   }
@@ -119,6 +128,14 @@ export const ui = reactive({
   carrier: null, // card id armed to pick up; next click on a card carries it
   striker: null, // card id armed to strike; next click on a unit/site targets it
   moving: null, // card id armed for formal Move action; next zone click moves & taps unit
+  // An activated ability that needs a target is waiting for one:
+  // { cardId, abilityId }. The next click on a valid target performs it.
+  activating: null,
+  shooting: null, // card id armed to shoot (Ranged); next click on a unit fires
+  intercepting: null, // card id armed to intercept; next click on an enemy fights it
+  // An attack is paused for the defending side to interpose a defender:
+  // { attackerId, targetId }. Resolved by chooseDefender / declineDefender.
+  awaitingDefender: null,
   // A card is in flight. The board's drop zones only take the pointer while
   // this is true or while a card is armed for a click-move; the rest of the
   // time they step aside so the site art underneath them stays clickable.
@@ -162,6 +179,12 @@ export const state = reactive({
   puzzleName: '',
   puzzleDesc: '', // short brief: what kind of puzzle this is and what to achieve
   puzzleDate: '', // optional YYYY-MM-DD, used by the daily-puzzle picker
+  // When true, Move and Attack are enforced by reachability/targeting rules
+  // during play and recording. Off by default so free-form puzzles are unchanged.
+  enforce: false,
+  // When true, attack/strike/shoot resolve real damage (Power vs Life, Lethal,
+  // avatar/site life loss) during play and recording. Independent of `enforce`.
+  combat: false,
   cards: {}, // id -> { id, name, img, imgId?, site?, aura?, unit?, avatar?, enemy? }
   zones: emptyZones(), // zoneId -> [cardId, ...]
   // Who is carrying what: itemId -> carrierId. A carried card is removed from
@@ -170,12 +193,29 @@ export const state = reactive({
   // stops applying to it. Moving a carrier therefore needs no special case --
   // there is nothing to drag along, because the load was never in a zone.
   carry: {},
+  // Ability grants in force: grantedCardId -> { carrierId, from, abilityId }.
+  // A grant is a pseudo-pickup (the granted card is carried, so the carrier
+  // gains its abilities); `from` remembers where it was taken from so releasing
+  // it returns it there rather than dumping it on the carrier's square.
+  // Transient like `carry`'s runtime edits -- created only during play.
+  grants: {},
   initialZones: null, // snapshot taken when the solution recording starts
   initialCarry: null,
   stats: defaultStats(), // life, mana + elemental thresholds per player
   initialStats: null,
   tapped: {}, // cardId -> true
   initialTapped: null,
+  damage: {}, // cardId -> number of damage counters on that card
+  initialDamage: null,
+  // Gameplay-only modifiers, populated by effects (Layer C) and folded into the
+  // derived `effective` map. Base strength/keywords live on the card art and are
+  // never stored; only in-play changes are: strengthMod is a signed counter, and
+  // grantedKeywords is a list of keywords added during play.
+  strengthMod: {}, // cardId -> signed strength delta
+  grantedKeywords: {}, // cardId -> [keyword, ...]
+  // Units summoned this turn (entered the realm from hand during play) -- what
+  // Charge keys off. Single-turn approximation: never cleared within a puzzle.
+  summoned: {}, // cardId -> true
   // A puzzle can have several valid solutions; each line is a full move
   // sequence recorded from the same start position, and check() accepts an
   // attempt that matches any of them.
@@ -183,6 +223,10 @@ export const state = reactive({
   draft: [], // moves recorded since "Record" was pressed, committed on stop
   recording: false,
   moves: [], // player's attempt in play mode
+  // Triggered-ability events fired by the moves so far, in order. Transient
+  // (never serialized); each carries the `seq` of the entry that fired it so
+  // undo can drop exactly the events that move produced.
+  events: [],
   checked: false,
   firstWrong: -1, // index of first divergence after check(); -1 = fully correct
   targetLen: 0, // length of the closest solution line after check()
@@ -197,6 +241,8 @@ const FIXED_ZONE_LABELS = {
   'grave:opponent': 'Opponent cemetery',
   'collection:player': 'Player collection',
   'collection:opponent': 'Opponent collection',
+  'banished:player': 'Player banished',
+  'banished:opponent': 'Opponent banished',
   storyline: 'Storyline',
   pool: 'Card pool',
 }
@@ -231,6 +277,646 @@ function intersectionLabel(i) {
 export function cardName(cardId) {
   const c = state.cards[cardId]
   return c ? c.name : cardId
+}
+
+// ---------- abilities (data model) ----------
+
+// The board has many raw zone ids (site:7, cell:12:bot, aura:3, hand:player…).
+// Abilities are authored against these coarse *categories* instead, so a
+// condition like "onto the storyline" or "from the realm" holds whatever square
+// or side is involved. Returns null for an unknown zone (or a carried card,
+// which has no zone of its own).
+export function zoneCategory(zoneId) {
+  if (!zoneId) return null
+  if (zoneId === 'storyline') return 'storyline'
+  if (zoneId === 'pool') return 'pool'
+  if (zoneId.startsWith('hand:')) return 'hand'
+  if (zoneId.startsWith('grave:')) return 'cemetery'
+  if (zoneId.startsWith('collection:')) return 'collection'
+  if (zoneId.startsWith('banished:')) return 'banished'
+  if (zoneId.startsWith('aura:')) return 'aura'
+  if (zoneId.startsWith('site:') || zoneId.startsWith('cell:')) return 'realm'
+  return null
+}
+
+// ---------- regions ----------
+
+// The four realm regions. Which one a board slot is depends entirely on the site
+// (if any) sitting on that square, so region is derived, never stored.
+export const REGIONS = ['surface', 'underground', 'underwater', 'void']
+
+// The site card occupying a square, or null.
+function siteOn(square) {
+  const id = state.zones[`site:${square}`]?.[0]
+  return id ? state.cards[id] : null
+}
+
+// Region of a square's surface / below slot:
+//   surface slot  -> 'surface' with a site, else 'void' (open air over the square)
+//   below slot    -> 'underwater' on a water site, 'underground' on a land site,
+//                    and nothing at all with no site (you can't go below the void)
+export function regionOf(square, layer) {
+  const site = siteOn(square)
+  if (layer === 'top' || layer === 'surface') return site ? 'surface' : 'void'
+  if (layer === 'bot' || layer === 'below') {
+    // No site means no subsurface at all -- you can't go below the open void.
+    if (!site) return null
+    return site.water ? 'underwater' : 'underground'
+  }
+  return null
+}
+
+// Region of a raw board zone id (cell:N:top / cell:N:bot). Null for off-board
+// zones and for a below slot on a square with no site.
+export function zoneRegion(zoneId) {
+  const m = /^cell:(\d+):(top|bot)$/.exec(zoneId || '')
+  return m ? regionOf(Number(m[1]), m[2]) : null
+}
+
+// ---------- passive abilities: the effective traits map ----------
+
+// Units physically standing on the board, tagged with square, layer and region.
+function boardUnits() {
+  const out = []
+  for (let i = 0; i < GRID_SIZE; i++) {
+    for (const layer of ['top', 'bot']) {
+      for (const id of state.zones[`cell:${i}:${layer}`] || []) {
+        const c = state.cards[id]
+        if (c && isUnit(c)) {
+          out.push({ id, card: c, square: i, region: regionOf(i, layer) })
+        }
+      }
+    }
+  }
+  return out
+}
+
+// Where a card sits, resolved to a { square, region }, or null if not on a cell.
+function unitCell(cardId) {
+  const m = /^cell:(\d+):(top|bot)$/.exec(zoneOf(cardId) || '')
+  if (!m) return null
+  return { square: Number(m[1]), region: regionOf(Number(m[1]), m[2]) }
+}
+
+const passivesOf = (card) =>
+  (card?.abilities || []).filter((a) => a.kind === 'passive')
+
+// The units a passive on `sourceId` reaches. Area scopes are region-aware (same
+// region as the source) and drop the source itself; side suffixes filter by
+// controller.
+function unitsInScope(sourceId, scope) {
+  if (scope === 'self') return [sourceId]
+  const src = unitCell(sourceId)
+  const srcCard = state.cards[sourceId]
+  if (!src || !srcCard) return []
+  const near = scope.startsWith('nearby')
+  const wantFriendly = scope.endsWith('friendly')
+  const wantEnemy = scope.endsWith('enemy')
+  const out = []
+  for (const u of boardUnits()) {
+    if (u.id === sourceId) continue
+    if (u.region !== src.region) continue
+    const inRange = near
+      ? areNearby(src.square, u.square)
+      : areAdjacent(src.square, u.square) && src.square !== u.square
+    if (!inRange) continue
+    const sameSide = !!u.card.enemy === !!srcCard.enemy
+    if (wantFriendly && !sameSide) continue
+    if (wantEnemy && sameSide) continue
+    out.push(u.id)
+  }
+  return out
+}
+
+function accumPassive(p, acc) {
+  if (!p) return
+  for (const k of p.keywords || []) acc.keywords.add(k)
+  acc.movement += Number(p.movement) || 0
+  acc.strength += Number(p.strength) || 0
+  acc.ranged += Number(p.ranged) || 0
+}
+
+// Every unit's continuous traits, derived from passive abilities (self and
+// region-aware auras) plus gameplay grants. A single computed so it recomputes
+// once when the board changes and is shared by every reader. Silence removes a
+// unit's ability-sourced traits (keywords, movement, strength auras, and even
+// granted keywords -- all "non-basic"); a raw strengthMod counter is a stat
+// change, not an ability, so it survives. Disable is silence that also strips
+// the basics, so the unit can't act at all. Auras from a silenced/disabled
+// source stop applying (resolved in one pass; mutual silence isn't chased).
+export const effective = computed(() => {
+  const cards = state.cards
+  const silenced = new Set()
+  const disabled = new Set()
+  for (const src of Object.values(cards)) {
+    for (const a of passivesOf(src)) {
+      if (!a.passive.silence && !a.passive.disable) continue
+      for (const tid of unitsInScope(src.id, a.scope)) {
+        if (a.passive.silence) silenced.add(tid)
+        if (a.passive.disable) disabled.add(tid)
+      }
+    }
+  }
+
+  const map = {}
+  for (const id of Object.keys(cards)) {
+    const disabledHere = disabled.has(id)
+    const silencedHere = silenced.has(id) || disabledHere
+    const acc = { keywords: new Set(), movement: 0, strength: 0, ranged: 0 }
+    if (!silencedHere) {
+      for (const a of passivesOf(cards[id])) {
+        if (a.scope === 'self') accumPassive(a.passive, acc)
+      }
+      for (const src of Object.values(cards)) {
+        if (src.id === id || silenced.has(src.id) || disabled.has(src.id)) continue
+        for (const a of passivesOf(src)) {
+          if (a.scope === 'self') continue
+          if (unitsInScope(src.id, a.scope).includes(id)) accumPassive(a.passive, acc)
+        }
+      }
+      for (const k of state.grantedKeywords[id] || []) acc.keywords.add(k)
+    }
+    map[id] = {
+      keywords: acc.keywords,
+      movement: acc.movement,
+      ranged: acc.ranged,
+      // The counter persists through silence; passive/aura strength does not.
+      strengthMod: acc.strength + (state.strengthMod[id] || 0),
+      silenced: silencedHere,
+      disabled: disabledHere,
+    }
+  }
+  return map
+})
+
+const traits = (id) => effective.value[id] || null
+
+export const effectiveKeywords = (id) => traits(id)?.keywords || new Set()
+export const hasKeyword = (id, kw) => !!traits(id)?.keywords?.has(kw)
+export const effectiveStrengthMod = (id) => traits(id)?.strengthMod || 0
+export const effectiveRanged = (id) => traits(id)?.ranged || 0
+export const isSilenced = (id) => !!traits(id)?.silenced
+
+// The side a card belongs to.
+const sideOf = (id) => (state.cards[id]?.enemy ? 'opponent' : 'player')
+
+// Combat stats: base Power/Life from the card (authored, shown on the art),
+// modified in play. An avatar's Life is its side's life total.
+export const effectivePower = (id) =>
+  (state.cards[id]?.power || 0) + effectiveStrengthMod(id)
+
+export function effectiveLife(id) {
+  const c = state.cards[id]
+  if (!c) return 0
+  if (c.avatar) return state.stats[sideOf(id)]?.life || 0
+  return c.life || 0
+}
+export const isDisabled = (id) => !!traits(id)?.disabled
+
+// Keywords added during play (not the base ones on the card art), for badging.
+export const grantedKeywordsOf = (id) => state.grantedKeywords[id] || []
+
+// Steps a unit may take: base 1, plus passive/granted movement, zeroed by
+// Immobile or Disable. Non-units never move.
+export function effectiveMovement(id) {
+  const e = traits(id)
+  if (!e || !isUnit(id)) return 0
+  if (e.disabled || e.keywords.has('immobile')) return 0
+  return 1 + e.movement
+}
+
+// ---------- movement / attack reachability (enforcement) ----------
+
+// A position is a (square, layer) node; layer 'top' is the surface/void, 'bot'
+// the subsurface. Reachability is a BFS over legal single steps.
+const nodeKey = (sq, layer) => `${sq}:${layer}`
+
+function nodeOf(cardId) {
+  const z = zoneOf(cardId)
+  let m = /^cell:(\d+):(top|bot)$/.exec(z || '')
+  if (m) return { sq: Number(m[1]), layer: m[2] }
+  m = /^site:(\d+)$/.exec(z || '')
+  if (m) return { sq: Number(m[1]), layer: 'top' }
+  return null
+}
+
+// Whether a unit with keyword set `kw` may take one step from node F to node G.
+// Encodes the movement table: cardinal surface steps for anyone, diagonals for
+// Airborne, vertical steps for Burrowing/Submerge, and void entry/exit (cardinal
+// only) for Voidwalk.
+function canStep(kw, F, G) {
+  // Vertical: same square, surface <-> subsurface, gated by the sub-region.
+  if (F.sq === G.sq) {
+    if (F.layer === G.layer) return false
+    const sub = regionOf(F.sq, 'bot')
+    if (sub === 'underground') return kw.has('burrowing')
+    if (sub === 'underwater') return kw.has('submerge')
+    return false
+  }
+  const cardinal = areAdjacent(F.sq, G.sq)
+  const diagonal = areNearby(F.sq, G.sq) && !cardinal
+  if (!cardinal && !diagonal) return false
+  const regF = regionOf(F.sq, F.layer)
+  const regG = regionOf(G.sq, G.layer)
+  // Voidwalk directly from the void into an adjacent site's subsurface.
+  if (G.layer === 'bot') {
+    if (regF !== 'void' || !cardinal || !kw.has('voidwalk')) return false
+    if (regG === 'underground') return kw.has('burrowing')
+    if (regG === 'underwater') return kw.has('submerge')
+    return false
+  }
+  // Cross-square surface/void steps only leave from a surface/void node.
+  if (F.layer !== 'top') return false
+  if (regF === 'void' || regG === 'void') return cardinal && kw.has('voidwalk')
+  // surface <-> surface: cardinal for anyone, diagonal only while Airborne.
+  return cardinal || kw.has('airborne')
+}
+
+// Candidate neighbour nodes to test from F: the vertical partner plus both
+// layers of every king-adjacent square.
+function neighborNodes(F) {
+  const out = [{ sq: F.sq, layer: F.layer === 'top' ? 'bot' : 'top' }]
+  for (let s = 0; s < GRID_SIZE; s++) {
+    if (s !== F.sq && areNearby(F.sq, s)) {
+      out.push({ sq: s, layer: 'top' }, { sq: s, layer: 'bot' })
+    }
+  }
+  return out
+}
+
+// The set of node keys a unit can reach within its movement, including where it
+// stands (so a unit can attack an enemy sharing its square). Empty for a
+// disabled unit or one not on the board.
+export function reachableNodes(unitId) {
+  const set = new Set()
+  if (!isUnit(unitId) || isDisabled(unitId)) return set
+  const start = nodeOf(unitId)
+  if (!start) return set
+  const kw = effectiveKeywords(unitId)
+  const steps = effectiveMovement(unitId)
+  set.add(nodeKey(start.sq, start.layer))
+  let frontier = [start]
+  for (let d = 0; d < steps; d++) {
+    const next = []
+    for (const F of frontier) {
+      for (const G of neighborNodes(F)) {
+        const key = nodeKey(G.sq, G.layer)
+        if (!set.has(key) && canStep(kw, F, G)) {
+          set.add(key)
+          next.push(G)
+        }
+      }
+    }
+    frontier = next
+  }
+  return set
+}
+
+// Enforcement is per-puzzle and only bites while playing or recording; the
+// editor stays free-form for building positions.
+const enforcing = () =>
+  state.enforce && (state.mode === 'play' || state.recording)
+
+// May this unit legally move to a board zone? Non-cell destinations aren't
+// movement-gated (summoning from hand, etc.).
+export function canMoveUnit(unitId, toZone) {
+  const m = /^cell:(\d+):(top|bot)$/.exec(toZone || '')
+  if (!m) return true
+  return reachableNodes(unitId).has(nodeKey(Number(m[1]), m[2]))
+}
+
+// May attacker legally attack target: within reach, and past the targeting
+// keywords -- Airborne can only be hit by Airborne, Stealth not by opponents.
+export function canAttack(attackerId, targetId) {
+  if (!isUnit(attackerId) || isDisabled(attackerId)) return false
+  const t = nodeOf(targetId)
+  if (!t || !reachableNodes(attackerId).has(nodeKey(t.sq, t.layer))) return false
+  if (isUnit(targetId)) {
+    const atk = effectiveKeywords(attackerId)
+    const tgt = effectiveKeywords(targetId)
+    if (tgt.has('airborne') && !atk.has('airborne')) return false
+    const oppose =
+      !!state.cards[attackerId].enemy !== !!state.cards[targetId].enemy
+    if (tgt.has('stealth') && oppose) return false
+  }
+  return true
+}
+
+// UI helpers: is a card/zone a legal target of the currently armed action? When
+// not enforcing they fall back to the old free-form behaviour (any on-board
+// target; every square a move destination).
+export function armedAttackLegal(targetId) {
+  if (!ui.attacker || ui.attacker === targetId) return false
+  return enforcing() ? canAttack(ui.attacker, targetId) : true
+}
+
+// null = no move armed or not enforcing (no highlight); else whether the armed
+// unit may reach this zone.
+export function armedMoveLegal(zone) {
+  if (!ui.moving || !enforcing()) return null
+  return canMoveUnit(ui.moving, zone)
+}
+
+// ---------- ranged (line-of-fire) ----------
+
+function unitsOnSquare(idx) {
+  const out = []
+  for (const layer of ['top', 'bot']) {
+    for (const id of state.zones[`cell:${idx}:${layer}`] || []) {
+      if (isUnit(id)) out.push(id)
+    }
+  }
+  return out
+}
+
+// Units a Ranged shooter can hit: fire a projectile down each of the four
+// cardinal lines up to its range, striking the first non-Stealth unit in the
+// line (which then blocks it). Stealth units are transparent -- projectiles
+// can't hit them and pass through.
+export function rangedTargets(shooterId) {
+  const set = new Set()
+  const range = effectiveRanged(shooterId)
+  const start = nodeOf(shooterId)
+  if (!range || isDisabled(shooterId) || !start) return set
+  const row = Math.floor(start.sq / GRID_COLS)
+  const col = start.sq % GRID_COLS
+  for (const [dr, dc] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
+    for (let step = 1; step <= range; step++) {
+      const r = row + dr * step
+      const c = col + dc * step
+      if (r < 0 || r >= GRID_ROWS || c < 0 || c >= GRID_COLS) break
+      const hittable = unitsOnSquare(r * GRID_COLS + c).filter(
+        (id) => !hasKeyword(id, 'stealth')
+      )
+      if (hittable.length) {
+        set.add(hittable[0])
+        break // the projectile stops at the first unit it can hit
+      }
+    }
+  }
+  return set
+}
+
+export const canShoot = (shooterId, targetId) =>
+  rangedTargets(shooterId).has(targetId)
+
+export function armedShootLegal(targetId) {
+  if (!ui.shooting || ui.shooting === targetId) return false
+  return enforcing() ? canShoot(ui.shooting, targetId) : isUnit(targetId)
+}
+
+// ---------- combat resolution ----------
+
+const combatActive = () =>
+  state.combat && (state.mode === 'play' || state.recording)
+
+// Power a unit actually deals: none while Disabled ("doesn't strike when fighting").
+const combatPower = (id) => (isDisabled(id) ? 0 : effectivePower(id))
+
+// One source->target damage instance. A minion accumulates damage (and a lethal
+// flag if the source has Lethal); a site or avatar has no toughness, so its
+// controller loses that much life instead.
+function applyHit(sourceId, targetId, amount, lethalHit) {
+  if (amount <= 0) return
+  const tgt = state.cards[targetId]
+  if (!tgt) return
+  if (isUnit(targetId) && !tgt.avatar) {
+    state.damage[targetId] = (state.damage[targetId] || 0) + amount
+    if (hasKeyword(sourceId, 'lethal')) lethalHit.add(targetId)
+  } else {
+    adjustStat(sideOf(targetId), 'life', -amount)
+  }
+}
+
+// Move a unit to its cemetery as a consequence of `entry`: snapshot for undo,
+// announce it, and fire Deathrite (and any "when a unit dies" triggers) by
+// replaying the death as a realm->cemetery move keyed to the same seq.
+function sendToCemetery(unitId, entry, name, text) {
+  const from = zoneOf(unitId)
+  const side = sideOf(unitId)
+  snapshotStructural(entry)
+  removeFromZones(state.zones, unitId)
+  state.zones[`grave:${side}`].push(unitId)
+  state.events.push({ id: uid(), seq: entry.seq, cardId: unitId, name, text })
+  fireTriggers({ type: 'move', cardId: unitId, from, to: `grave:${side}`, seq: entry.seq })
+}
+
+// State-based death after damage: any minion at or over its Life, or hit by a
+// Lethal source, dies to its cemetery. Avatars never leave for the cemetery --
+// they bleed life and sit at Death's Door on 0. The zoneOf guard skips a unit a
+// nested Deathrite already removed, so it is never sent twice.
+function resolveDeaths(entry, lethalHit) {
+  for (const u of boardUnits()) {
+    if (u.card.avatar) continue
+    if (!zoneOf(u.id)?.startsWith('cell:')) continue
+    const dmg = state.damage[u.id] || 0
+    if (!lethalHit.has(u.id) && dmg < Math.max(1, effectiveLife(u.id))) continue
+    sendToCemetery(u.id, entry, 'Slain', `${cardName(u.id)} was slain.`)
+  }
+}
+
+// A fight: both combatants strike simultaneously (a site deals nothing back),
+// then deaths resolve together so mutual kills work.
+function resolveAttack(attackerId, targetId, entry) {
+  const lethalHit = new Set()
+  applyHit(attackerId, targetId, combatPower(attackerId), lethalHit)
+  if (isUnit(targetId)) applyHit(targetId, attackerId, combatPower(targetId), lethalHit)
+  resolveDeaths(entry, lethalHit)
+}
+
+// A one-way hit (strike, shoot, or a damage effect).
+function resolveHit(sourceId, targetId, amount, entry) {
+  const lethalHit = new Set()
+  applyHit(sourceId, targetId, amount, lethalHit)
+  resolveDeaths(entry, lethalHit)
+}
+
+// The category a card is actually in right now, resolving a carried card to
+// wherever its carrier sits (via zoneOf).
+export function cardZoneCategory(cardId) {
+  return zoneCategory(zoneOf(cardId))
+}
+
+// Categories offered in the ability editor's zone / from / to pickers. Order is
+// deliberate: the realm first, then the off-board zones roughly as they sit
+// around the table.
+export const ZONE_CATEGORIES = [
+  'realm',
+  'aura',
+  'storyline',
+  'hand',
+  'cemetery',
+  'collection',
+  'banished',
+]
+
+// The actions a triggered ability can watch. Mirrors the logged entry `type`s
+// (a plain move logs no type, so it is spelled out here as 'move').
+export const TRIGGER_ACTIONS = [
+  'move',
+  'attack',
+  'strike',
+  'pickup',
+  'drop',
+  'ability',
+  'damage',
+]
+
+// The structured effect ops an ability can carry, for the editor's picker.
+export const EFFECT_OPS = [
+  'adjustStat',
+  'tap',
+  'dealDamage',
+  'modifyStrength',
+  'grantKeyword',
+  'grantFrom',
+  'release',
+]
+
+// Whose action fires a trigger: the card's own move, anyone's, or one side's.
+export const TRIGGER_SUBJECTS = ['self', 'any', 'enemy', 'friendly']
+
+// What a grant-style ability's gained abilities are lost to (Layer 4). 'never'
+// keeps them for good.
+export const LOSE_CONDITIONS = ['never', 'damaged', 'dies', 'leaves-realm', 'taps']
+
+// Card-kind filter for an activated ability's target picker.
+export const TARGET_FILTERS = ['any', 'unit', 'avatar', 'site', 'aura']
+
+// Boolean keyword abilities a passive can grant. Base ones live on the card art
+// (authored here only so the engine can enforce them); granted ones are badged.
+// Ranged is deliberately absent -- it carries a value and is an activated ability.
+export const KEYWORDS = [
+  'airborne',
+  'burrowing',
+  'submerge',
+  'voidwalk',
+  'immobile',
+  'stealth',
+  'spellcaster',
+  'lethal',
+  'charge',
+]
+
+// Who a passive ability affects. Area scopes are region-aware (same region as the
+// source) and exclude the source itself. nearby = 8 surrounding squares (king),
+// adjacent = 4 cardinal squares.
+export const PASSIVE_SCOPES = [
+  'self',
+  'nearby',
+  'adjacent',
+  'nearby-friendly',
+  'nearby-enemy',
+  'adjacent-friendly',
+  'adjacent-enemy',
+]
+
+// Coerce any stored/partial ability into the full shape the editor and runtime
+// expect, so older files and hand-edited JSON never surface an undefined nested
+// field. Also used to build a fresh ability (pass just { kind }).
+export function normalizeAbility(a = {}) {
+  const kind = ['triggered', 'passive'].includes(a.kind) ? a.kind : 'activated'
+  return {
+    id: a.id || uid(),
+    kind,
+    name: a.name || '',
+    text: a.text || '',
+    zones: Array.isArray(a.zones) ? [...a.zones] : ['realm'],
+    // Passive-only: who it affects, and what continuous modifier it applies.
+    scope: PASSIVE_SCOPES.includes(a.scope) ? a.scope : 'self',
+    passive: {
+      keywords: Array.isArray(a.passive?.keywords) ? [...a.passive.keywords] : [],
+      movement: Number(a.passive?.movement) || 0,
+      strength: Number(a.passive?.strength) || 0,
+      ranged: Number(a.passive?.ranged) || 0,
+      silence: !!a.passive?.silence,
+      disable: !!a.passive?.disable,
+    },
+    trigger: {
+      action: a.trigger?.action || 'move',
+      from: a.trigger?.from || 'any',
+      to: a.trigger?.to || 'any',
+      subject: a.trigger?.subject || 'self',
+    },
+    cost: { mana: Number(a.cost?.mana) || 0, tap: !!a.cost?.tap },
+    target: {
+      required: !!a.target?.required,
+      from: a.target?.from || 'realm',
+      filter: a.target?.filter || 'any',
+      prompt: a.target?.prompt || '',
+    },
+    effects: Array.isArray(a.effects) ? clone(a.effects) : [],
+    loseWhen: a.loseWhen || 'never',
+  }
+}
+
+export function addAbility(cardId, kind = 'activated') {
+  const card = state.cards[cardId]
+  if (!card) return
+  if (!Array.isArray(card.abilities)) card.abilities = []
+  const ability = normalizeAbility({ kind })
+  card.abilities.push(ability)
+  return ability.id
+}
+
+export function removeAbility(cardId, abilityId) {
+  const card = state.cards[cardId]
+  if (!Array.isArray(card?.abilities)) return
+  card.abilities = card.abilities.filter((a) => a.id !== abilityId)
+}
+
+// Toggle membership of a category in an ability's `zones` list -- the editor's
+// "where is it usable" checkboxes.
+export function toggleAbilityZone(ability, category) {
+  const i = ability.zones.indexOf(category)
+  if (i === -1) ability.zones.push(category)
+  else ability.zones.splice(i, 1)
+}
+
+// Toggle a keyword in a passive ability's granted-keyword list.
+export function togglePassiveKeyword(ability, keyword) {
+  const list = ability.passive.keywords
+  const i = list.indexOf(keyword)
+  if (i === -1) list.push(keyword)
+  else list.splice(i, 1)
+}
+
+// A fresh effect of the given op, with the params that op reads defaulted.
+function newEffect(op = 'adjustStat') {
+  const e = { op }
+  if (op === 'adjustStat') Object.assign(e, { side: 'self', key: 'mana', delta: 0 })
+  if (op === 'tap') e.who = 'self'
+  if (op === 'dealDamage') Object.assign(e, { who: 'target', amount: 1 })
+  if (op === 'modifyStrength') Object.assign(e, { who: 'target', amount: 1 })
+  if (op === 'grantKeyword') Object.assign(e, { who: 'target', keyword: 'airborne' })
+  return e
+}
+
+export function addEffect(ability, op = 'adjustStat') {
+  if (!Array.isArray(ability.effects)) ability.effects = []
+  ability.effects.push(newEffect(op))
+}
+
+export function removeEffect(ability, i) {
+  ability.effects.splice(i, 1)
+}
+
+// Re-default an effect's params when its op changes in the editor, so a stale
+// param from the previous op doesn't linger.
+export function retypeEffect(ability, i, op) {
+  ability.effects.splice(i, 1, newEffect(op))
+}
+
+// ---------- damage counters ----------
+
+export function damageOf(cardId) {
+  return state.damage?.[cardId] || 0
+}
+
+export function adjustDamage(cardId, delta) {
+  const next = Math.max(0, damageOf(cardId) + delta)
+  if (next) state.damage[cardId] = next
+  else delete state.damage[cardId]
 }
 
 // Every dragstart in the app goes through here: it arms the drag flag the
@@ -291,6 +977,17 @@ function areAdjacent(idxA, idxB) {
   return Math.abs(rowA - rowB) + Math.abs(colA - colB) <= 1
 }
 
+// "Nearby" = the up-to-8 surrounding squares (king move, diagonals included),
+// distinct from "adjacent" (the 4 cardinal squares). Excludes the square itself.
+export function areNearby(idxA, idxB) {
+  idxA = Number(idxA)
+  idxB = Number(idxB)
+  if (idxA === idxB) return false
+  const dr = Math.abs(Math.floor(idxA / GRID_COLS) - Math.floor(idxB / GRID_COLS))
+  const dc = Math.abs((idxA % GRID_COLS) - (idxB % GRID_COLS))
+  return dr <= 1 && dc <= 1
+}
+
 // All units of one side currently on the board, tagged with the square they
 // sit in, surface and below both.
 function unitsOnBoard(isEnemySide) {
@@ -342,7 +1039,12 @@ function placePoolCopy(cardId, to) {
   const card = state.cards[cardId]
   if (!card) return
   const copyId = uid()
-  state.cards[copyId] = { ...card, id: copyId }
+  // Deep clone, not a spread: the card carries nested arrays (abilities, and
+  // their effects/zones) that a shallow copy would share by reference, so
+  // editing one placed copy's ability would silently change every other.
+  const copy = clone(card)
+  copy.id = copyId
+  state.cards[copyId] = copy
   state.zones[to].push(copyId)
 }
 
@@ -374,6 +1076,16 @@ export function moveCard(cardId, from, to, { tapOnMove } = {}) {
   if (state.carry[cardId]) return
   to = routeZone(cardId, to)
   if (from === to || !canPlace(cardId, to)) return
+  // When enforcing, a unit can only step cell-to-cell within its reach. Other
+  // relocations (summoning from hand, editor placement) are not movement steps.
+  if (
+    enforcing() &&
+    isUnit(cardId) &&
+    from.startsWith('cell:') &&
+    to.startsWith('cell:') &&
+    !canMoveUnit(cardId, to)
+  )
+    return
   if (from === 'pool' && state.mode === 'editor' && !state.recording) {
     placePoolCopy(cardId, to)
     return
@@ -400,15 +1112,22 @@ export function beginMove(cardId) {
   ui.attacker = null
   ui.striker = null
   ui.carrier = null
+  ui.activating = null
+  ui.shooting = null
+  ui.intercepting = null
 }
 
 // Attacks and strikes don't change the board; they are logged as their own entry types
 // so a solution can require them in sequence with moves.
 export function beginAttack(cardId) {
   ui.attacker = ui.attacker === cardId ? null : cardId
+  ui.awaitingDefender = null
   ui.striker = null
   ui.moving = null
   ui.carrier = null
+  ui.activating = null
+  ui.shooting = null
+  ui.intercepting = null
 }
 
 export function beginStrike(cardId) {
@@ -416,23 +1135,241 @@ export function beginStrike(cardId) {
   ui.attacker = null
   ui.moving = null
   ui.carrier = null
+  ui.activating = null
+  ui.shooting = null
+  ui.intercepting = null
+}
+
+// Ranged: tap to fire at a unit in line of sight. Its own armed slot, mutually
+// exclusive with the other actions like attack/strike.
+export function beginShoot(cardId) {
+  ui.shooting = ui.shooting === cardId ? null : cardId
+  ui.attacker = null
+  ui.striker = null
+  ui.moving = null
+  ui.carrier = null
+  ui.activating = null
+  ui.intercepting = null
+}
+
+export function targetShoot(targetId) {
+  if (!ui.shooting || ui.shooting === targetId) return
+  const shooterId = ui.shooting
+  if (enforcing() && !canShoot(shooterId, targetId)) return
+  const prevTapped = clone(state.tapped)
+  if (isUnit(shooterId)) state.tapped[shooterId] = true
+  const entry = { type: 'shoot', cardId: shooterId, targetId, prevTapped }
+  logEntry(entry)
+  if (combatActive()) resolveHit(shooterId, targetId, combatPower(shooterId), entry)
+  ui.shooting = null
+}
+
+// Intercept: a unit steps in to fight an enemy (one moving past, say). Its own
+// armed slot; unlike a plain Attack, a Ranged or Airborne unit may intercept an
+// Airborne enemy.
+export function beginIntercept(cardId) {
+  ui.intercepting = ui.intercepting === cardId ? null : cardId
+  ui.attacker = null
+  ui.striker = null
+  ui.moving = null
+  ui.carrier = null
+  ui.activating = null
+  ui.shooting = null
+}
+
+// Y may intercept X: opposing units, X within Y's reach, and -- if X is Airborne
+// -- Y is Airborne or Ranged.
+export function canIntercept(interceptorId, targetId) {
+  if (!isUnit(interceptorId) || isDisabled(interceptorId) || !isUnit(targetId)) return false
+  const iCard = state.cards[interceptorId]
+  const tCard = state.cards[targetId]
+  if (!iCard || !tCard || !!iCard.enemy === !!tCard.enemy) return false
+  const t = nodeOf(targetId)
+  if (!t || !reachableNodes(interceptorId).has(nodeKey(t.sq, t.layer))) return false
+  if (hasKeyword(targetId, 'airborne')) {
+    return hasKeyword(interceptorId, 'airborne') || effectiveRanged(interceptorId) > 0
+  }
+  return true
+}
+
+export function armedInterceptLegal(targetId) {
+  if (!ui.intercepting || ui.intercepting === targetId) return false
+  return enforcing() ? canIntercept(ui.intercepting, targetId) : isUnit(targetId)
+}
+
+export function targetIntercept(targetId) {
+  if (!ui.intercepting || ui.intercepting === targetId) return
+  const interceptorId = ui.intercepting
+  if (enforcing() && !canIntercept(interceptorId, targetId)) return
+  const prevTapped = clone(state.tapped)
+  if (isUnit(interceptorId)) state.tapped[interceptorId] = true
+  const entry = { type: 'intercept', cardId: interceptorId, targetId, prevTapped }
+  logEntry(entry)
+  if (combatActive()) resolveAttack(interceptorId, targetId, entry)
+  ui.intercepting = null
 }
 
 export function targetAttack(targetId) {
   if (!ui.attacker || ui.attacker === targetId) return
   const attackerId = ui.attacker
+  // Illegal target while enforcing: ignore the click, keep the attack armed so
+  // the player can pick a legal one.
+  if (enforcing() && !canAttack(attackerId, targetId)) return
+  // With full rules on: the opponent defends automatically (its own AI), while a
+  // player-side target still prompts the solver to choose.
+  if (combatActive() && enforcing()) {
+    const target = state.cards[targetId]
+    if (target?.enemy) {
+      performAttack(attackerId, targetId, chooseAutoDefender(attackerId, targetId))
+      return
+    }
+    if (legalDefenders(attackerId, targetId).length) {
+      ui.awaitingDefender = { attackerId, targetId }
+      ui.attacker = null
+      return
+    }
+  }
+  performAttack(attackerId, targetId, null)
+}
+
+// Carry out an attack, optionally redirected to a defender who fights in the
+// target's place.
+function performAttack(attackerId, targetId, defenderId) {
   const prevTapped = clone(state.tapped)
-  if (isUnit(attackerId)) {
-    state.tapped[attackerId] = true
+  if (isUnit(attackerId)) state.tapped[attackerId] = true
+  const entry = {
+    type: 'attack',
+    cardId: attackerId,
+    targetId,
+    defenderId: defenderId || null,
+    prevTapped,
   }
-  const entry = { type: 'attack', cardId: attackerId, targetId, prevTapped }
-  if (state.recording) {
-    state.draft.push(entry)
-  } else if (state.mode === 'play') {
-    state.moves.push(entry)
-    state.checked = false
+  logEntry(entry)
+  if (defenderId) {
+    state.events.push({
+      id: uid(),
+      seq: entry.seq,
+      cardId: defenderId,
+      name: 'Defends',
+      text: `${cardName(defenderId)} defends ${cardName(targetId)}.`,
+    })
   }
+  if (combatActive()) resolveAttack(attackerId, defenderId || targetId, entry)
   ui.attacker = null
+  ui.awaitingDefender = null
+}
+
+// Units on the target's side that could move to it (reach), and so may defend
+// it. An Airborne attacker can only be met by Airborne or Ranged defenders.
+export function legalDefenders(attackerId, targetId) {
+  const target = state.cards[targetId]
+  const tnode = nodeOf(targetId)
+  if (!target || !tnode) return []
+  const attackerAirborne = hasKeyword(attackerId, 'airborne')
+  const out = []
+  for (const u of boardUnits()) {
+    if (u.id === targetId || u.id === attackerId) continue
+    if (!!u.card.enemy !== !!target.enemy) continue // same side as the target
+    if (!reachableNodes(u.id).has(nodeKey(tnode.sq, tnode.layer))) continue
+    if (attackerAirborne && !(hasKeyword(u.id, 'airborne') || effectiveRanged(u.id) > 0))
+      continue
+    out.push(u.id)
+  }
+  return out
+}
+
+// How much the opponent prizes keeping a unit. Win-conditions (can kill the
+// player's avatar) and guards (can reach its own avatar) are the crown jewels;
+// then raw stats. Default weights -- tune here.
+const DEF_THREAT = 1000
+const DEF_BLOCKER = 500
+
+// The opponent's avatar on the board, if any.
+function oppAvatarUnit() {
+  for (const u of boardUnits()) if (u.card.avatar && u.card.enemy) return u
+  return null
+}
+
+// Could this unit reach the given avatar's square (i.e. defend it)?
+function canReachAvatar(unitId, avatarUnit) {
+  const a = avatarUnit && nodeOf(avatarUnit.id)
+  return !!a && reachableNodes(unitId).has(nodeKey(a.sq, a.layer))
+}
+
+function defenderValue(id, avatarUnit) {
+  const pLife = state.stats.player?.life || 0
+  const threat = effectivePower(id) >= pLife && pLife > 0 ? DEF_THREAT : 0
+  const blocker = canReachAvatar(id, avatarUnit) ? DEF_BLOCKER : 0
+  return threat + blocker + effectivePower(id) * 10 + effectiveLife(id)
+}
+
+// Is the opponent avatar facing a lethal swing right now? Then avatar-capable
+// units are reserved and won't be spent defending lesser things.
+function avatarUnderThreat(avatarUnit) {
+  const a = avatarUnit && nodeOf(avatarUnit.id)
+  if (!a) return false
+  const life = state.stats.opponent.life
+  for (const u of boardUnits()) {
+    if (u.card.enemy) continue // player-side attackers only
+    if (effectivePower(u.id) >= life && reachableNodes(u.id).has(nodeKey(a.sq, a.layer)))
+      return true
+  }
+  return false
+}
+
+// The opponent's auto-defence: which defender (if any) it interposes. Deterministic
+// so a solution replays the same way. It spends the most expendable legal unit,
+// keeps threats and avatar-guards, and -- while its avatar is under a lethal
+// threat -- reserves every avatar-capable unit (so stripping its guards works).
+function chooseAutoDefender(attackerId, targetId) {
+  const target = state.cards[targetId]
+  if (!target) return null
+  const defenders = legalDefenders(attackerId, targetId)
+  if (!defenders.length) return null
+  const avatar = oppAvatarUnit()
+  const apow = effectivePower(attackerId)
+  const lethal = hasKeyword(attackerId, 'lethal')
+  const value = (id) => defenderValue(id, avatar)
+  const cheapestFirst = [...defenders].sort((a, b) => value(a) - value(b) || (a < b ? -1 : 1))
+
+  // Life-loss attack (avatar/site): block to avoid Death's Door, or block free.
+  if (target.avatar || target.site) {
+    const chosen = cheapestFirst[0]
+    const critical = state.stats[sideOf(targetId)].life - apow <= 0
+    const survives = effectiveLife(chosen) > apow && !lethal
+    return critical || survives ? chosen : null
+  }
+
+  // Minion attack: trade only with a strictly cheaper unit, and only when the
+  // trade is good (the defender survives, or it saves something much bigger).
+  if (!isUnit(targetId)) return null
+  const threatened = avatarUnderThreat(avatar)
+  const mval = value(targetId)
+  for (const d of cheapestFirst) {
+    if (value(d) >= mval) break // nothing cheaper than what we'd save
+    if (threatened && canReachAvatar(d, avatar)) continue // reserved for the avatar
+    const survives = effectiveLife(d) > apow && !lethal
+    if (survives || mval - value(d) >= DEF_BLOCKER) return d
+  }
+  return null
+}
+
+export function armedDefendLegal(cardId) {
+  if (!ui.awaitingDefender) return false
+  const { attackerId, targetId } = ui.awaitingDefender
+  return legalDefenders(attackerId, targetId).includes(cardId)
+}
+
+export function chooseDefender(defenderId) {
+  if (!ui.awaitingDefender || !armedDefendLegal(defenderId)) return
+  const { attackerId, targetId } = ui.awaitingDefender
+  performAttack(attackerId, targetId, defenderId)
+}
+
+export function declineDefender() {
+  if (!ui.awaitingDefender) return
+  const { attackerId, targetId } = ui.awaitingDefender
+  performAttack(attackerId, targetId, null)
 }
 
 // ---------- carrying ----------
@@ -477,12 +1414,93 @@ function dropTarget(itemId, zone) {
   return routed
 }
 
+// Monotonic tag stamped on every logged entry so a fired event can point back
+// at the move that produced it. Reset points don't need to reset it -- it only
+// has to be unique within the live moves/draft list, and undo matches on it.
+let entrySeq = 0
+
 function logEntry(entry) {
+  if (!state.recording && state.mode !== 'play') return
+  entry.seq = ++entrySeq
+  // Ensure the reversible snapshots exist before any trigger effect runs, so
+  // undo can refund stat/tap/damage changes a trigger causes. They are captured
+  // post-base-action but pre-trigger, which is exactly what undo needs to peel
+  // the triggers off before reversing the base action structurally.
+  if (!entry.prevTapped) entry.prevTapped = clone(state.tapped)
+  if (!entry.prevStats) entry.prevStats = clone(state.stats)
+  if (!entry.prevDamage) entry.prevDamage = clone(state.damage)
+  if (!entry.prevStrengthMod) entry.prevStrengthMod = clone(state.strengthMod)
+  if (!entry.prevGrantedKeywords)
+    entry.prevGrantedKeywords = clone(state.grantedKeywords)
+  if (!entry.prevSummoned) entry.prevSummoned = clone(state.summoned)
+  // A card played from hand into the realm is summoned this turn (Charge).
+  if (
+    (entry.type || 'move') === 'move' &&
+    zoneCategory(entry.from) === 'hand' &&
+    zoneCategory(entry.to) === 'realm'
+  ) {
+    state.summoned[entry.cardId] = true
+  }
   if (state.recording) {
     state.draft.push(entry)
-  } else if (state.mode === 'play') {
+  } else {
     state.moves.push(entry)
     state.checked = false
+  }
+  fireTriggers(entry)
+  checkGrantLoss(entry)
+  checkSurvival(entry)
+}
+
+// ---------- triggered abilities ----------
+
+// Whether the card that performed `entry` stands in the right relation to the
+// ability's owner for the trigger's subject.
+function subjectMatches(subject, owner, actingId) {
+  if (subject === 'any') return true
+  if (subject === 'self') return owner.id === actingId
+  const acting = state.cards[actingId]
+  if (!acting) return false
+  const sameSide = !!acting.enemy === !!owner.enemy
+  return subject === 'friendly' ? sameSide : !sameSide
+}
+
+// Does a logged entry satisfy a triggered ability's condition? Zone parts are
+// compared as categories, and a wildcard ('any') side matches an entry that has
+// no such zone (an attack has neither from nor to, for instance).
+function triggerMatches(trigger, owner, entry) {
+  if (trigger.action !== (entry.type || 'move')) return false
+  if (!subjectMatches(trigger.subject, owner, entry.cardId)) return false
+  if (trigger.from !== 'any' && zoneCategory(entry.from) !== trigger.from)
+    return false
+  if (trigger.to !== 'any' && zoneCategory(entry.to) !== trigger.to)
+    return false
+  return true
+}
+
+// After an entry is logged, play every triggered ability it matches. Events are
+// display-only here (Layer 4 attaches structured effects), so they never touch
+// the board or the solution -- they queue for the popup and the move log, keyed
+// to the entry's seq for undo.
+function fireTriggers(entry) {
+  for (const owner of Object.values(state.cards)) {
+    if (!owner.abilities?.length) continue
+    for (const a of owner.abilities) {
+      if (a.kind !== 'triggered') continue
+      if (!triggerMatches(a.trigger, owner, entry)) continue
+      state.events.push({
+        id: uid(),
+        seq: entry.seq,
+        cardId: owner.id, // the reacting card whose ability fired
+        triggeringId: entry.cardId, // the card whose action set it off
+        abilityId: a.id,
+        name: a.name || 'Ability',
+        text: a.text || a.name || 'Triggered ability',
+      })
+      // The reacting card's own effects resolve now, against the card that set
+      // the trigger off. Reversal rides on the causing entry's snapshots.
+      runEffects(a, owner.id, entry.cardId, entry)
+    }
   }
 }
 
@@ -498,6 +1516,9 @@ export function beginPickup(cardId) {
     ui.attacker = null
     ui.striker = null
     ui.moving = null
+    ui.activating = null
+    ui.shooting = null
+    ui.intercepting = null
   }
 }
 
@@ -545,13 +1566,335 @@ export function targetStrike(targetId) {
   const prevTapped = clone(state.tapped)
   // Strike deals strike damage / ability without automatically tapping the card
   const entry = { type: 'strike', cardId: strikerId, targetId, prevTapped }
-  if (state.recording) {
-    state.draft.push(entry)
-  } else if (state.mode === 'play') {
-    state.moves.push(entry)
-    state.checked = false
-  }
+  logEntry(entry)
+  if (combatActive()) resolveHit(strikerId, targetId, combatPower(strikerId), entry)
   ui.striker = null
+}
+
+// ---------- activated abilities ----------
+
+// Does a card satisfy an ability target's card-kind filter?
+function matchesFilter(card, filter) {
+  if (!card) return false
+  if (filter === 'unit') return isUnit(card)
+  if (filter === 'avatar') return isAvatar(card)
+  if (filter === 'site') return !!card.site
+  if (filter === 'aura') return !!card.aura
+  return true // 'any'
+}
+
+// Find an ability by id on a card or anything it carries -- a card gains the
+// abilities of whatever it is holding (a granted "assumed" card, say), so the
+// search walks the carry tree.
+function findAbility(cardId, abilityId) {
+  const seen = new Set()
+  const walk = (id) => {
+    if (!id || seen.has(id)) return null
+    seen.add(id)
+    const c = state.cards[id]
+    const a = c?.abilities?.find((x) => x.id === abilityId)
+    if (a) return a
+    for (const held of carriedBy(id)) {
+      const r = walk(held)
+      if (r) return r
+    }
+    return null
+  }
+  return walk(cardId)
+}
+
+// The activated abilities a card can use right now: its own plus those of every
+// card it carries (gained via a grant), filtered to the ones live in the card's
+// current zone category.
+export function activatedAbilities(cardId) {
+  // Silence (and Disable) strip non-basic abilities, so a silenced unit offers
+  // none -- including any it gained from a carried card.
+  if (isSilenced(cardId)) return []
+  const cat = cardZoneCategory(cardId)
+  const out = []
+  const seen = new Set()
+  const collect = (id) => {
+    if (!id || seen.has(id)) return
+    seen.add(id)
+    const c = state.cards[id]
+    for (const a of c?.abilities || []) {
+      if (a.kind === 'activated' && a.zones.includes(cat)) out.push(a)
+    }
+    for (const held of carriedBy(id)) collect(held)
+  }
+  collect(cardId)
+  return out
+}
+
+// The ability currently waiting for a target, if any.
+export function activeAbility() {
+  if (!ui.activating) return null
+  return findAbility(ui.activating.cardId, ui.activating.abilityId)
+}
+
+// Whether a click on this card would satisfy the armed ability's target: right
+// zone category, right card kind, and not the activator itself.
+export function canActivateTarget(targetId) {
+  const ability = activeAbility()
+  if (!ability) return false
+  if (targetId === ui.activating.cardId) return false
+  if (cardZoneCategory(targetId) !== ability.target.from) return false
+  return matchesFilter(state.cards[targetId], ability.target.filter)
+}
+
+// ---------- effect ops ----------
+
+const STRUCTURAL_OPS = new Set(['grantFrom', 'release'])
+
+const otherSide = (side) => (side === 'player' ? 'opponent' : 'player')
+
+// Which card an effect acts on: the activator by default, or the chosen target.
+const effectSubject = (who, cardId, targetId) =>
+  who === 'target' ? targetId : cardId
+
+// Snapshot the structural state (zones / carry / grants) onto the entry the
+// first time an effect on this entry needs to change it, so undo can put it all
+// back. Lazy and idempotent: plain moves that trigger nothing pay nothing, and
+// several effects on one entry share the one snapshot taken before any of them.
+function snapshotStructural(entry) {
+  if (!entry.prevZones) entry.prevZones = clone(state.zones)
+  if (!entry.prevCarry) entry.prevCarry = clone(state.carry)
+  if (!entry.prevGrants) entry.prevGrants = clone(state.grants)
+}
+
+// Grant: carry the target so the carrier gains its abilities, remembering where
+// it came from for release. A pseudo-pickup, so cycles are refused like a real
+// one.
+function grantFrom(carrierId, targetId, ability, entry) {
+  if (!targetId || state.carry[targetId] || wouldCycle(carrierId, targetId)) return
+  const from = zoneOf(targetId)
+  const arr = state.zones[from]
+  const i = arr?.indexOf(targetId) ?? -1
+  if (i === -1) return
+  snapshotStructural(entry)
+  arr.splice(i, 1)
+  state.carry[targetId] = carrierId
+  state.grants[targetId] = { carrierId, from, abilityId: ability.id }
+}
+
+// Release every grant a carrier holds, returning each card to where it was
+// taken from (its square may be gone; fall back to the pool rather than lose
+// it). Used by an explicit `release` effect and by the loseWhen watcher.
+function releaseGrant(carrierId, entry) {
+  for (const t of Object.keys(state.grants)) {
+    const g = state.grants[t]
+    if (g.carrierId !== carrierId) continue
+    snapshotStructural(entry)
+    delete state.carry[t]
+    delete state.grants[t]
+    const to = state.zones[g.from] ? g.from : 'pool'
+    state.zones[to].push(t)
+  }
+}
+
+// Run an ability's structured effects. Stat/tap/damage changes are reversed from
+// the entry's prev* snapshots; structural ops snapshot lazily via snapshotStructural.
+function runEffects(ability, cardId, targetId, entry) {
+  const card = state.cards[cardId]
+  const side = card?.enemy ? 'opponent' : 'player'
+  for (const eff of ability.effects || []) {
+    if (eff.op === 'adjustStat') {
+      const s =
+        eff.side === 'self' || !eff.side
+          ? side
+          : eff.side === 'enemy'
+          ? otherSide(side)
+          : eff.side
+      adjustStat(s, eff.key || 'mana', Number(eff.delta) || 0)
+    } else if (eff.op === 'tap') {
+      const t = effectSubject(eff.who, cardId, targetId)
+      if (t) state.tapped[t] = true
+    } else if (eff.op === 'dealDamage') {
+      const t = effectSubject(eff.who, cardId, targetId)
+      const amount = Number(eff.amount) || 1
+      // With combat on, an ability's damage resolves like a hit (Lethal-aware,
+      // life loss to avatars/sites, death); otherwise it just marks counters.
+      if (t && combatActive()) resolveHit(cardId, t, amount, entry)
+      else if (t) adjustDamage(t, amount)
+    } else if (eff.op === 'modifyStrength') {
+      const t = effectSubject(eff.who, cardId, targetId)
+      if (t) state.strengthMod[t] = (state.strengthMod[t] || 0) + (Number(eff.amount) || 0)
+    } else if (eff.op === 'grantKeyword') {
+      const t = effectSubject(eff.who, cardId, targetId)
+      if (t && eff.keyword) {
+        const list = state.grantedKeywords[t] || (state.grantedKeywords[t] = [])
+        if (!list.includes(eff.keyword)) list.push(eff.keyword)
+      }
+    } else if (eff.op === 'grantFrom') {
+      grantFrom(cardId, targetId, ability, entry)
+    } else if (eff.op === 'release') {
+      releaseGrant(cardId, entry)
+    }
+  }
+}
+
+// ---------- loseWhen: gained abilities fall away ----------
+
+// Does this entry meet a grant's loss condition for its carrier?
+function matchesLoseWhen(cond, carrierId, entry) {
+  if (!cond || cond === 'never') return false
+  if (cond === 'damaged')
+    return entry.type === 'damage' && entry.cardId === carrierId && (entry.amount || 0) > 0
+  if (entry.cardId !== carrierId) return false
+  if (cond === 'dies') return zoneCategory(entry.to) === 'cemetery'
+  if (cond === 'leaves-realm')
+    return zoneCategory(entry.from) === 'realm' && zoneCategory(entry.to) !== 'realm'
+  if (cond === 'taps') return isTapped(carrierId)
+  return false
+}
+
+// After each logged entry, drop any grant whose loss condition it just met.
+function checkGrantLoss(entry) {
+  const carriers = new Set(Object.values(state.grants).map((g) => g.carrierId))
+  for (const carrierId of carriers) {
+    const g = Object.values(state.grants).find((x) => x.carrierId === carrierId)
+    const ability = state.cards[carrierId]?.abilities?.find((a) => a.id === g.abilityId)
+    if (matchesLoseWhen(ability?.loseWhen, carrierId, entry)) {
+      releaseGrant(carrierId, entry)
+    }
+  }
+}
+
+// ---------- automatic survival ----------
+
+// A region a unit can't survive without the matching keyword, and what happens
+// when it can't: the void banishes, the sub-surface regions kill.
+const SURVIVAL = {
+  underwater: { keyword: 'submerge', verb: 'drowned', name: 'Drowned', banish: false },
+  underground: { keyword: 'burrowing', verb: 'was buried', name: 'Buried', banish: false },
+  void: { keyword: 'voidwalk', verb: 'was banished', name: 'Banished', banish: true },
+}
+
+// After a placement, any unit sitting in a region it can't survive (underwater
+// without Submerge, underground without Burrowing, the void without Voidwalk)
+// dies to its cemetery or is banished. A consequence of the causing entry, not a
+// solution step: snapshotted on that entry for undo, and announced as an event.
+function checkSurvival(entry) {
+  for (const u of boardUnits()) {
+    if (!zoneOf(u.id)?.startsWith('cell:')) continue
+    const rule = SURVIVAL[u.region]
+    if (!rule || hasKeyword(u.id, rule.keyword)) continue
+    const text = `${cardName(u.id)} ${rule.verb}.`
+    if (rule.banish) {
+      // Banishment removes from the game (not a death), so no Deathrite.
+      snapshotStructural(entry)
+      removeFromZones(state.zones, u.id)
+      state.zones[`banished:${sideOf(u.id)}`].push(u.id)
+      state.events.push({ id: uid(), seq: entry.seq, cardId: u.id, name: rule.name, text })
+    } else {
+      sendToCemetery(u.id, entry, rule.name, text)
+    }
+  }
+}
+
+// ---------- performing an activated ability ----------
+
+// Pay an ability's cost, run its effects, and log it. Cost and effects are
+// auto-applied and reversed on undo via the snapshots on the entry. Only card
+// moves count toward the solution, and an ability activation is one -- it logs
+// like an attack or strike, and check() compares it by cardId+abilityId+target.
+function performAbility(cardId, abilityId, targetId) {
+  const ability = findAbility(cardId, abilityId)
+  const card = state.cards[cardId]
+  if (!ability || !card) return
+  const entry = {
+    type: 'ability',
+    cardId,
+    abilityId,
+    targetId: targetId || null,
+    prevTapped: clone(state.tapped),
+    prevStats: clone(state.stats),
+    prevDamage: clone(state.damage),
+    prevStrengthMod: clone(state.strengthMod),
+    prevGrantedKeywords: clone(state.grantedKeywords),
+  }
+  const side = card.enemy ? 'opponent' : 'player'
+  if (ability.cost.mana) adjustStat(side, 'mana', -ability.cost.mana)
+  if (ability.cost.tap) state.tapped[cardId] = true
+  // Log first so the entry has its seq before effects run -- a damage effect can
+  // kill a minion and queue a death event, which undo keys off that seq.
+  logEntry(entry)
+  runEffects(ability, cardId, targetId, entry)
+}
+
+// ---------- damage as a logged action ----------
+
+// Mark or heal damage on a card. In editor setup it just sets the counter (part
+// of the start position); while recording or playing it is a logged, undoable,
+// gradeable action that can also set off "when damaged" triggers and loseWhen.
+export function markDamage(cardId, amount = 1) {
+  if (!state.recording && state.mode !== 'play') {
+    adjustDamage(cardId, amount)
+    return
+  }
+  const prevDamage = clone(state.damage)
+  adjustDamage(cardId, amount)
+  logEntry({ type: 'damage', cardId, amount, prevDamage })
+}
+
+// Charge: a unit summoned this turn may tap to pay for costs. Modelled as
+// tapping for +1 mana to its side, which any ability cost then draws on -- so it
+// reuses the mana stat rather than a bespoke payment flow.
+export function canCharge(cardId) {
+  return (
+    hasKeyword(cardId, 'charge') &&
+    !!state.summoned[cardId] &&
+    !isTapped(cardId) &&
+    cardZoneCategory(cardId) === 'realm'
+  )
+}
+
+export function chargeForMana(cardId) {
+  if (!canCharge(cardId)) return
+  const entry = {
+    type: 'charge',
+    cardId,
+    prevTapped: clone(state.tapped),
+    prevStats: clone(state.stats),
+  }
+  state.tapped[cardId] = true
+  adjustStat(sideOf(cardId), 'mana', 1)
+  logEntry(entry)
+}
+
+// Invoke an activated ability from the bar. One that needs a target arms the
+// target picker (like attack/strike); one that doesn't fires straight away.
+// Re-invoking the armed ability cancels it.
+export function beginActivate(cardId, abilityId) {
+  const ability = findAbility(cardId, abilityId)
+  if (!ability) return
+  if (
+    ui.activating &&
+    ui.activating.cardId === cardId &&
+    ui.activating.abilityId === abilityId
+  ) {
+    ui.activating = null
+    return
+  }
+  ui.attacker = null
+  ui.striker = null
+  ui.moving = null
+  ui.carrier = null
+  ui.shooting = null
+  ui.intercepting = null
+  if (ability.target.required) {
+    ui.activating = { cardId, abilityId }
+  } else {
+    ui.activating = null
+    performAbility(cardId, abilityId, null)
+  }
+}
+
+export function targetActivate(targetId) {
+  if (!ui.activating || !canActivateTarget(targetId)) return
+  const { cardId, abilityId } = ui.activating
+  ui.activating = null
+  performAbility(cardId, abilityId, targetId)
 }
 
 // Reverse a pickup: give the item back to its previous holder, or return it to
@@ -584,7 +1927,19 @@ function undoMove(m) {
 }
 
 function undoEntry(m) {
-  if (m.type === 'attack' || m.type === 'strike') return
+  // Attacks, strikes, damage marks and ability activations run no base zone
+  // change; their effects on stats/tap/damage/zones/carry are reversed from the
+  // snapshots in undo().
+  if (
+    m.type === 'attack' ||
+    m.type === 'strike' ||
+    m.type === 'shoot' ||
+    m.type === 'intercept' ||
+    m.type === 'ability' ||
+    m.type === 'damage' ||
+    m.type === 'charge'
+  )
+    return
   if (m.type === 'pickup') return undoPickup(m)
   if (m.type === 'drop') return undoDrop(m)
   undoMove(m)
@@ -598,7 +1953,20 @@ export function undo() {
   if (!list.length) return
   const m = list.pop()
   if (m.prevTapped) state.tapped = clone(m.prevTapped)
+  if (m.prevStats) state.stats = clone(m.prevStats)
+  if (m.prevDamage) state.damage = clone(m.prevDamage)
+  if (m.prevStrengthMod) state.strengthMod = clone(m.prevStrengthMod)
+  if (m.prevGrantedKeywords) state.grantedKeywords = clone(m.prevGrantedKeywords)
+  if (m.prevSummoned) state.summoned = clone(m.prevSummoned)
+  // Structural snapshots (present only when an effect/trigger changed the board)
+  // peel the effects off first, back to just after the base action; undoEntry
+  // then reverses the base action itself.
+  if (m.prevCarry) state.carry = clone(m.prevCarry)
+  if (m.prevGrants) state.grants = clone(m.prevGrants)
+  if (m.prevZones) state.zones = clone(m.prevZones)
   undoEntry(m)
+  // Drop the triggered events this move set off, so undo rewinds the story too.
+  if (m.seq != null) state.events = state.events.filter((e) => e.seq !== m.seq)
   state.checked = false
 }
 
@@ -627,9 +1995,11 @@ export function startRecording() {
     state.initialCarry = clone(state.carry)
     state.initialStats = clone(state.stats)
     state.initialTapped = clone(state.tapped)
+    state.initialDamage = clone(state.damage)
     state.solutions = []
   }
   state.draft = []
+  state.events = []
   state.recording = true
 }
 
@@ -640,6 +2010,12 @@ function restoreInitial() {
   }
   if (state.initialStats) state.stats = clone(state.initialStats)
   state.tapped = clone(state.initialTapped || {})
+  state.damage = clone(state.initialDamage || {})
+  // Grants and gameplay modifiers only exist mid-play; a start position has none.
+  state.grants = {}
+  state.strengthMod = {}
+  state.grantedKeywords = {}
+  state.summoned = {}
 }
 
 // `from`, `held` and `carrierId` are recorded for undo but deliberately not
@@ -650,7 +2026,14 @@ const sameEntry = (a, b) => {
   const type = a.type || 'move'
   if (type !== (b.type || 'move')) return false
   if (a.cardId !== b.cardId) return false
-  if (type === 'attack' || type === 'pickup') return a.targetId === b.targetId
+  if (type === 'ability')
+    return a.abilityId === b.abilityId && a.targetId === b.targetId
+  if (type === 'damage') return (a.amount || 0) === (b.amount || 0)
+  if (type === 'charge') return true
+  if (type === 'attack')
+    return a.targetId === b.targetId && (a.defenderId || null) === (b.defenderId || null)
+  if (type === 'pickup' || type === 'shoot' || type === 'intercept')
+    return a.targetId === b.targetId
   if (type === 'drop') return a.to === b.to
   return a.from === b.from && a.to === b.to
 }
@@ -658,15 +2041,35 @@ const sameEntry = (a, b) => {
 const sameLine = (a, b) =>
   a.length === b.length && a.every((m, i) => sameEntry(m, b[i]))
 
+// The undo-only fields on a logged entry -- snapshots and the seq tag. They are
+// consequences of the position, never compared by sameEntry(), and (prevZones
+// especially) large, so a committed solution line drops them.
+function stripBookkeeping(entry) {
+  const {
+    prevTapped,
+    prevStats,
+    prevDamage,
+    prevStrengthMod,
+    prevGrantedKeywords,
+    prevSummoned,
+    prevZones,
+    prevCarry,
+    prevGrants,
+    seq,
+    held,
+    ...rest
+  } = entry
+  return rest
+}
+
 export function stopRecording() {
   state.recording = false
-  if (
-    state.draft.length &&
-    !state.solutions.some((line) => sameLine(line, state.draft))
-  ) {
-    state.solutions.push(clone(state.draft))
+  const line = state.draft.map(stripBookkeeping)
+  if (line.length && !state.solutions.some((l) => sameLine(l, line))) {
+    state.solutions.push(clone(line))
   }
   state.draft = []
+  state.events = []
   restoreInitial()
 }
 
@@ -681,9 +2084,11 @@ export function enterPlay() {
     state.initialCarry = clone(state.carry)
     state.initialStats = clone(state.stats)
     state.initialTapped = clone(state.tapped)
+    state.initialDamage = clone(state.damage)
   }
   restoreInitial()
   state.moves = []
+  state.events = []
   state.checked = false
   state.firstWrong = -1
   state.mode = 'play'
@@ -691,6 +2096,10 @@ export function enterPlay() {
   ui.striker = null
   ui.moving = null
   ui.carrier = null
+  ui.activating = null
+  ui.shooting = null
+  ui.intercepting = null
+  ui.awaitingDefender = null
   ui.selected = null
 }
 
@@ -699,24 +2108,34 @@ export function enterEditor() {
   state.mode = 'editor'
   state.recording = false
   state.moves = []
+  state.events = []
   state.checked = false
   restoreInitial()
   ui.attacker = null
   ui.carrier = null
   ui.striker = null
   ui.moving = null
+  ui.activating = null
+  ui.shooting = null
+  ui.intercepting = null
+  ui.awaitingDefender = null
   ui.selected = null
 }
 
 export function resetPlay() {
   restoreInitial()
   state.moves = []
+  state.events = []
   state.checked = false
   state.firstWrong = -1
   ui.attacker = null
   ui.carrier = null
   ui.striker = null
   ui.moving = null
+  ui.activating = null
+  ui.shooting = null
+  ui.intercepting = null
+  ui.awaitingDefender = null
   ui.selected = null
 }
 
@@ -765,6 +2184,14 @@ export function toggleSite(cardId) {
     card.unit = false
     card.avatar = false
   }
+}
+
+// A water site's subsurface is underwater rather than underground; only
+// meaningful on a site card, but harmless to carry otherwise.
+export function toggleWater(cardId) {
+  const card = state.cards[cardId]
+  if (!card) return
+  card.water = !card.water
 }
 
 export function toggleUnit(cardId) {
@@ -998,9 +2425,14 @@ export function removeCard(cardId) {
   // with it into no zone at all.
   for (const itemId of carriedBy(cardId)) dropCarried(itemId)
   delete state.carry[cardId]
+  for (const t of Object.keys(state.grants)) {
+    if (t === cardId || state.grants[t].carrierId === cardId) delete state.grants[t]
+  }
   delete state.cards[cardId]
   delete state.tapped[cardId]
   if (state.initialTapped) delete state.initialTapped[cardId]
+  delete state.damage[cardId]
+  if (state.initialDamage) delete state.initialDamage[cardId]
   removeFromZones(state.zones, cardId)
   const involves = (m) => m.cardId === cardId || m.targetId === cardId
   state.solutions = state.solutions.map((line) =>
@@ -1023,9 +2455,12 @@ export function fingerprint() {
     name: state.puzzleName,
     desc: state.puzzleDesc,
     date: state.puzzleDate,
+    enforce: state.enforce,
+    combat: state.combat,
     cards: state.cards,
     initial: state.initialZones || state.zones,
     tapped: state.initialTapped || state.tapped,
+    damage: state.initialDamage || state.damage,
     carry: state.initialCarry || state.carry,
     stats: state.initialStats || state.stats,
     solutions: state.solutions,
@@ -1051,9 +2486,12 @@ export function serialize() {
     name: state.puzzleName || 'Untitled puzzle',
     desc: state.puzzleDesc || '',
     date: state.puzzleDate || null,
+    enforce: !!state.enforce,
+    combat: !!state.combat,
     cards: clone(state.cards),
     initial: clone(state.initialZones || state.zones),
     initialTapped: clone(state.initialTapped || state.tapped || {}),
+    initialDamage: clone(state.initialDamage || state.damage || {}),
     carry: clone(state.initialCarry || state.carry),
     stats: clone(state.initialStats || state.stats),
     solutions: clone(state.solutions),
@@ -1088,24 +2526,42 @@ export function loadPuzzle(data, { play = true } = {}) {
   state.puzzleName = data.name || ''
   state.puzzleDesc = data.desc || ''
   state.puzzleDate = data.date || ''
+  state.enforce = !!data.enforce
+  state.combat = !!data.combat
   state.cards = clone(data.cards || {})
   for (const c of Object.values(state.cards)) {
     c.unit = !!(c.unit || c.avatar)
     c.avatar = !!c.avatar
     c.site = !!c.site
     c.aura = !!c.aura
+    c.water = !!c.water
+    c.power = Number(c.power) || 0
+    c.life = Number(c.life) || 0
+    // Older puzzles predate abilities; normalize whatever is there (or nothing)
+    // into the full shape the editor and runtime read, so no nested field is
+    // ever undefined.
+    c.abilities = Array.isArray(c.abilities)
+      ? c.abilities.map(normalizeAbility)
+      : []
   }
   state.initialZones = normalizeZones(data.initial)
   state.initialCarry = { ...data.carry }
   state.carry = clone(state.initialCarry)
+  state.grants = {}
+  state.strengthMod = {}
+  state.grantedKeywords = {}
+  state.summoned = {}
   state.zones = restoreZones(state.initialZones)
   state.initialStats = normalizeStats(data.stats)
   state.stats = clone(state.initialStats)
   state.initialTapped = clone(data.initialTapped || {})
   state.tapped = clone(state.initialTapped)
+  state.initialDamage = clone(data.initialDamage || {})
+  state.damage = clone(state.initialDamage)
   state.solutions = clone(data.solutions || [])
   state.draft = []
   state.moves = []
+  state.events = []
   state.recording = false
   state.checked = false
   state.firstWrong = -1
@@ -1114,6 +2570,10 @@ export function loadPuzzle(data, { play = true } = {}) {
   ui.striker = null
   ui.moving = null
   ui.carrier = null
+  ui.activating = null
+  ui.shooting = null
+  ui.intercepting = null
+  ui.awaitingDefender = null
   ui.selected = null
   restoreAttempt()
   markSaved()
@@ -1124,18 +2584,27 @@ export function newPuzzle() {
   state.puzzleName = ''
   state.puzzleDesc = ''
   state.puzzleDate = ''
+  state.enforce = false
+  state.combat = false
   state.cards = {}
   state.zones = emptyZones()
   state.carry = {}
+  state.grants = {}
+  state.strengthMod = {}
+  state.grantedKeywords = {}
+  state.summoned = {}
   state.initialZones = null
   state.initialCarry = null
   state.stats = defaultStats()
   state.initialStats = null
   state.tapped = {}
   state.initialTapped = null
+  state.damage = {}
+  state.initialDamage = null
   state.solutions = []
   state.draft = []
   state.moves = []
+  state.events = []
   state.recording = false
   state.checked = false
   state.firstWrong = -1
@@ -1146,6 +2615,10 @@ export function newPuzzle() {
   ui.striker = null
   ui.moving = null
   ui.carrier = null
+  ui.activating = null
+  ui.shooting = null
+  ui.intercepting = null
+  ui.awaitingDefender = null
   ui.selected = null
   markSaved()
 }

@@ -6,12 +6,14 @@ import {
   targetAttack,
   targetPickup,
   targetStrike,
+  armedAttackLegal,
   selectCard,
   carriedBy,
   beginDrag,
   moveCard,
   zoneOf,
   zoneLabel,
+  regionOf,
   GRID_SIZE,
   GRID_COLS,
   GRID_ROWS,
@@ -119,6 +121,19 @@ const auraSelected = computed(
   () => !!ui.selected && !!state.cards[ui.selected]?.aura
 )
 
+// A square's regions are derived from its site: the surface is 'surface' with a
+// site and 'void' without one; the below band is 'underground'/'underwater' on a
+// land/water site and nothing at all with no site. Rendered as a tint + label so
+// the realm reads at a glance without a legend.
+const topRegion = (idx) => regionOf(idx, 'top')
+const botRegion = (idx) => regionOf(idx, 'bot')
+const REGION_ABBR = {
+  surface: 'surface',
+  void: 'void',
+  underground: 'underground',
+  underwater: 'underwater',
+}
+
 // Position each intersection node on the grid line crossing it marks.
 function nodeStyle(idx) {
   const row = Math.floor(idx / INTERSECTION_COLS)
@@ -156,7 +171,7 @@ function nodeStyle(idx) {
                 flipped: siteCard(n - 1).enemy,
                 selected: ui.selected === siteCard(n - 1).id,
                 targetable:
-                (ui.attacker && ui.attacker !== siteCard(n - 1).id) ||
+                armedAttackLegal(siteCard(n - 1).id) ||
                 (ui.striker && ui.striker !== siteCard(n - 1).id),
               }"
               :src="siteCard(n - 1).img"
@@ -190,6 +205,7 @@ function nodeStyle(idx) {
           <DropZone
             :zone="`cell:${n - 1}:top`"
             class="cell-half top"
+            :class="`region-${topRegion(n - 1)}`"
             :style="{ '--n': occupants(n - 1) || 1 }"
           >
             <CardToken
@@ -204,14 +220,22 @@ function nodeStyle(idx) {
               :card-id="id"
               :from="`cell:${n - 1}:bot`"
             />
+            <span v-if="topRegion(n - 1) === 'void'" class="region-tag" aria-hidden="true">
+              void
+            </span>
           </DropZone>
           <!-- Drop-only band: cards dropped here go underground but are
                displayed in the top area with the BELOW mark. -->
           <DropZone
             :zone="`cell:${n - 1}:bot`"
             class="cell-half bot"
+            :class="botRegion(n - 1) ? `region-${botRegion(n - 1)}` : 'region-none'"
             :keyboard="false"
-          />
+          >
+            <span v-if="botRegion(n - 1)" class="region-tag" aria-hidden="true">
+              {{ REGION_ABBR[botRegion(n - 1)] }}
+            </span>
+          </DropZone>
         </div>
       </div>
       <div class="intersections">
@@ -264,3 +288,41 @@ function nodeStyle(idx) {
     </div>
   </div>
 </template>
+
+<style scoped>
+/* Region tints, derived from the site on each square. Subtle insets so they
+   read as terrain without fighting the card art on top. Surface is the default
+   and gets no tint; only the below bands and the open void are coloured. */
+.cell-half.region-underground {
+  box-shadow: inset 0 0 0 100px rgba(122, 84, 45, 0.22);
+}
+.cell-half.region-underwater {
+  box-shadow: inset 0 0 0 100px rgba(44, 96, 160, 0.24);
+}
+.cell-half.region-void {
+  box-shadow: inset 0 0 0 100px rgba(90, 70, 150, 0.16);
+}
+/* A below band with no site above it is not a place at all -- you cannot go
+   below the open void -- so it is dimmed and hatched to read as unavailable. */
+.cell-half.region-none {
+  background-image: repeating-linear-gradient(
+    45deg,
+    rgba(255, 255, 255, 0.04) 0,
+    rgba(255, 255, 255, 0.04) 4px,
+    transparent 4px,
+    transparent 9px
+  );
+}
+.region-tag {
+  position: absolute;
+  right: 3px;
+  bottom: 2px;
+  z-index: 1;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.55);
+  pointer-events: none;
+  user-select: none;
+}
+</style>

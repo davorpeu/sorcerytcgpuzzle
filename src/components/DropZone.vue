@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref } from 'vue'
-import { moveCard, ui, zoneOf, zoneLabel } from '../store.js'
+import { moveCard, ui, zoneOf, zoneLabel, armedMoveLegal } from '../store.js'
 
 const props = defineProps({
   zone: { type: String, required: true },
@@ -17,6 +17,10 @@ const over = ref(false)
 // here. This is the touch-friendly counterpart to dragging, and the only way
 // to play on a tablet, where HTML5 drag-and-drop does not fire at all.
 const armed = computed(() => !!ui.selected && !ui.attacker && !ui.striker)
+
+// While a Move is armed under enforcement, mark whether this zone is reachable.
+// null means no highlight (not moving, or free-form puzzle).
+const moveLegal = computed(() => armedMoveLegal(props.zone))
 
 // Only armed zones are reachable by keyboard. Twenty squares plus the hands
 // and cemeteries would otherwise sit in the Tab order permanently, ahead of
@@ -43,7 +47,7 @@ function onClick() {
 <template>
   <div
     class="dropzone"
-    :class="{ over, armed }"
+    :class="{ over, armed, reachable: moveLegal === true, unreachable: moveLegal === false }"
     :role="tabbable ? 'button' : null"
     :tabindex="tabbable ? 0 : null"
     :aria-label="tabbable ? `Move here: ${zoneLabel(zone)}` : null"
@@ -57,3 +61,13 @@ function onClick() {
     <slot />
   </div>
 </template>
+
+<style scoped>
+/* Reachability hints while a Move is armed under enforcement. */
+.dropzone.reachable {
+  box-shadow: inset 0 0 0 2px rgba(80, 200, 120, 0.8);
+}
+.dropzone.unreachable {
+  opacity: 0.55;
+}
+</style>

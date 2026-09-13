@@ -4,6 +4,19 @@ import { state, zoneLabel, cardName } from '../store.js'
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
 
+// The label an ability entry shows: the ability's own name if it can still be
+// found on the card, else a neutral fallback (the card may have been edited).
+function abilityName(m) {
+  const a = state.cards[m.cardId]?.abilities?.find((x) => x.id === m.abilityId)
+  return a?.name || 'ability'
+}
+
+// Triggered events set off by this entry, matched on the seq stamped when it
+// was logged. Empty while browsing a recorded solution (events aren't stored).
+function eventsFor(m) {
+  return m.seq == null ? [] : state.events.filter((e) => e.seq === m.seq)
+}
+
 // Which recorded line the log is showing. It used to show the last one and
 // nothing else, so a puzzle with three solutions had two of them unreadable:
 // the sidebar listed their lengths but there was no way to see the moves.
@@ -73,10 +86,21 @@ function entryClass(i) {
         <template v-if="m.type === 'attack'">
           <strong>{{ cardName(m.cardId) }}</strong>
           ⚔ attacks <strong>{{ cardName(m.targetId) }}</strong>
+          <template v-if="m.defenderId">
+            — defended by <strong>{{ cardName(m.defenderId) }}</strong>
+          </template>
         </template>
         <template v-else-if="m.type === 'strike'">
           <strong>{{ cardName(m.cardId) }}</strong>
           💥 strikes <strong>{{ cardName(m.targetId) }}</strong>
+        </template>
+        <template v-else-if="m.type === 'shoot'">
+          <strong>{{ cardName(m.cardId) }}</strong>
+          ➶ shoots <strong>{{ cardName(m.targetId) }}</strong>
+        </template>
+        <template v-else-if="m.type === 'intercept'">
+          <strong>{{ cardName(m.cardId) }}</strong>
+          ⚔ intercepts <strong>{{ cardName(m.targetId) }}</strong>
         </template>
         <template v-else-if="m.type === 'pickup'">
           <strong>{{ cardName(m.cardId) }}</strong>
@@ -87,10 +111,31 @@ function entryClass(i) {
           ▽ drops <strong>{{ cardName(m.cardId) }}</strong>
           {{ zoneLabel(m.to) }}
         </template>
+        <template v-else-if="m.type === 'ability'">
+          <strong>{{ cardName(m.cardId) }}</strong>
+          ✧ activates <strong>{{ abilityName(m) }}</strong>
+          <template v-if="m.targetId">
+            → <strong>{{ cardName(m.targetId) }}</strong>
+          </template>
+        </template>
+        <template v-else-if="m.type === 'damage'">
+          <strong>{{ cardName(m.cardId) }}</strong>
+          {{ m.amount >= 0 ? '✷ takes' : '♥ heals' }}
+          {{ Math.abs(m.amount) }} damage
+        </template>
+        <template v-else-if="m.type === 'charge'">
+          <strong>{{ cardName(m.cardId) }}</strong>
+          ⚡ taps for mana (Charge)
+        </template>
         <template v-else>
           <strong>{{ cardName(m.cardId) }}</strong>
           {{ zoneLabel(m.from) }} → {{ zoneLabel(m.to) }}
         </template>
+        <ul v-if="eventsFor(m).length" class="entry-events">
+          <li v-for="ev in eventsFor(m)" :key="ev.id">
+            ✧ <strong>{{ cardName(ev.cardId) }}</strong> — {{ ev.name }}
+          </li>
+        </ul>
       </li>
     </ol>
     <p v-else class="hint">
@@ -102,3 +147,15 @@ function entryClass(i) {
     </p>
   </details>
 </template>
+
+<style scoped>
+.entry-events {
+  margin: 0.15rem 0 0;
+  padding-left: 1.1rem;
+  list-style: none;
+}
+.entry-events li {
+  font-size: 0.82rem;
+  opacity: 0.85;
+}
+</style>

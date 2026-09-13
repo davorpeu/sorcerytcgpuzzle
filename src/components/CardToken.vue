@@ -8,7 +8,21 @@ import {
   targetAttack,
   targetStrike,
   targetPickup,
+  targetActivate,
+  canActivateTarget,
+  armedAttackLegal,
+  armedShootLegal,
+  targetShoot,
+  armedInterceptLegal,
+  targetIntercept,
+  armedDefendLegal,
+  chooseDefender,
   carriedBy,
+  damageOf,
+  isSilenced,
+  isDisabled,
+  effectiveStrengthMod,
+  grantedKeywordsOf,
   beginDrag,
   moveCard,
   zoneOf,
@@ -23,16 +37,36 @@ const card = computed(() => state.cards[props.cardId])
 const isUnder = computed(() => props.from.endsWith(':bot'))
 const onBoard = computed(() => /^cell:\d+:(top|bot)$/.test(props.from))
 const tapped = computed(() => isTapped(props.cardId))
-const targetable = computed(
-  () =>
-    ((ui.attacker && ui.attacker !== props.cardId) ||
-      (ui.striker && ui.striker !== props.cardId)) &&
-    onBoard.value
-)
+// Strike is unenforced (any on-board target); attack highlights only legal
+// targets when the puzzle enforces (armedAttackLegal falls back to true otherwise).
+const targetable = computed(() => {
+  if (ui.awaitingDefender) return armedDefendLegal(props.cardId)
+  if (ui.shooting && ui.shooting !== props.cardId) return armedShootLegal(props.cardId)
+  if (ui.intercepting && ui.intercepting !== props.cardId)
+    return onBoard.value && armedInterceptLegal(props.cardId)
+  if (!onBoard.value) return false
+  if (ui.striker && ui.striker !== props.cardId) return true
+  return armedAttackLegal(props.cardId)
+})
 // Anything but the armed carrier itself can be picked up, wherever it sits --
 // a card in hand is as liftable as one on the board.
 const liftable = computed(() => ui.carrier && ui.carrier !== props.cardId)
+// Waiting for this card as an activated ability's target. Unlike attack/strike
+// the target can be anywhere the ability allows (a collection avatar, say), so
+// this is not gated to the board.
+const activatingTarget = computed(() => canActivateTarget(props.cardId))
 const carried = computed(() => carriedBy(props.cardId))
+const dmg = computed(() => damageOf(props.cardId))
+// Silence / Disable are gameplay states (from a passive aura), worth showing.
+const silenced = computed(() => isSilenced(props.cardId))
+const disabled = computed(() => isDisabled(props.cardId))
+// Only gameplay changes are shown: a net strength modifier and any keywords
+// granted in play (base strength/keywords are already on the card art).
+const strengthMod = computed(() => effectiveStrengthMod(props.cardId))
+const grantedKw = computed(() => grantedKeywordsOf(props.cardId))
+const signedStr = computed(() =>
+  strengthMod.value > 0 ? `+${strengthMod.value}` : `${strengthMod.value}`
+)
 // Only the formal Move action makes a click on a unit mean "move here". A
 // plain selection leaves other units clickable to select instead, so you can
 // switch between cards without moving. So clicking a unit standing in a square
@@ -60,9 +94,15 @@ const label = computed(() => {
   bits.push(c.enemy ? "opponent's" : 'yours')
   if (isUnder.value) bits.push('below')
   if (tapped.value) bits.push('tapped')
+  if (disabled.value) bits.push('disabled')
+  else if (silenced.value) bits.push('silenced')
+  if (strengthMod.value) bits.push(`strength ${signedStr.value}`)
+  if (grantedKw.value.length) bits.push(`gained ${grantedKw.value.join(', ')}`)
+  if (dmg.value) bits.push(`${dmg.value} damage`)
   if (carried.value.length) bits.push(`carrying ${carried.value.length}`)
   const what = bits.join(', ')
   if (targetable.value) return `${what}. Target of the armed action`
+  if (activatingTarget.value) return `${what}. Target of the ability`
   if (liftable.value) return `${what}. Pick up`
   if (ui.selected === props.cardId) return `${what}. Selected — activate to deselect`
   return `${what}. Select for actions`
@@ -81,9 +121,21 @@ function onDragStart(e) {
 // puts its actions in the bar above the storyline. The click must not reach
 // the zone underneath, or selecting would immediately move the card.
 function onClick() {
+  // A pending attack is waiting for a defender: a highlighted unit takes the job.
+  if (ui.awaitingDefender) {
+    if (armedDefendLegal(props.cardId)) chooseDefender(props.cardId)
+    return
+  }
   if (targetable.value) {
-    if (ui.attacker) targetAttack(props.cardId)
+    if (ui.shooting) targetShoot(props.cardId)
+    else if (ui.intercepting) targetIntercept(props.cardId)
+    else if (ui.attacker) targetAttack(props.cardId)
     else if (ui.striker) targetStrike(props.cardId)
+    return
+  }
+  // An armed activated ability lands its target here.
+  if (activatingTarget.value) {
+    targetActivate(props.cardId)
     return
   }
   // An armed pick-up lands here too, or the highlight would be a lie: this is
@@ -122,7 +174,7 @@ function onClick() {
       carrier: ui.carrier === cardId,
       striker: ui.striker === cardId,
       selected: ui.selected === cardId,
-      targetable,
+      targetable: targetable || activatingTarget,
       liftable,
       carrying: carried.length > 0,
     }"
@@ -157,6 +209,34 @@ function onClick() {
     <!-- Card type reads from the coloured ring around the art (see the type
          border rules in the stylesheet), not a text badge. -->
     <span v-if="isUnder" class="site-badge under-badge">BELOW</span>
+    <!-- Damage counters on the card, a small red pip so a wounded unit reads at
+         a glance. The count is also in the token's aria-label above. -->
+    <span v-if="dmg" class="dmg-badge" aria-hidden="true">{{ dmg }}</span>
+    <!-- Silence / Disable from a passive aura. Both are gameplay states, so
+         (unlike base keywords) they get a badge. -->
+    <span
+      v-if="disabled || silenced"
+      class="state-badge"
+      :class="disabled ? 'disabled-badge' : 'silenced-badge'"
+      :title="disabled ? 'Disabled' : 'Silenced'"
+      aria-hidden="true"
+    >
+      {{ disabled ? 'DIS' : 'SIL' }}
+    </span>
+    <!-- Gameplay strength change (base strength stays on the art). -->
+    <span
+      v-if="strengthMod"
+      class="str-badge"
+      :class="strengthMod > 0 ? 'up' : 'down'"
+      :title="`Strength ${signedStr}`"
+      aria-hidden="true"
+    >
+      {{ signedStr }}
+    </span>
+    <!-- Keywords gained in play, badged (base keywords are on the art). -->
+    <div v-if="grantedKw.length" class="kw-tags" aria-hidden="true">
+      <span v-for="kw in grantedKw" :key="kw" class="kw-tag">{{ kw }}</span>
+    </div>
 
     <!-- What this card is holding. A carried card is in no zone, so this is the
          only place it is drawn: at the holder's own size, fanned down and to
@@ -189,3 +269,87 @@ function onClick() {
     </div>
   </div>
 </template>
+
+<style scoped>
+.dmg-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  z-index: 3;
+  min-width: 1.1em;
+  padding: 0 0.25em;
+  border-radius: 999px;
+  background: #c0392b;
+  color: #fff;
+  font-size: 0.72em;
+  font-weight: 700;
+  line-height: 1.5;
+  text-align: center;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+.state-badge {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  z-index: 3;
+  padding: 0 0.25em;
+  border-radius: 3px;
+  font-size: 0.6em;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+.silenced-badge {
+  background: #7a5cc0;
+}
+.disabled-badge {
+  background: #555b66;
+}
+.str-badge {
+  position: absolute;
+  bottom: 2px;
+  left: 2px;
+  z-index: 3;
+  min-width: 1.1em;
+  padding: 0 0.25em;
+  border-radius: 3px;
+  font-size: 0.62em;
+  font-weight: 700;
+  color: #fff;
+  text-align: center;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+.str-badge.up {
+  background: #2e8b57;
+}
+.str-badge.down {
+  background: #b5652b;
+}
+.kw-tags {
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  z-index: 3;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 1px;
+  max-width: 80%;
+  pointer-events: none;
+}
+.kw-tag {
+  padding: 0 0.2em;
+  border-radius: 2px;
+  background: rgba(60, 120, 200, 0.9);
+  color: #fff;
+  font-size: 0.5em;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1.5;
+}
+</style>
+

@@ -27,6 +27,7 @@ import {
   loadDaily,
   localToday,
   endDrag,
+  declineDefender,
 } from './store.js'
 import Board from './components/Board.vue'
 import Hand from './components/Hand.vue'
@@ -36,6 +37,7 @@ import DropZone from './components/DropZone.vue'
 import CardToken from './components/CardToken.vue'
 import ThresholdIcon from './components/ThresholdIcon.vue'
 import CardActions from './components/CardActions.vue'
+import EventPopup from './components/EventPopup.vue'
 import StatsBar from './components/StatsBar.vue'
 import ArchiveCalendar from './components/ArchiveCalendar.vue'
 import { enableDragScroll } from './dragScroll.js'
@@ -213,6 +215,10 @@ function onKeyDown(e) {
     ui.carrier = null
     ui.striker = null
     ui.moving = null
+    ui.activating = null
+    ui.shooting = null
+    ui.intercepting = null
+    ui.awaitingDefender = null
     ui.selected = null
   }
 }
@@ -400,6 +406,23 @@ const result = computed(() => {
             <p class="hint">
               Players see this puzzle from this date. Leave empty to keep it
               unpublished.
+            </p>
+            <label
+              style="display: flex; align-items: center; gap: 0.4rem; margin: 0.4rem 0"
+            >
+              <input type="checkbox" v-model="state.enforce" />
+              Enforce movement &amp; attacks
+            </label>
+            <label
+              style="display: flex; align-items: center; gap: 0.4rem; margin: 0.4rem 0"
+            >
+              <input type="checkbox" v-model="state.combat" />
+              Resolve combat damage
+            </label>
+            <p class="hint">
+              Enforce = Move/Attack obey reach, regions and keywords. Resolve
+              combat = attack/strike/shoot deal Power damage and kill by Life or
+              Lethal. Both are independent; leave off for free-form puzzles.
             </p>
             <div class="btn-row">
               <button v-if="!state.recording" class="btn primary" @click="startRecording">
@@ -658,6 +681,17 @@ const result = computed(() => {
 
           <Board />
 
+          <!-- An attack paused for a defender. Highlighted units on the mat can
+               take the hit; or press to let the attack through. -->
+          <div
+            v-if="ui.awaitingDefender"
+            style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; padding: 0.4rem 0.6rem; margin-top: 0.4rem; border: 1px solid rgba(255, 200, 80, 0.5); border-radius: 8px; background: rgba(255, 200, 80, 0.12); font-size: 0.9rem"
+          >
+            <span>Attack: click a highlighted defender, or</span>
+            <button class="btn small primary" @click="declineDefender">Attack directly</button>
+            <button class="btn small" @click="ui.awaitingDefender = null">Cancel</button>
+          </div>
+
           <!-- The one thing that still wants to be near the mat. It exists
                only while a card is selected, so it costs the grid height
                only while you are actually using it. -->
@@ -674,6 +708,8 @@ const result = computed(() => {
         </div>
       </main>
     </div>
+
+    <EventPopup />
 
     <div v-if="previewCard" class="card-preview-overlay">
       <img
