@@ -118,6 +118,12 @@ function entryClass(i) {
             → <strong>{{ cardName(m.targetId) }}</strong>
           </template>
         </template>
+        <template v-else-if="m.type === 'cast'">
+          ✦ casts <strong>{{ cardName(m.cardId) }}</strong>
+          <template v-if="m.targetId">
+            → <strong>{{ cardName(m.targetId) }}</strong>
+          </template>
+        </template>
         <template v-else-if="m.type === 'damage'">
           <strong>{{ cardName(m.cardId) }}</strong>
           {{ m.amount >= 0 ? '✷ takes' : '♥ heals' }}
@@ -132,8 +138,9 @@ function entryClass(i) {
           {{ zoneLabel(m.from) }} → {{ zoneLabel(m.to) }}
         </template>
         <ul v-if="eventsFor(m).length" class="entry-events">
-          <li v-for="ev in eventsFor(m)" :key="ev.id">
+          <li v-for="ev in eventsFor(m)" :key="ev.id" :class="{ ignored: ev.status === 'ignored' }">
             ✧ <strong>{{ cardName(ev.cardId) }}</strong> — {{ ev.name }}
+            <em v-if="ev.status === 'ignored'"> (ignored — source left the realm)</em>
           </li>
         </ul>
       </li>
@@ -157,5 +164,13 @@ function entryClass(i) {
 .entry-events li {
   font-size: 0.82rem;
   opacity: 0.85;
+}
+.entry-events li.ignored {
+  opacity: 0.5;
+  text-decoration: line-through;
+}
+.entry-events li.ignored em {
+  text-decoration: none;
+  font-style: italic;
 }
 </style>

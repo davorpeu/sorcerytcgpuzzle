@@ -1,6 +1,22 @@
 <script setup>
 import { computed, ref } from 'vue'
-import { moveCard, ui, zoneOf, zoneLabel, armedMoveLegal } from '../store.js'
+import {
+  moveCard,
+  ui,
+  state,
+  zoneOf,
+  zoneLabel,
+  armedMoveLegal,
+  activeGridPick,
+  canPickGridSquare,
+  pickGridSquare,
+  activeStoryGridPick,
+  canStoryPickSquare,
+  pickStorySquare,
+  spellInHand,
+  canAffordCast,
+  castByDrop,
+} from '../store.js'
 
 const props = defineProps({
   zone: { type: String, required: true },
@@ -22,32 +38,66 @@ const armed = computed(() => !!ui.selected && !ui.attacker && !ui.striker)
 // null means no highlight (not moving, or free-form puzzle).
 const moveLegal = computed(() => armedMoveLegal(props.zone))
 
+// While a grid-target ability is armed, this zone's square may be a legal pick.
+const square = computed(() => {
+  const m = /^cell:(\d+):/.exec(props.zone)
+  return m ? Number(m[1]) : null
+})
+const gridPickable = computed(
+  () =>
+    square.value != null &&
+    ((!!activeGridPick() && canPickGridSquare(square.value)) ||
+      (!!activeStoryGridPick() && canStoryPickSquare(square.value)))
+)
+
 // Only armed zones are reachable by keyboard. Twenty squares plus the hands
 // and cemeteries would otherwise sit in the Tab order permanently, ahead of
 // every real control, and do nothing when activated.
 const tabbable = computed(() => armed.value && props.keyboard)
 
+// A spell dragged/clicked from hand into play is cast at the drop location (a
+// magic targets what's there; a permanent enters the realm), not moved. In the
+// editor spellInHand is false, so setting up a puzzle still just places cards.
+// An unaffordable spell does nothing rather than moving in for free.
+function castOrMove(cardId, from, zone) {
+  if (/^hand:/.test(from || '') && spellInHand(cardId)) {
+    if (canAffordCast(cardId)) castByDrop(cardId, zone)
+    return
+  }
+  moveCard(cardId, from, zone)
+}
+
 function onDrop(e) {
   over.value = false
   try {
     const d = JSON.parse(e.dataTransfer.getData('text/plain'))
-    if (d && d.cardId) moveCard(d.cardId, d.from, props.zone)
+    if (d && d.cardId) castOrMove(d.cardId, d.from, props.zone)
   } catch {
     /* not a card drag */
   }
 }
 
 function onClick() {
+  // A paused trigger picking a grid square takes the click.
+  if (activeStoryGridPick()) {
+    if (canStoryPickSquare(square.value)) pickStorySquare(square.value)
+    return
+  }
+  // A grid-target ability being aimed takes the click as a square pick.
+  if (activeGridPick()) {
+    if (gridPickable.value) pickGridSquare(square.value)
+    return
+  }
   if (!armed.value) return
   const from = zoneOf(ui.selected)
-  if (from) moveCard(ui.selected, from, props.zone)
+  if (from) castOrMove(ui.selected, from, props.zone)
 }
 </script>
 
 <template>
   <div
     class="dropzone"
-    :class="{ over, armed, reachable: moveLegal === true, unreachable: moveLegal === false }"
+    :class="{ over, armed, reachable: moveLegal === true, unreachable: moveLegal === false, 'grid-pick': gridPickable }"
     :role="tabbable ? 'button' : null"
     :tabindex="tabbable ? 0 : null"
     :aria-label="tabbable ? `Move here: ${zoneLabel(zone)}` : null"
@@ -69,5 +119,24 @@ function onClick() {
 }
 .dropzone.unreachable {
   opacity: 0.55;
+}
+.dropzone.grid-pick {
+  box-shadow: inset 0 0 0 2px rgba(200, 120, 255, 0.85);
+  cursor: pointer;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .dropzone.grid-pick {
+    animation: grid-pick-pulse 1.1s ease-in-out infinite;
+  }
+}
+@keyframes grid-pick-pulse {
+  0%,
+  100% {
+    box-shadow: inset 0 0 0 2px rgba(200, 120, 255, 0.5);
+  }
+  50% {
+    box-shadow: inset 0 0 0 3px rgba(200, 120, 255, 1),
+      0 0 10px 2px rgba(200, 120, 255, 0.6);
+  }
 }
 </style>

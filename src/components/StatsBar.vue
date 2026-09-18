@@ -1,11 +1,21 @@
 <script setup>
 import { computed } from 'vue'
-import { state, adjustStat, ELEMENTS } from '../store.js'
+import {
+  state,
+  adjustStat,
+  ELEMENTS,
+  effectiveThreshold,
+  providedMana,
+  gainManaFromSites,
+} from '../store.js'
 import ThresholdIcon from './ThresholdIcon.vue'
 
 const props = defineProps({
   side: { type: String, required: true }, // 'player' | 'opponent'
 })
+
+// Mana the side's sites would yield; the button collects it into the pool.
+const siteMana = computed(() => providedMana(props.side))
 
 const life = computed(() => state.stats[props.side].life)
 // 0 life is not "dead" in Sorcery but Death's Door, a state of its own. The
@@ -64,6 +74,15 @@ const step = (what, delta) =>
       >
         +
       </button>
+      <button
+        v-if="siteMana"
+        class="stat-btn site-mana"
+        :title="`Gain ${siteMana} mana from ${who} sites`"
+        :aria-label="`Gain ${siteMana} mana from ${who} sites`"
+        @click="gainManaFromSites(side)"
+      >
+        +{{ siteMana }}⛰
+      </button>
     </div>
     <div class="threshold-grid">
       <div v-for="el in ELEMENTS" :key="el" class="stat-row" :title="el">
@@ -75,7 +94,12 @@ const step = (what, delta) =>
         >
           −
         </button>
-        <span class="stat-value">{{ state.stats[side][el] }}</span>
+        <span
+          class="stat-value"
+          :title="`${effectiveThreshold(side, el)} ${el} affinity (base ${state.stats[side][el]} + sites ${effectiveThreshold(side, el) - state.stats[side][el]})`"
+        >
+          {{ effectiveThreshold(side, el) }}
+        </span>
         <button
           class="stat-btn"
           :aria-label="step(`${el} threshold`, 1)"

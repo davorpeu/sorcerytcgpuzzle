@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
-import { state } from '../store.js'
+import { state, ui } from '../store.js'
 
 // `state.events` is the whole session's fired events (the move log reads it too),
 // so the popup tracks how many it has already shown and plays only the new ones.
@@ -15,9 +15,10 @@ watch(
 
 // The popup is the player-facing "the ability plays" moment, so it only shows
 // while playing. During recording the author still sees each trigger listed in
-// the move log, without a modal interrupting every step.
+// the move log, without a modal interrupting every step. It also steps aside
+// while the storyline is paused for a target choice -- that needs the board.
 const pending = computed(() =>
-  state.mode === 'play' ? state.events.slice(seen.value) : []
+  state.mode === 'play' && !ui.storyChoice ? state.events.slice(seen.value) : []
 )
 
 function dismiss() {
@@ -38,7 +39,7 @@ function dismiss() {
       <div class="event-head">
         {{ pending.length > 1 ? `${pending.length} abilities triggered` : 'Ability triggered' }}
       </div>
-      <div v-for="ev in pending" :key="ev.id" class="event-item">
+      <div v-for="ev in pending" :key="ev.id" class="event-item" :class="{ ignored: ev.status === 'ignored' }">
         <img
           v-if="state.cards[ev.cardId]?.img"
           :src="state.cards[ev.cardId].img"
@@ -50,6 +51,9 @@ function dismiss() {
             {{ state.cards[ev.cardId]?.name }} — {{ ev.name }}
           </div>
           <div v-if="ev.text" class="event-text">{{ ev.text }}</div>
+          <div v-if="ev.status === 'ignored'" class="event-src">
+            ignored — its source left the realm
+          </div>
           <div
             v-if="ev.triggeringId && ev.triggeringId !== ev.cardId"
             class="event-src"
@@ -103,6 +107,12 @@ function dismiss() {
   gap: 0.6rem;
   align-items: flex-start;
   margin-bottom: 0.6rem;
+}
+.event-item.ignored {
+  opacity: 0.5;
+}
+.event-item.ignored .event-name {
+  text-decoration: line-through;
 }
 .event-art {
   width: 64px;

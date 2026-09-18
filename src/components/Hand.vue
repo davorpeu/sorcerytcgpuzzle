@@ -56,5 +56,27 @@ defineProps({
         />
       </DropZone>
     </div>
+    <div class="zone-block grave-block">
+      <div class="zone-title">Atlas</div>
+      <DropZone :zone="`atlas:${side}`" class="grave">
+        <CardToken
+          v-for="id in state.zones[`atlas:${side}`]"
+          :key="id"
+          :card-id="id"
+          :from="`atlas:${side}`"
+        />
+      </DropZone>
+    </div>
+    <div class="zone-block grave-block">
+      <div class="zone-title">Spellbook</div>
+      <DropZone :zone="`spellbook:${side}`" class="grave">
+        <CardToken
+          v-for="id in state.zones[`spellbook:${side}`]"
+          :key="id"
+          :card-id="id"
+          :from="`spellbook:${side}`"
+        />
+      </DropZone>
+    </div>
   </div>
 </template>

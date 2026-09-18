@@ -28,6 +28,7 @@ import {
   localToday,
   endDrag,
   declineDefender,
+  declineStoryChoice,
 } from './store.js'
 import Board from './components/Board.vue'
 import Hand from './components/Hand.vue'
@@ -38,6 +39,7 @@ import CardToken from './components/CardToken.vue'
 import ThresholdIcon from './components/ThresholdIcon.vue'
 import CardActions from './components/CardActions.vue'
 import EventPopup from './components/EventPopup.vue'
+import FxOverlay from './components/FxOverlay.vue'
 import StatsBar from './components/StatsBar.vue'
 import ArchiveCalendar from './components/ArchiveCalendar.vue'
 import { enableDragScroll } from './dragScroll.js'
@@ -640,17 +642,6 @@ const result = computed(() => {
              one. The cemetery and collection wrap onto their own row here
              because the column is too narrow for three zones abreast. -->
         <div class="your-side">
-          <div class="zone-block storyline-block">
-            <div class="zone-title">Storyline (shared)</div>
-            <DropZone zone="storyline" class="storyline">
-              <CardToken
-                v-for="id in state.zones.storyline"
-                :key="id"
-                :card-id="id"
-                from="storyline"
-              />
-            </DropZone>
-          </div>
           <Hand side="player" />
         </div>
       </aside>
@@ -681,17 +672,6 @@ const result = computed(() => {
 
           <Board />
 
-          <!-- An attack paused for a defender. Highlighted units on the mat can
-               take the hit; or press to let the attack through. -->
-          <div
-            v-if="ui.awaitingDefender"
-            style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; padding: 0.4rem 0.6rem; margin-top: 0.4rem; border: 1px solid rgba(255, 200, 80, 0.5); border-radius: 8px; background: rgba(255, 200, 80, 0.12); font-size: 0.9rem"
-          >
-            <span>Attack: click a highlighted defender, or</span>
-            <button class="btn small primary" @click="declineDefender">Attack directly</button>
-            <button class="btn small" @click="ui.awaitingDefender = null">Cancel</button>
-          </div>
-
           <!-- The one thing that still wants to be near the mat. It exists
                only while a card is selected, so it costs the grid height
                only while you are actually using it. -->
@@ -704,12 +684,56 @@ const result = computed(() => {
         <div class="stat-rail">
           <StatsBar side="opponent" />
 
+          <!-- The storyline is the shared resolution space, so it sits between
+               the two players' rails. Triggered-ability and defender prompts
+               resolve here too, rather than under the mat. -->
+          <div class="zone-block storyline-block">
+            <div class="zone-title">Storyline (shared)</div>
+            <DropZone zone="storyline" class="storyline">
+              <CardToken
+                v-for="id in state.zones.storyline"
+                :key="id"
+                :card-id="id"
+                from="storyline"
+              />
+            </DropZone>
+
+            <!-- An attack paused for a defender. Highlighted units on the mat
+                 can take the hit; or press to let the attack through. -->
+            <div
+              v-if="ui.awaitingDefender"
+              class="story-prompt defender-prompt"
+            >
+              <span>Attack: click a highlighted defender, or</span>
+              <button class="btn small primary" @click="declineDefender">Attack directly</button>
+              <button class="btn small" @click="ui.awaitingDefender = null">Cancel</button>
+            </div>
+
+            <!-- A triggered ability is waiting for the player to pick its target.
+                 An optional ("may") one can also be declined. -->
+            <div v-if="ui.storyChoice" class="story-prompt trigger-prompt">
+              <span>
+                <strong>{{ state.cards[ui.storyChoice.ownerId]?.name }}</strong>
+                — {{ ui.storyChoice.ability.name || 'triggered ability' }}:
+                {{ ui.storyChoice.ability.target.prompt || 'click a highlighted target.' }}
+              </span>
+              <button
+                v-if="ui.storyChoice.ability.target.optional"
+                class="btn small"
+                @click="declineStoryChoice"
+              >
+                No target
+              </button>
+            </div>
+          </div>
+
           <StatsBar side="player" />
         </div>
       </main>
     </div>
 
     <EventPopup />
+    <FxOverlay />
 
     <div v-if="previewCard" class="card-preview-overlay">
       <img

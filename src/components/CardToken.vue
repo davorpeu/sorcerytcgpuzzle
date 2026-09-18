@@ -17,12 +17,18 @@ import {
   targetIntercept,
   armedDefendLegal,
   chooseDefender,
+  activeGridPick,
+  canPickGridSquare,
+  pickGridSquare,
+  isStoryChoiceTarget,
+  resolveStoryChoice,
   carriedBy,
   damageOf,
   isSilenced,
   isDisabled,
   effectiveStrengthMod,
   grantedKeywordsOf,
+  cardTypeLabel,
   beginDrag,
   moveCard,
   zoneOf,
@@ -40,6 +46,7 @@ const tapped = computed(() => isTapped(props.cardId))
 // Strike is unenforced (any on-board target); attack highlights only legal
 // targets when the puzzle enforces (armedAttackLegal falls back to true otherwise).
 const targetable = computed(() => {
+  if (ui.storyChoice) return isStoryChoiceTarget(props.cardId)
   if (ui.awaitingDefender) return armedDefendLegal(props.cardId)
   if (ui.shooting && ui.shooting !== props.cardId) return armedShootLegal(props.cardId)
   if (ui.intercepting && ui.intercepting !== props.cardId)
@@ -67,6 +74,11 @@ const grantedKw = computed(() => grantedKeywordsOf(props.cardId))
 const signedStr = computed(() =>
   strengthMod.value > 0 ? `+${strengthMod.value}` : `${strengthMod.value}`
 )
+// Short type tag (MIN/SITE/…) so a card's assigned type reads on the board.
+const typeTag = computed(() => {
+  const t = cardTypeLabel(props.cardId)
+  return t === 'Minion' ? 'MIN' : t === 'Avatar' ? 'AVA' : t.slice(0, 4).toUpperCase()
+})
 // Only the formal Move action makes a click on a unit mean "move here". A
 // plain selection leaves other units clickable to select instead, so you can
 // switch between cards without moving. So clicking a unit standing in a square
@@ -78,6 +90,17 @@ const signedStr = computed(() =>
 const moveArmed = computed(
   () => ui.moving && ui.moving !== props.cardId && onBoard.value
 )
+
+// Transient cosmetic flash for this card. Only kinds whose card stays put are
+// drawn on the token; cast/death cards leave for the cemetery, so those play as
+// a positional burst in FxOverlay instead. Driven off the self-expiring ui.fx.
+const FLASH_KINDS = ['genesis', 'impact']
+const fxKind = computed(() => {
+  const hit = ui.fx.find(
+    (f) => f.cardId === props.cardId && FLASH_KINDS.includes(f.kind)
+  )
+  return hit ? hit.kind : null
+})
 
 // What a screen reader hears. The badges printed on the face -- unit, site,
 // tapped, below, whose card it is -- are all colour and glyph, so they have
@@ -121,6 +144,17 @@ function onDragStart(e) {
 // puts its actions in the bar above the storyline. The click must not reach
 // the zone underneath, or selecting would immediately move the card.
 function onClick() {
+  // The storyline is paused for a trigger to pick a target.
+  if (ui.storyChoice) {
+    if (isStoryChoiceTarget(props.cardId)) resolveStoryChoice(props.cardId)
+    return
+  }
+  // Aiming a grid ability: clicking a unit picks its square.
+  if (activeGridPick()) {
+    const m = /^cell:(\d+):/.exec(props.from)
+    if (m && canPickGridSquare(Number(m[1]))) pickGridSquare(Number(m[1]))
+    return
+  }
   // A pending attack is waiting for a defender: a highlighted unit takes the job.
   if (ui.awaitingDefender) {
     if (armedDefendLegal(props.cardId)) chooseDefender(props.cardId)
@@ -163,7 +197,9 @@ function onClick() {
   <div
     v-if="card"
     class="card-token"
+    :data-card-id="cardId"
     :class="{
+      [`fx-${fxKind}`]: fxKind,
       'is-site': card.site,
       'is-aura': card.aura,
       'is-unit': card.unit,
@@ -209,6 +245,7 @@ function onClick() {
     <!-- Card type reads from the coloured ring around the art (see the type
          border rules in the stylesheet), not a text badge. -->
     <span v-if="isUnder" class="site-badge under-badge">BELOW</span>
+    <span class="type-tag" aria-hidden="true">{{ typeTag }}</span>
     <!-- Damage counters on the card, a small red pip so a wounded unit reads at
          a glance. The count is also in the token's aria-label above. -->
     <span v-if="dmg" class="dmg-badge" aria-hidden="true">{{ dmg }}</span>
@@ -302,6 +339,22 @@ function onClick() {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
   pointer-events: none;
 }
+.type-tag {
+  position: absolute;
+  bottom: 1px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  padding: 0 0.25em;
+  border-radius: 3px 3px 0 0;
+  background: rgba(0, 0, 0, 0.55);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 0.5em;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  line-height: 1.4;
+  pointer-events: none;
+}
 .silenced-badge {
   background: #7a5cc0;
 }
@@ -350,6 +403,53 @@ function onClick() {
   font-weight: 700;
   letter-spacing: 0.02em;
   line-height: 1.5;
+}
+
+/* Transient event flashes. Each kind runs once when its ui.fx entry appears;
+   the entry self-expires, dropping the class. Suppressed for reduced motion.
+   (cast/death play in FxOverlay, since those cards move to the cemetery.) */
+@media (prefers-reduced-motion: no-preference) {
+  .card-token.fx-genesis {
+    animation: fx-genesis 0.8s ease-out;
+  }
+  .card-token.fx-impact {
+    animation: fx-impact 0.5s ease-out;
+  }
+}
+/* Bright flash-in as a card enters the realm. */
+@keyframes fx-genesis {
+  0% {
+    transform: scale(0.7);
+    box-shadow: 0 0 24px 10px rgba(120, 220, 150, 0.95);
+    filter: brightness(1.8);
+  }
+  60% {
+    transform: scale(1.06);
+    box-shadow: 0 0 12px 4px rgba(120, 220, 150, 0.5);
+    filter: brightness(1.15);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(120, 220, 150, 0);
+    filter: none;
+  }
+}
+/* Quick jolt when a projectile lands. */
+@keyframes fx-impact {
+  0% {
+    box-shadow: 0 0 0 0 rgba(255, 90, 60, 0);
+  }
+  25% {
+    box-shadow: 0 0 16px 6px rgba(255, 90, 60, 0.9);
+    transform: translateX(2px);
+  }
+  50% {
+    transform: translateX(-2px);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 90, 60, 0);
+    transform: translateX(0);
+  }
 }
 </style>
 

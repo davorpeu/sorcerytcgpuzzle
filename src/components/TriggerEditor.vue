@@ -8,6 +8,13 @@ import {
   TRIGGER_SUBJECTS,
   LOSE_CONDITIONS,
   TARGET_FILTERS,
+  TARGET_MODES,
+  GRID_ORIGINS,
+  GRID_SHAPES,
+  TARGET_WITHIN,
+  TARGET_SIDES,
+  LOCATION_REFS,
+  AMOUNT_REFS,
   EFFECT_OPS,
   KEYWORDS,
   PASSIVE_SCOPES,
@@ -25,6 +32,12 @@ import {
 const STAT_SIDES = ['self', 'enemy', 'player', 'opponent']
 const STAT_KEYS = ['mana', 'life', 'air', 'earth', 'fire', 'water']
 const WHO = ['self', 'target']
+const ELEMENTS = ['air', 'earth', 'fire', 'water']
+
+// Friendlier labels for the terse effect-param option values.
+const amountRefLabel = (r) => (r === 'carriedCount' ? 'carried count' : 'a number')
+const locationLabel = (l) =>
+  l === 'targetLocation' ? "the target's square" : "the source's square"
 
 // A modal over the whole app rather than an inline panel: the action bar lives
 // pinned under the mat where a tall form would shove the board off-screen, and
@@ -125,6 +138,51 @@ function onRemove(ability) {
               </select>
             </label>
           </div>
+
+          <!-- By default a trigger's effects auto-hit the triggering card / its
+               grid area. Optionally let the player pick a target when it fires. -->
+          <label class="chk">
+            <input v-model="ability.target.required" type="checkbox" />
+            Player picks a target when this fires
+          </label>
+          <label v-if="ability.target.required" class="chk">
+            <input v-model="ability.target.optional" type="checkbox" />
+            Optional (&ldquo;may&rdquo;) — the player can pick no target
+          </label>
+          <p v-if="ability.target.required && ability.target.optional" class="hint">
+            If declined, effects with <em>who: target</em> are skipped; the
+            ability's other effects (e.g. draw a card) still resolve.
+          </p>
+          <div v-if="ability.target.required" class="grid2">
+            <label class="field-label">
+              Target zone
+              <select v-model="ability.target.from" class="text-input">
+                <option v-for="z in ZONE_CATEGORIES" :key="z" :value="z">{{ z }}</option>
+              </select>
+            </label>
+            <label class="field-label">
+              Target kind
+              <select v-model="ability.target.filter" class="text-input">
+                <option v-for="f in TARGET_FILTERS" :key="f" :value="f">{{ f }}</option>
+              </select>
+            </label>
+            <label class="field-label">
+              Within
+              <select v-model="ability.target.within" class="text-input">
+                <option v-for="w in TARGET_WITHIN" :key="w" :value="w">{{ w }}</option>
+              </select>
+            </label>
+            <label class="field-label">
+              Side
+              <select v-model="ability.target.side" class="text-input">
+                <option v-for="s in TARGET_SIDES" :key="s" :value="s">{{ s }}</option>
+              </select>
+            </label>
+            <p class="hint span2">
+              Effects with <em>who: target</em> then act on the picked card
+              (measured from this card's location).
+            </p>
+          </div>
         </template>
 
         <!-- Passive: a continuous, board-derived modifier applied to a scope. -->
@@ -201,32 +259,90 @@ function onRemove(ability) {
             </label>
           </div>
 
-          <label class="chk">
-            <input v-model="ability.target.required" type="checkbox" />
-            Requires a target
+          <label class="field-label">
+            Target mode
+            <select v-model="ability.target.mode" class="text-input">
+              <option v-for="m in TARGET_MODES" :key="m" :value="m">{{ m }}</option>
+            </select>
           </label>
-          <div v-if="ability.target.required" class="grid2">
-            <label class="field-label">
-              Target zone
-              <select v-model="ability.target.from" class="text-input">
-                <option v-for="z in ZONE_CATEGORIES" :key="z" :value="z">{{ z }}</option>
-              </select>
+
+          <!-- Card mode: pick a card in a zone. -->
+          <template v-if="ability.target.mode === 'card'">
+            <label class="chk">
+              <input v-model="ability.target.required" type="checkbox" />
+              Requires a target
             </label>
-            <label class="field-label">
-              Target kind
-              <select v-model="ability.target.filter" class="text-input">
-                <option v-for="f in TARGET_FILTERS" :key="f" :value="f">{{ f }}</option>
-              </select>
+            <label v-if="ability.target.required" class="chk">
+              <input v-model="ability.target.optional" type="checkbox" />
+              Optional (&ldquo;may&rdquo;) — the player can resolve with no target
             </label>
-            <label class="field-label span2">
-              Prompt
-              <input
-                v-model="ability.target.prompt"
-                class="text-input"
-                placeholder="Choose an Avatar to become"
-              />
+            <div v-if="ability.target.required" class="grid2">
+              <label class="field-label">
+                Target zone
+                <select v-model="ability.target.from" class="text-input">
+                  <option v-for="z in ZONE_CATEGORIES" :key="z" :value="z">{{ z }}</option>
+                </select>
+              </label>
+              <label class="field-label">
+                Target kind
+                <select v-model="ability.target.filter" class="text-input">
+                  <option v-for="f in TARGET_FILTERS" :key="f" :value="f">{{ f }}</option>
+                </select>
+              </label>
+              <label class="field-label">
+                Within
+                <select v-model="ability.target.within" class="text-input">
+                  <option v-for="w in TARGET_WITHIN" :key="w" :value="w">{{ w }}</option>
+                </select>
+              </label>
+              <label class="field-label">
+                Side
+                <select v-model="ability.target.side" class="text-input">
+                  <option v-for="s in TARGET_SIDES" :key="s" :value="s">{{ s }}</option>
+                </select>
+              </label>
+              <label class="field-label span2">
+                Prompt
+                <input v-model="ability.target.prompt" class="text-input" placeholder="Choose an Avatar to become" />
+              </label>
+            </div>
+          </template>
+
+          <!-- Grid mode: a location/area on the realm. -->
+          <template v-else>
+            <div class="grid2">
+              <label class="field-label">
+                Origin
+                <select v-model="ability.target.origin" class="text-input">
+                  <option v-for="o in GRID_ORIGINS" :key="o" :value="o">{{ o }}</option>
+                </select>
+              </label>
+              <label v-if="ability.target.origin === 'pick'" class="field-label">
+                Range (steps)
+                <input v-model.number="ability.target.range" type="number" min="0" class="text-input" />
+              </label>
+              <label class="field-label">
+                Area
+                <select v-model="ability.target.shape" class="text-input">
+                  <option v-for="s in GRID_SHAPES" :key="s" :value="s">{{ s }}</option>
+                </select>
+              </label>
+              <label class="field-label">
+                Affects
+                <select v-model="ability.target.filter" class="text-input">
+                  <option v-for="f in TARGET_FILTERS" :key="f" :value="f">{{ f }}</option>
+                </select>
+              </label>
+            </div>
+            <label class="chk">
+              <input v-model="ability.target.throughLayers" type="checkbox" />
+              Square-based (through both layers / under-site)
             </label>
-          </div>
+            <p class="hint">
+              Grid effects (e.g. <em>gridDamage</em>) hit the resolved area. Add
+              one below.
+            </p>
+          </template>
 
           <label class="field-label">
             Gained abilities lost when
@@ -264,10 +380,36 @@ function onRemove(ability) {
             </select>
           </template>
           <template v-else-if="eff.op === 'dealDamage'">
+            <span class="hint effect-note">to</span>
             <select v-model="eff.who" class="text-input">
               <option v-for="w in WHO" :key="w" :value="w">{{ w }}</option>
             </select>
-            <input v-model.number="eff.amount" type="number" min="1" class="text-input num" />
+            <span class="hint effect-note">amount</span>
+            <select v-model="eff.amountRef" class="text-input">
+              <option v-for="r in AMOUNT_REFS" :key="r" :value="r">{{ amountRefLabel(r) }}</option>
+            </select>
+            <input v-if="eff.amountRef !== 'carriedCount'" v-model.number="eff.amount" type="number" class="text-input num" />
+          </template>
+          <template v-else-if="eff.op === 'gridDamage'">
+            <span class="hint effect-note">to grid area, amount</span>
+            <select v-model="eff.amountRef" class="text-input">
+              <option v-for="r in AMOUNT_REFS" :key="r" :value="r">{{ amountRefLabel(r) }}</option>
+            </select>
+            <input v-if="eff.amountRef !== 'carriedCount'" v-model.number="eff.amount" type="number" class="text-input num" />
+          </template>
+          <template v-else-if="eff.op === 'move'">
+            <select v-model="eff.who" class="text-input">
+              <option v-for="w in WHO" :key="w" :value="w">{{ w }}</option>
+            </select>
+            <span class="hint effect-note">to</span>
+            <select v-model="eff.to" class="text-input">
+              <option v-for="l in LOCATION_REFS" :key="l" :value="l">{{ locationLabel(l) }}</option>
+            </select>
+          </template>
+          <template v-else-if="['destroy','banish','bounce','heal'].includes(eff.op)">
+            <select v-model="eff.who" class="text-input">
+              <option v-for="w in WHO" :key="w" :value="w">{{ w }}</option>
+            </select>
           </template>
           <template v-else-if="eff.op === 'modifyStrength'">
             <select v-model="eff.who" class="text-input">

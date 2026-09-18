@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import TriggerEditor from './TriggerEditor.vue'
+import ThresholdIcon from './ThresholdIcon.vue'
 import {
   state,
   ui,
@@ -11,19 +12,28 @@ import {
   toggleSite,
   toggleWater,
   toggleAura,
+  toggleArtifact,
+  toggleMonument,
+  toggleLanceToken,
+  toggleMagic,
+  canAffordCast,
+  beginCast,
+  isSpell,
+  cardTypeLabel,
   toggleUnit,
   toggleAvatar,
-  toggleTap,
-  isTapped,
   isUnit,
+  isAvatar,
+  drawFromDeck,
+  deckSize,
   toggleControl,
   beginMove,
   beginAttack,
-  beginStrike,
   beginShoot,
-  beginIntercept,
   beginPickup,
   beginActivate,
+  canDeclineActivate,
+  declineActivate,
   activatedAbilities,
   effectiveRanged,
   canCharge,
@@ -43,18 +53,41 @@ const zone = computed(() => (ui.selected ? zoneOf(ui.selected) : null))
 const onBoard = computed(() => /^cell:\d+:(top|bot)$/.test(zone.value || ''))
 const editing = computed(() => state.mode === 'editor' && !state.recording)
 const inPool = computed(() => zone.value === 'pool')
-// Attacking and striking are realm actions: only a unit in play fights, and it
-// can only hit something at its own location. A card sitting in a hand,
-// cemetery or the storyline has nothing to attack, so the buttons stay hidden
-// until it is a unit on the board.
+const inHand = computed(() => zone.value?.startsWith('hand:'))
+// What a card provides (mana / elemental affinity), for the header line.
+const providesText = computed(() => {
+  const c = card.value
+  if (!c) return ''
+  const bits = []
+  if (c.manaProvided) bits.push(`${c.manaProvided}◇`)
+  for (const el of ['air', 'earth', 'fire', 'water']) {
+    if (c.affinity?.[el]) bits.push(`${c.affinity[el]} ${el}`)
+  }
+  return bits.join(', ')
+})
+// A magic being aimed (its cast is armed, waiting for a target/square).
+const casting = computed(
+  () => ui.activating?.cast && ui.activating.cardId === ui.selected
+)
+// Attacking is a realm action: only a unit in play fights, and it can only hit
+// something within reach. A card sitting in a hand, cemetery or the storyline
+// has nothing to attack, so the button stays hidden until it is a unit on the
+// board.
 const canFight = computed(() => onBoard.value && isUnit(ui.selected))
 const moving = computed(() => ui.moving && ui.moving === ui.selected)
 const attacking = computed(() => ui.attacker && ui.attacker === ui.selected)
-const striking = computed(() => ui.striker && ui.striker === ui.selected)
 const shooting = computed(() => ui.shooting && ui.shooting === ui.selected)
 // A unit shows Shoot only when it actually has range (from a Ranged keyword).
 const canShoot = computed(() => onBoard.value && effectiveRanged(ui.selected) > 0)
-const intercepting = computed(() => ui.intercepting && ui.intercepting === ui.selected)
+// An avatar on the board can draw from its owner's decks (its basic action, in
+// place of tapping). The buttons appear only when the matching deck has cards.
+const isAvatarInPlay = computed(() => onBoard.value && isAvatar(ui.selected))
+const atlasCount = computed(() =>
+  isAvatarInPlay.value ? deckSize(ui.selected, 'atlas') : 0
+)
+const spellbookCount = computed(() =>
+  isAvatarInPlay.value ? deckSize(ui.selected, 'spellbook') : 0
+)
 // Charge: only offered while logging, for a unit summoned this turn.
 const chargeable = computed(() => logging.value && !!ui.selected && canCharge(ui.selected))
 const carrying = computed(() => ui.carrier && ui.carrier === ui.selected)
@@ -114,7 +147,7 @@ function onRemove() {
 
 <template>
   <div
-    v-if="card && !ui.awaitingDefender"
+    v-if="card && !ui.awaitingDefender && !ui.storyChoice"
     class="card-actions"
     role="toolbar"
     :aria-label="`Actions for ${card.name}`"
@@ -124,16 +157,38 @@ function onRemove() {
          to the full width of the bar. The card itself is highlighted on the
          board, and its name is right here, so the thumbnail earned nothing. -->
     <div class="ca-id">
-      <div class="ca-name">{{ card.name }}</div>
+      <div class="ca-name">
+        {{ card.name }}
+        <span
+          style="font-size: 0.72em; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.7; margin-left: 0.4em; padding: 0.05em 0.4em; border: 1px solid currentColor; border-radius: 4px"
+        >{{ cardTypeLabel(ui.selected) }}</span>
+      </div>
       <div class="ca-zone">
         {{ zone ? zoneLabel(zone) : 'Nowhere' }}
         <template v-if="heldBy">
           · carried by {{ state.cards[heldBy]?.name }}
         </template>
+        <template v-if="providesText"> · provides {{ providesText }}</template>
       </div>
     </div>
 
     <div class="ca-buttons">
+      <button
+        v-if="inHand && card.magic && (state.mode === 'play' || state.recording)"
+        class="btn primary"
+        :class="{ active: casting }"
+        :disabled="!canAffordCast(ui.selected) && !casting"
+        :title="canAffordCast(ui.selected) ? 'Cast this magic spell' : 'Not enough mana or threshold to cast'"
+        @click="beginCast(ui.selected)"
+      >
+        {{ casting ? 'Cancel cast' : '✦ Cast' }}
+      </button>
+      <p
+        v-if="inHand && !card.magic && isSpell(ui.selected) && (state.mode === 'play' || state.recording)"
+        class="ca-hint"
+      >
+        Drag onto the board (or click a square) to cast.
+      </p>
       <button
         v-for="a in liveAbilities"
         :key="a.id"
@@ -158,15 +213,7 @@ function onRemove() {
         :class="{ danger: attacking }"
         @click="beginAttack(ui.selected)"
       >
-        {{ attacking ? ' Cancel attack' : ' Attack' }}
-      </button>
-      <button
-        v-if="canFight"
-        class="btn"
-        :class="{ danger: striking }"
-        @click="beginStrike(ui.selected)"
-      >
-        {{ striking ? ' Cancel strike' : ' Strike' }}
+        {{ attacking ? 'Cancel attack' : '⚔ Attack & Move' }}
       </button>
       <button
         v-if="canShoot"
@@ -176,21 +223,23 @@ function onRemove() {
       >
         {{ shooting ? 'Cancel shoot' : `➶ Shoot (${effectiveRanged(ui.selected)})` }}
       </button>
+      <!-- Draw is an avatar's basic action (in place of the tap it replaces):
+           pull the top site or spell into its owner's hand. -->
       <button
-        v-if="canFight"
+        v-if="isAvatarInPlay && atlasCount"
         class="btn"
-        :class="{ danger: intercepting }"
-        @click="beginIntercept(ui.selected)"
+        title="Draw the top site from your Atlas into your hand"
+        @click="drawFromDeck(ui.selected, 'atlas')"
       >
-        {{ intercepting ? 'Cancel intercept' : '⚔ Intercept' }}
+        ⛰ Draw site ({{ atlasCount }})
       </button>
       <button
-        v-if="onBoard"
+        v-if="isAvatarInPlay && spellbookCount"
         class="btn"
-        :class="{ active: isTapped(ui.selected) }"
-        @click="toggleTap(ui.selected)"
+        title="Draw the top spell from your Spellbook into your hand"
+        @click="drawFromDeck(ui.selected, 'spellbook')"
       >
-        {{ isTapped(ui.selected) ? '⟳ Untap' : '↷ Tap' }}
+        ✦ Draw spell ({{ spellbookCount }})
       </button>
       <button
         v-if="chargeable"
@@ -199,9 +248,6 @@ function onRemove() {
         @click="chargeForMana(ui.selected)"
       >
         ⚡ Charge for mana
-      </button>
-      <button v-if="onBoard" class="btn" @click="markDamage(ui.selected, 1)">
-        ✷ Damage
       </button>
       <button
         v-if="onBoard && damageOf(ui.selected)"
@@ -286,6 +332,41 @@ function onRemove() {
       >
         ✦ {{ card.aura ? 'Not an aura' : 'Mark as aura' }}
       </button>
+      <button
+        v-if="editing && inPool"
+        class="btn"
+        :class="{ active: card.artifact }"
+        @click="toggleArtifact(ui.selected)"
+      >
+        ⚱ {{ card.artifact ? 'Not an artifact' : 'Mark as artifact' }}
+      </button>
+      <button
+        v-if="editing && inPool"
+        class="btn"
+        :class="{ active: card.magic }"
+        title="A magic spell: cast from hand, resolves, then goes to the cemetery"
+        @click="toggleMagic(ui.selected)"
+      >
+        ✦ {{ card.magic ? 'Not a magic' : 'Mark as magic' }}
+      </button>
+      <button
+        v-if="editing && card.artifact"
+        class="btn"
+        :class="{ active: card.monument }"
+        :title="card.monument ? 'A monument can be targeted but not carried' : 'Make this artifact a Monument (cannot be carried)'"
+        @click="toggleMonument(ui.selected)"
+      >
+        ▤ {{ card.monument ? 'Not a monument' : 'Monument' }}
+      </button>
+      <button
+        v-if="editing && card.artifact"
+        class="btn"
+        :class="{ active: card.lanceToken }"
+        title="Lance token: +1 strike damage and first strike; breaks when its carrier strikes"
+        @click="toggleLanceToken(ui.selected)"
+      >
+        ⌇ {{ card.lanceToken ? 'Not a lance' : 'Lance token' }}
+      </button>
       <button v-if="editing" class="btn danger" @click="onRemove">
         × Remove card
       </button>
@@ -301,20 +382,72 @@ function onRemove() {
         Power
         <input v-model.number="card.power" type="number" class="text-input" style="width: 3.4rem" />
       </label>
-      <label v-if="!card.avatar" style="display: flex; align-items: center; gap: 0.3rem">
-        Life
-        <input v-model.number="card.life" type="number" class="text-input" style="width: 3.4rem" />
+      <label
+        v-if="!card.avatar"
+        style="display: flex; align-items: center; gap: 0.3rem"
+        title="Defense power (toughness). Leave blank to use Power."
+      >
+        Defense
+        <input
+          v-model.number="card.defense"
+          type="number"
+          placeholder="=Power"
+          class="text-input"
+          style="width: 3.4rem"
+        />
+      </label>
+    </div>
+
+    <!-- Cast cost, authored on the spell card: mana (spent) + elemental
+         thresholds (required). Shown in the editor for spell cards. -->
+    <div
+      v-if="editing && isSpell(ui.selected) && card.spellCost"
+      style="display: flex; flex-wrap: wrap; gap: 0.6rem; padding: 0.35rem 0.1rem; font-size: 0.85rem"
+    >
+      <label style="display: flex; align-items: center; gap: 0.3rem">
+        Cost ◇
+        <input v-model.number="card.spellCost.mana" type="number" min="0" title="mana cost" class="text-input" style="width: 3rem" />
+      </label>
+      <label v-for="el in ['air','earth','fire','water']" :key="el" style="display: flex; align-items: center; gap: 0.25rem">
+        <ThresholdIcon :element="el" />
+        <input v-model.number="card.spellCost[el]" type="number" min="0" :title="`${el} threshold required`" class="text-input" style="width: 2.6rem" />
+      </label>
+    </div>
+
+    <!-- What this card provides in play: mana + elemental affinity. Only sites
+         provide these, so the row is shown only once a card is marked a site.
+         Affinity is the threshold spells are checked against. -->
+    <div
+      v-if="editing && card.site && card.affinity"
+      style="display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; padding: 0.35rem 0.1rem; font-size: 0.85rem"
+    >
+      <span style="opacity: 0.7">Provides</span>
+      <label style="display: flex; align-items: center; gap: 0.3rem">
+        ◇
+        <input v-model.number="card.manaProvided" type="number" min="0" title="mana provided" class="text-input" style="width: 3rem" />
+      </label>
+      <label v-for="el in ['air','earth','fire','water']" :key="el" style="display: flex; align-items: center; gap: 0.25rem">
+        <ThresholdIcon :element="el" />
+        <input v-model.number="card.affinity[el]" type="number" min="0" :title="`${el} affinity provided`" class="text-input" style="width: 2.6rem" />
       </label>
     </div>
 
     <p v-if="armingAbility" class="ca-hint">
       {{ armingAbility.target.prompt || 'Now click the target for this ability.' }}
     </p>
+    <!-- An optional ("may") target can be resolved with nothing chosen: the
+         target effects are skipped, the rest of the ability still runs. -->
+    <button
+      v-if="canDeclineActivate()"
+      class="btn small"
+      title="Resolve this ability without choosing a target"
+      @click="declineActivate"
+    >
+      Resolve without target
+    </button>
     <p v-else-if="moving" class="ca-hint">Now click a destination square to move and tap this minion.</p>
-    <p v-else-if="attacking" class="ca-hint">Now click the minion or site to attack (will tap).</p>
-    <p v-else-if="striking" class="ca-hint">Now click the minion or site to strike (does not tap).</p>
+    <p v-else-if="attacking" class="ca-hint">Now click the target — this unit moves to it, attacks, and taps.</p>
     <p v-else-if="shooting" class="ca-hint">Now click a unit in line of fire to shoot it (taps).</p>
-    <p v-else-if="intercepting" class="ca-hint">Now click an enemy unit to intercept and fight it (taps).</p>
     <p v-else-if="carrying" class="ca-hint">
       Now click the card to pick up — it travels with this one until dropped.
     </p>
