@@ -701,17 +701,39 @@ function unitsOnSquare(idx) {
   return out
 }
 
+// Units on a square that sit in a given region (surface / void / underground /
+// underwater). Region is a (square, layer) property, so this picks the layer(s)
+// whose region matches -- used to keep a ranged shot within one region.
+function unitsInRegionOnSquare(idx, region) {
+  const out = []
+  for (const layer of ['top', 'bot']) {
+    if (regionOf(idx, layer) !== region) continue
+    for (const id of state.zones[`cell:${idx}:${layer}`] || []) {
+      if (isUnit(id)) out.push(id)
+    }
+  }
+  return out
+}
+
 // Units a Ranged shooter can hit: fire a projectile down each of the four
-// cardinal lines up to its range, striking the first non-Stealth unit in the
-// line (which then blocks it). Stealth units are transparent -- projectiles
-// can't hit them and pass through. When several units share the first
-// reachable square, all of them are choosable (the square still blocks the
-// line beyond it), so the player targets a specific unit in the stack.
+// cardinal lines up to its range. The shot stays in the shooter's own region --
+// no firing across surface/subsurface/void. Any unit (friend or foe) occupying a
+// square blocks the line, so the shot reaches only the first occupied square in
+// each direction; every unit on that square is choosable. The exception is the
+// shooter's own square: allies standing with the shooter are optional targets
+// (you may shoot them, but they don't block). Stealth units are transparent --
+// they can't be hit and don't block.
 export function rangedTargets(shooterId) {
   const set = new Set()
   const range = effectiveRanged(shooterId)
   const start = nodeOf(shooterId)
   if (!range || isDisabled(shooterId) || !start) return set
+  const region = regionOf(start.sq, start.layer)
+  // Origin square: same-region units standing with the shooter are optional
+  // targets and never block the outgoing shot.
+  for (const id of state.zones[`cell:${start.sq}:${start.layer}`] || []) {
+    if (id !== shooterId && isUnit(id) && !isStealthed(id)) set.add(id)
+  }
   const row = Math.floor(start.sq / GRID_COLS)
   const col = start.sq % GRID_COLS
   for (const [dr, dc] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
@@ -719,12 +741,12 @@ export function rangedTargets(shooterId) {
       const r = row + dr * step
       const c = col + dc * step
       if (r < 0 || r >= GRID_ROWS || c < 0 || c >= GRID_COLS) break
-      const hittable = unitsOnSquare(r * GRID_COLS + c).filter(
+      const units = unitsInRegionOnSquare(r * GRID_COLS + c, region).filter(
         (id) => !isStealthed(id)
       )
-      if (hittable.length) {
-        for (const id of hittable) set.add(id)
-        break // the projectile stops at the first square it can hit
+      if (units.length) {
+        for (const id of units) set.add(id)
+        break // any unit (friend or foe) blocks the line beyond this square
       }
     }
   }
