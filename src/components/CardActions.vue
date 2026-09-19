@@ -17,6 +17,7 @@ import {
   toggleLanceToken,
   toggleMagic,
   canAffordCast,
+  canCastFrom,
   beginCast,
   isSpell,
   cardTypeLabel,
@@ -43,6 +44,7 @@ import {
   dropCarried,
   carriedBy,
   carrierOf,
+  isTapped,
 } from '../store.js'
 
 // Everything a card can do lives here rather than on postage-stamp buttons
@@ -73,12 +75,17 @@ const casting = computed(
 // something within reach. A card sitting in a hand, cemetery or the storyline
 // has nothing to attack, so the button stays hidden until it is a unit on the
 // board.
-const canFight = computed(() => onBoard.value && isUnit(ui.selected))
+// A tapped unit has spent its action for the turn: it can no longer move,
+// attack, shoot, or use activated abilities. This applies to minions and
+// avatars alike (both report as units).
+const tapped = computed(() => !!ui.selected && isTapped(ui.selected))
+const canFight = computed(() => onBoard.value && isUnit(ui.selected) && !tapped.value)
+const canMove = computed(() => onBoard.value && isUnit(ui.selected) && !tapped.value)
 const moving = computed(() => ui.moving && ui.moving === ui.selected)
 const attacking = computed(() => ui.attacker && ui.attacker === ui.selected)
 const shooting = computed(() => ui.shooting && ui.shooting === ui.selected)
 // A unit shows Shoot only when it actually has range (from a Ranged keyword).
-const canShoot = computed(() => onBoard.value && effectiveRanged(ui.selected) > 0)
+const canShoot = computed(() => onBoard.value && effectiveRanged(ui.selected) > 0 && !tapped.value)
 // An avatar on the board can draw from its owner's decks (its basic action, in
 // place of tapping). The buttons appear only when the matching deck has cards.
 const isAvatarInPlay = computed(() => onBoard.value && isAvatar(ui.selected))
@@ -114,9 +121,14 @@ const abilityCount = computed(() => card.value?.abilities?.length || 0)
 
 // Activated abilities usable right now: only while a solution is being recorded
 // or played (they log a move), and only those live in the card's current zone.
-const liveAbilities = computed(() =>
-  logging.value && ui.selected ? activatedAbilities(ui.selected) : []
-)
+const liveAbilities = computed(() => {
+  if (!logging.value || !ui.selected) return []
+  const abilities = activatedAbilities(ui.selected)
+  // A tapped card can't pay a tap cost, so abilities that require tapping drop
+  // out; abilities with no tap cost stay usable even while tapped.
+  if (tapped.value) return abilities.filter((a) => !a.cost?.tap)
+  return abilities
+})
 const isArming = (abilityId) =>
   ui.activating &&
   ui.activating.cardId === ui.selected &&
@@ -177,8 +189,14 @@ function onRemove() {
         v-if="inHand && card.magic && (state.mode === 'play' || state.recording)"
         class="btn primary"
         :class="{ active: casting }"
-        :disabled="!canAffordCast(ui.selected) && !casting"
-        :title="canAffordCast(ui.selected) ? 'Cast this magic spell' : 'Not enough mana or threshold to cast'"
+        :disabled="(!canAffordCast(ui.selected) || !canCastFrom(ui.selected)) && !casting"
+        :title="
+          !canAffordCast(ui.selected)
+            ? 'Not enough mana or threshold to cast'
+            : !canCastFrom(ui.selected)
+              ? 'Needs a caster (Avatar or Spellcaster unit) in play'
+              : 'Cast this magic spell'
+        "
         @click="beginCast(ui.selected)"
       >
         {{ casting ? 'Cancel cast' : '✦ Cast' }}
@@ -200,7 +218,7 @@ function onRemove() {
         ✧ {{ isArming(a.id) ? `Cancel ${a.name || 'ability'}` : abilityLabel(a) }}
       </button>
       <button
-        v-if="onBoard && isUnit(ui.selected)"
+        v-if="canMove"
         class="btn"
         :class="{ active: moving }"
         @click="beginMove(ui.selected)"

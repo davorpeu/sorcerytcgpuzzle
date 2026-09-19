@@ -22,7 +22,7 @@ import {
   newPuzzle,
   removeSolutionLine,
   loadPuzzle,
-  serialize,
+  serializePortable,
   shareLink,
   loadDaily,
   localToday,
@@ -116,8 +116,11 @@ async function onLoadDaily() {
   if (!(await loadDaily())) flash('No puzzle has been released yet.')
 }
 
-function onExport() {
-  const data = serialize()
+async function onExport() {
+  // Re-inline any Media-Library/remote images so the file is self-contained and
+  // portable; this fetches each image, so let the user know it may take a beat.
+  flash('Preparing export…')
+  const data = await serializePortable()
   const blob = new Blob([JSON.stringify(data, null, 2)], {
     type: 'application/json',
   })
@@ -141,16 +144,19 @@ async function onImport(e) {
 }
 
 async function onCopyLink() {
-  const url = shareLink()
+  const link = shareLink()
   try {
-    await navigator.clipboard.writeText(url)
-    flash(
-      url.length > 8000
-        ? 'Link copied — but it is very long. For big puzzles, export JSON and host it, then link with ?src=<url>.'
-        : 'Share link copied to clipboard.'
-    )
+    await navigator.clipboard.writeText(link.url)
+    if (!link.oversized) {
+      flash('Share link copied to clipboard.')
+    } else if (config.apiUrl && config.canEdit) {
+      // On the server the puzzle can get a short ?puzzle= link once it's saved.
+      flash('This puzzle is large. Save it, then Copy Link for a short ?puzzle= link.')
+    } else {
+      flash('Link copied — but it is very long. For big puzzles, export JSON and host it, then link with ?src=<url>.')
+    }
   } catch {
-    window.prompt('Copy this link:', url)
+    window.prompt('Copy this link:', link.url)
   }
 }
 

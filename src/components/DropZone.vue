@@ -14,7 +14,7 @@ import {
   canStoryPickSquare,
   pickStorySquare,
   spellInHand,
-  canAffordCast,
+  canCast,
   castByDrop,
 } from '../store.js'
 
@@ -61,7 +61,7 @@ const tabbable = computed(() => armed.value && props.keyboard)
 // An unaffordable spell does nothing rather than moving in for free.
 function castOrMove(cardId, from, zone) {
   if (/^hand:/.test(from || '') && spellInHand(cardId)) {
-    if (canAffordCast(cardId)) castByDrop(cardId, zone)
+    if (canCast(cardId)) castByDrop(cardId, zone)
     return
   }
   moveCard(cardId, from, zone)

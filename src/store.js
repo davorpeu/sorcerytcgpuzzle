@@ -17,6 +17,16 @@ const FORMAT_VERSION = 1
 // tracked in the browser's localStorage.
 export const MAX_TRIES = 3
 
+// A self-contained ?data= share link longer than this is treated as too big to
+// be usable (browsers and chat apps truncate very long URLs). Past it we steer
+// the user to a short ?puzzle= link or hosted JSON instead.
+const MAX_DATA_URL = 8000
+
+// WordPress puzzle ids are numeric post IDs; localStorage ids are random
+// strings. A numeric id means the puzzle lives on the server, so a share link
+// can point at it directly instead of inlining the whole puzzle.
+const isServerId = (id) => /^\d+$/.test(String(id))
+
 // Deep clone via JSON, not structuredClone: everything cloned here is reactive
 // (a Vue reactive() Proxy or a subtree of one), and structuredClone throws
 // DataCloneError on Proxy objects. The whole puzzle state is JSON-safe by design
@@ -2603,8 +2613,30 @@ export function spellInHand(cardId) {
   return isSpell(cardId) && casting() && cardZoneCategory(cardId) === 'hand'
 }
 
+// Only Magic and Aura cards are true spells that need a caster; minions are
+// summoned and artifacts conjured with mana alone.
+function needsCaster(cardId) {
+  const c = state.cards[cardId]
+  return !!(c && (c.magic || c.aura))
+}
+
+// A caster is your Avatar or a unit with the Spellcaster keyword, in the realm.
+export function hasCaster(side) {
+  return unitsOnBoard(side === 'opponent').some(
+    (u) => isAvatar(u.card) || effectiveKeywords(u.id).has('spellcaster')
+  )
+}
+
+// Whether the caster's side can legally cast this spell -- i.e. it has a caster
+// when the spell needs one. Enforced only under `enforce`, so casual puzzles
+// (and those with the Avatar off-board as a life stat) are unchanged.
+export function canCastFrom(cardId) {
+  if (!enforcing() || !needsCaster(cardId)) return true
+  return hasCaster(sideOf(cardId))
+}
+
 export function canCast(cardId) {
-  return spellInHand(cardId) && canAffordCast(cardId)
+  return spellInHand(cardId) && canAffordCast(cardId) && canCastFrom(cardId)
 }
 
 // Pay the cost, resolve the magic's effect from the storyline, then send the
@@ -3645,6 +3677,42 @@ export function serialize() {
   }
 }
 
+// Fetch an image URL and return it as a data: URL. Same-origin in the WordPress
+// editor (uploads live on the same site), so no CORS issue in practice.
+async function imageToDataUrl(url) {
+  const res = await fetch(url)
+  const blob = await res.blob()
+  return await new Promise((resolve, reject) => {
+    const r = new FileReader()
+    r.onload = () => resolve(r.result)
+    r.onerror = reject
+    r.readAsDataURL(blob)
+  })
+}
+
+// serialize(), but with every card image embedded as base64 and imgId dropped,
+// so the exported file is portable to localStorage or another site rather than
+// carrying URLs that only resolve on the site it came from. A destination
+// WordPress re-interns and re-dedups the images on save. On a fetch failure the
+// remote URL is kept -- a working remote reference beats a missing card.
+export async function serializePortable() {
+  const data = serialize()
+  for (const card of Object.values(data.cards)) {
+    if (card.img && !card.img.startsWith('data:')) {
+      try {
+        card.img = await imageToDataUrl(card.img)
+        delete card.imgId
+      } catch (e) {
+        console.error('Could not inline image for export', card.id, e)
+      }
+    } else if (card.img?.startsWith('data:')) {
+      // Already inline; a leftover id would mislead a re-import.
+      delete card.imgId
+    }
+  }
+  return data
+}
+
 function normalizeZones(z) {
   const out = emptyZones()
   for (const [k, v] of Object.entries(z || {})) {
@@ -3944,10 +4012,19 @@ const b64decode = (s) => {
   return new TextDecoder().decode(bytes)
 }
 
+// A share link for the current puzzle. Returns { url, kind, oversized } so the
+// caller can message correctly. A puzzle already stored on the server needs no
+// payload in the URL, so it gets a short ?puzzle=<id> link; otherwise the whole
+// puzzle is inlined as a self-contained ?data= link, flagged oversized when it
+// grows past what URLs reliably carry.
 export function shareLink() {
-  const data = b64encode(JSON.stringify(serialize()))
   const base = location.origin + location.pathname
-  return `${base}?data=${encodeURIComponent(data)}`
+  if (remote() && isServerId(state.puzzleId) && !hasUnsavedWork()) {
+    return { url: `${base}?puzzle=${state.puzzleId}`, kind: 'puzzle', oversized: false }
+  }
+  const data = b64encode(JSON.stringify(serialize()))
+  const url = `${base}?data=${encodeURIComponent(data)}`
+  return { url, kind: 'data', oversized: url.length > MAX_DATA_URL }
 }
 
 export async function initFromUrl(options = {}) {
