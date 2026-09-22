@@ -256,6 +256,10 @@ export const state = reactive({
   initialTapped: null,
   damage: {}, // cardId -> number of damage counters on that card
   initialDamage: null,
+  // Reversible in-play water state by square. A site is water when its own
+  // affinity has a water threshold or when this map marks it as flooded.
+  floodedSites: {},
+  initialFloodedSites: null,
   // Gameplay-only modifiers, populated by effects (Layer C) and folded into the
   // derived `effective` map. Base strength/keywords live on the card art and are
   // never stored; only in-play changes are: strengthMod is a signed counter, and
@@ -370,6 +374,119 @@ function siteOn(square) {
   return id ? state.cards[id] : null
 }
 
+// A site's water type is derived from its authored threshold and the transient
+// Flood state. Other elemental thresholds do not turn off water; the presence
+// of a positive water affinity is enough.
+export function isWaterSite(square) {
+  const site = siteOn(square)
+  if (!site) return false
+  return Number(site.affinity?.water) > 0 || !!state.floodedSites[String(square)]
+}
+
+export function isLandSite(square) {
+  return !!siteOn(square) && !isWaterSite(square)
+}
+
+export function isFloodedSite(square) {
+  return !!siteOn(square) && !!state.floodedSites[String(square)]
+}
+
+// Change the reversible site state and immediately apply state-based survival.
+// Ability entries pass their own snapshot; direct setup changes get a small
+// synthetic transition so the same survival rules and death events are used.
+export function setFloodedSite(square, flooded, entry = null) {
+  const site = siteOn(square)
+  const n = Number(square)
+  if (!site || !Number.isInteger(n) || n < 0 || n >= GRID_SIZE) return false
+  const key = String(n)
+  const next = !!flooded
+  const previous = !!state.floodedSites[key]
+  if (previous === next) return false
+  const before = clone(state.floodedSites)
+  if (next) state.floodedSites[key] = true
+  else delete state.floodedSites[key]
+  // Survival only bites while a solution is played or recorded. The editor
+  // stays free-form, so toggling water while building a position never sweeps
+  // units off to the cemetery. An effect-driven change (with its own entry)
+  // always resolves survival, since it only happens during play anyway.
+  if (entry || enforcing()) {
+    const transition = entry || { type: 'flood', square: n, flooded: next }
+    if (!transition.prevFloodedSites) transition.prevFloodedSites = before
+    checkSurvival(transition)
+  }
+  return true
+}
+
+// The square a site card currently sits on, or null if it is not on the board.
+function squareOfSite(cardId) {
+  const m = /^site:(\d+)$/.exec(zoneOf(cardId) || '')
+  return m ? Number(m[1]) : null
+}
+
+// On-board orthogonal neighbours (up/down/left/right) of a grid square. Diagonals
+// are deliberately excluded: a body of water is connected cardinally only.
+function orthogonalSquares(square) {
+  const n = Number(square)
+  const row = Math.floor(n / GRID_COLS)
+  const col = n % GRID_COLS
+  const out = []
+  if (row > 0) out.push(n - GRID_COLS)
+  if (row < GRID_ROWS - 1) out.push(n + GRID_COLS)
+  if (col > 0) out.push(n - 1)
+  if (col < GRID_COLS - 1) out.push(n + 1)
+  return out
+}
+
+// The body of water a square belongs to: the maximal set of orthogonally
+// connected water sites reachable from it (flood-fill, cardinal steps only).
+// Returns null when the square itself is not a water site. `sites`/`squares`
+// are the member square indices (ascending) and `size` their count -- enough for
+// an ability to target the connected set, its area, or scale off its size.
+export function waterBodyAt(square) {
+  const n = Number(square)
+  if (!isWaterSite(n)) return null
+  const seen = new Set([n])
+  const stack = [n]
+  while (stack.length) {
+    const cur = stack.pop()
+    for (const nb of orthogonalSquares(cur)) {
+      if (!seen.has(nb) && isWaterSite(nb)) {
+        seen.add(nb)
+        stack.push(nb)
+      }
+    }
+  }
+  const sites = [...seen].sort((a, b) => a - b)
+  return { sites, squares: sites, size: sites.length }
+}
+
+// How large the body of water at a square is (0 if it is not water).
+export const waterBodySizeAt = (square) => waterBodyAt(square)?.size || 0
+
+// The side that controls the site on a square (its owner), or null with no site.
+// A minion may not be summoned onto a site the opponent controls unless its card
+// explicitly allows it.
+function siteControllerSide(square) {
+  const site = siteOn(square)
+  return site ? (site.enemy ? 'opponent' : 'player') : null
+}
+
+// Whether a minion may be cast onto a board location given site control. Only
+// minions are gated; avatars, artifacts, auras, and magic use their own paths.
+// An open square (no site) or one you control is always fine; an opponent's site
+// needs the card's `allowOpponentSiteSummon` capability.
+export function canCastMinionTo(cardId, zone) {
+  const card = state.cards[cardId]
+  if (!card || !card.unit || card.avatar) return true
+  const m = /^cell:(\d+):(top|bot)$/.exec(routeZone(cardId, zone) || '')
+  if (!m) return true
+  const owner = siteControllerSide(Number(m[1]))
+  if (!owner) return true
+  const casterSide = card.enemy ? 'opponent' : 'player'
+  if (owner === casterSide) return true
+  return !!card.allowOpponentSiteSummon
+}
+
 // Region of a square's surface / below slot:
 //   surface slot  -> 'surface' with a site, else 'void' (open air over the square)
 //   below slot    -> 'underwater' on a water site, 'underground' on a land site,
@@ -380,7 +497,7 @@ export function regionOf(square, layer) {
   if (layer === 'bot' || layer === 'below') {
     // No site means no subsurface at all -- you can't go below the open void.
     if (!site) return null
-    return site.water ? 'underwater' : 'underground'
+    return isWaterSite(square) ? 'underwater' : 'underground'
   }
   return null
 }
@@ -940,6 +1057,8 @@ export const EFFECT_OPS = [
   'heal',
   'grantFrom',
   'release',
+  'flood',
+  'unflood',
 ]
 
 // Authoring options for a grid target.
@@ -952,7 +1071,7 @@ export const TARGET_SIDES = ['any', 'friendly', 'enemy']
 // Where a `move` effect sends its subject.
 export const LOCATION_REFS = ['sourceLocation', 'targetLocation']
 // How a damage/strength amount is computed.
-export const AMOUNT_REFS = ['literal', 'carriedCount']
+export const AMOUNT_REFS = ['literal', 'carriedCount', 'waterBodySize']
 
 // Whose action fires a trigger: the card's own move, anyone's, or one side's.
 export const TRIGGER_SUBJECTS = ['self', 'any', 'enemy', 'friendly']
@@ -1114,6 +1233,9 @@ function newEffect(op = 'adjustStat') {
   if (op === 'move') Object.assign(e, { who: 'target', to: 'sourceLocation' })
   if (op === 'destroy' || op === 'banish' || op === 'bounce') e.who = 'target'
   if (op === 'heal') e.who = 'self'
+  // Flood/unflood a site: whose square, and whether the whole connected body of
+  // water is drained (unflood) rather than the single targeted site.
+  if (op === 'flood' || op === 'unflood') Object.assign(e, { who: 'target', scope: 'site' })
   return e
 }
 
@@ -1340,15 +1462,19 @@ function moveCardImpl(cardId, from, to, { tapOnMove } = {}) {
   const i = src?.indexOf(cardId) ?? -1
   if (i === -1) return
   const prevTapped = clone(state.tapped)
+  const prevFloodedSites = clone(state.floodedSites)
   src.splice(i, 1)
   state.zones[to].push(cardId)
 
   const card = state.cards[cardId]
+  if (card?.site && from.startsWith('site:')) {
+    delete state.floodedSites[from.slice('site:'.length)]
+  }
   const shouldTap = tapOnMove || ui.moving === cardId
   ui.moving = null
   applyMoveTaps(card, from, to, shouldTap)
 
-  logEntry({ cardId, from, to, prevTapped })
+  logEntry({ cardId, from, to, prevTapped, prevFloodedSites })
   // After the entry snapshots the pre-move maps, a unit that left the realm
   // sheds its in-play state (damage, strength, granted keywords, ward, ...).
   shedInPlayState(cardId, to)
@@ -1708,6 +1834,7 @@ function logEntry(entry) {
   if (!entry.prevTapped) entry.prevTapped = clone(state.tapped)
   if (!entry.prevStats) entry.prevStats = clone(state.stats)
   if (!entry.prevDamage) entry.prevDamage = clone(state.damage)
+  if (!entry.prevFloodedSites) entry.prevFloodedSites = clone(state.floodedSites)
   if (!entry.prevStrengthMod) entry.prevStrengthMod = clone(state.strengthMod)
   if (!entry.prevGrantedKeywords)
     entry.prevGrantedKeywords = clone(state.grantedKeywords)
@@ -2182,19 +2309,25 @@ function squaresInShape(originSq, shape) {
   return out
 }
 
-// The cards an ability's grid target covers. The area emanates from the source's
-// layer (so it only hits same-layer locations) unless it is square-based
-// (throughLayers), which punches through both the surface and the under-site.
-function resolveGridArea(sourceId, pickedSquare, target) {
+// The board squares an ability's grid target covers (as opposed to the cards
+// standing on them). Shared by area effects so a site-state change (flood) and a
+// damage effect aim through exactly the same origin/shape logic. A picked origin
+// uses the chosen square; a self origin uses the source's own square, but a spell
+// cast from hand has none, so it falls back to the square it was dropped on.
+function resolveGridSquares(sourceId, pickedSquare, target) {
   const src = nodeOf(sourceId)
-  // A picked origin uses the chosen square; a self origin uses the source's own
-  // square, but a spell cast from hand has none, so it falls back to the square
-  // it was dropped on.
   const originSq = target.origin === 'pick' || src == null ? pickedSquare : src.sq
   if (originSq == null) return []
+  return squaresInShape(originSq, target.shape)
+}
+
+function resolveGridArea(sourceId, pickedSquare, target) {
+  const src = nodeOf(sourceId)
+  const squares = resolveGridSquares(sourceId, pickedSquare, target)
+  if (!squares.length) return []
   const layers = target.throughLayers ? ['top', 'bot'] : [src?.layer || 'top']
   const out = []
-  for (const sq of squaresInShape(originSq, target.shape)) {
+  for (const sq of squares) {
     for (const layer of layers) {
       for (const id of state.zones[`cell:${sq}:${layer}`] || []) {
         if (matchesFilter(state.cards[id], target.filter)) out.push(id)
@@ -2251,6 +2384,11 @@ function releaseGrant(carrierId, entry) {
 // number of cards the source is carrying (a projectile's picked-up payload).
 function effectAmount(eff, sourceId) {
   if (eff.amountRef === 'carriedCount') return carriedBy(sourceId).length
+  // Scale off the body of water the source stands on (or the site it is).
+  if (eff.amountRef === 'waterBodySize') {
+    const sq = nodeOf(sourceId)?.sq ?? squareOfSite(sourceId)
+    return sq == null ? 0 : waterBodySizeAt(sq)
+  }
   return Number(eff.amount) || 0
 }
 
@@ -2394,6 +2532,26 @@ function runEffects(ability, cardId, targetId, entry, gridSquare) {
       grantFrom(cardId, targetId, ability, entry)
     } else if (eff.op === 'release') {
       releaseGrant(cardId, entry)
+    } else if (eff.op === 'flood' || eff.op === 'unflood') {
+      const flooding = eff.op === 'flood'
+      // How many sites a flood/unflood reaches follows the ability's own target:
+      //  - a grid ability floods every site its shape covers (the picked site,
+      //    its adjacent ring, or a wider nearby area -- from self or a chosen
+      //    square), so "flood the sites you target / adjacent sites" is authored
+      //    entirely through the existing grid target;
+      //  - a card ability floods the single targeted (or own) site, or, when its
+      //    scope is 'body', drains the whole orthogonally connected water body.
+      let squares
+      if (ability.target?.mode === 'grid') {
+        squares = resolveGridSquares(cardId, pickSquare, ability.target)
+      } else {
+        const who = effectSubject(eff.who, cardId, targetId)
+        const sq = squareOfSite(who) ?? (typeof pickSquare === 'number' ? pickSquare : null)
+        if (sq == null) squares = []
+        else if (!flooding && eff.scope === 'body') squares = waterBodyAt(sq)?.squares || [sq]
+        else squares = [sq]
+      }
+      for (const s of squares) setFloodedSite(s, flooding, entry)
     }
   }
 }
@@ -2689,6 +2847,9 @@ function legalSummonLocation(cardId, to) {
   const site = /^site:(\d+)$/.exec(to)
   if (site) return false // minions summon to a cell, not the site slot
   if (!m) return false
+  // A minion cannot be summoned onto an opponent-controlled site unless its card
+  // grants that capability -- checked here so every cast path shares the rule.
+  if (!canCastMinionTo(cardId, to)) return false
   const region = regionOf(Number(m[1]), m[2])
   if (region === 'surface') return true
   if (region === 'void') return hasKeyword(cardId, 'voidwalk')
@@ -3018,6 +3179,7 @@ export function undo() {
   if (m.prevTapped) state.tapped = clone(m.prevTapped)
   if (m.prevStats) state.stats = clone(m.prevStats)
   if (m.prevDamage) state.damage = clone(m.prevDamage)
+  if (m.prevFloodedSites) state.floodedSites = clone(m.prevFloodedSites)
   if (m.prevStrengthMod) state.strengthMod = clone(m.prevStrengthMod)
   if (m.prevGrantedKeywords) state.grantedKeywords = clone(m.prevGrantedKeywords)
   if (m.prevSummoned) state.summoned = clone(m.prevSummoned)
@@ -3061,6 +3223,7 @@ export function startRecording() {
     state.initialStats = clone(state.stats)
     state.initialTapped = clone(state.tapped)
     state.initialDamage = clone(state.damage)
+    state.initialFloodedSites = clone(state.floodedSites)
     state.solutions = []
   }
   state.draft = []
@@ -3076,6 +3239,7 @@ function restoreInitial() {
   if (state.initialStats) state.stats = clone(state.initialStats)
   state.tapped = clone(state.initialTapped || {})
   state.damage = clone(state.initialDamage || {})
+  state.floodedSites = clone(state.initialFloodedSites || {})
   // Grants and gameplay modifiers only exist mid-play; a start position has none.
   state.grants = {}
   state.strengthMod = {}
@@ -3124,6 +3288,7 @@ function stripBookkeeping(entry) {
     prevTapped,
     prevStats,
     prevDamage,
+    prevFloodedSites,
     prevStrengthMod,
     prevGrantedKeywords,
     prevSummoned,
@@ -3162,6 +3327,7 @@ export function enterPlay() {
     state.initialStats = clone(state.stats)
     state.initialTapped = clone(state.tapped)
     state.initialDamage = clone(state.damage)
+    state.initialFloodedSites = clone(state.floodedSites)
   }
   restoreInitial()
   state.moves = []
@@ -3333,12 +3499,14 @@ export function toggleLanceToken(cardId) {
   }
 }
 
-// A water site's subsurface is underwater rather than underground; only
-// meaningful on a site card, but harmless to carry otherwise.
-export function toggleWater(cardId) {
+// Whether this minion may be summoned onto an opponent-controlled site. A site's
+// water type is no longer a manual flag -- it comes from the site's water
+// threshold (affinity.water) plus the reversible in-play Flood state -- so the
+// old per-card water toggle is gone; legacy `water` flags still migrate on load.
+export function toggleOppSiteSummon(cardId) {
   const card = state.cards[cardId]
   if (!card) return
-  card.water = !card.water
+  card.allowOpponentSiteSummon = !card.allowOpponentSiteSummon
 }
 
 export function toggleUnit(cardId) {
@@ -3639,6 +3807,7 @@ export function fingerprint() {
     initial: state.initialZones || state.zones,
     tapped: state.initialTapped || state.tapped,
     damage: state.initialDamage || state.damage,
+    floodedSites: state.initialFloodedSites || state.floodedSites,
     carry: state.initialCarry || state.carry,
     stats: state.initialStats || state.stats,
     solutions: state.solutions,
@@ -3670,6 +3839,7 @@ export function serialize() {
     initial: clone(state.initialZones || state.zones),
     initialTapped: clone(state.initialTapped || state.tapped || {}),
     initialDamage: clone(state.initialDamage || state.damage || {}),
+    initialFloodedSites: clone(state.initialFloodedSites || state.floodedSites || {}),
     carry: clone(state.initialCarry || state.carry),
     stats: clone(state.initialStats || state.stats),
     solutions: clone(state.solutions),
@@ -3727,6 +3897,22 @@ function normalizeZones(z) {
   return out
 }
 
+function normalizeFloodedSites(sites) {
+  const out = {}
+  if (Array.isArray(sites)) {
+    for (const square of sites) {
+      const n = Number(square)
+      if (Number.isInteger(n) && n >= 0 && n < GRID_SIZE) out[String(n)] = true
+    }
+    return out
+  }
+  for (const [square, flooded] of Object.entries(sites || {})) {
+    const n = Number(square)
+    if (flooded && Number.isInteger(n) && n >= 0 && n < GRID_SIZE) out[String(n)] = true
+  }
+  return out
+}
+
 function normalizeStats(s) {
   const out = defaultStats()
   for (const side of ['player', 'opponent']) {
@@ -3753,6 +3939,8 @@ export function loadPuzzle(data, { play = true } = {}) {
     c.monument = !!c.monument
     c.lanceToken = !!c.lanceToken
     c.magic = !!c.magic
+    // Minion capability: may be summoned onto an opponent-controlled site.
+    c.allowOpponentSiteSummon = !!c.allowOpponentSiteSummon
     c.spellCost = {
       mana: Number(c.spellCost?.mana) || 0,
       air: Number(c.spellCost?.air) || 0,
@@ -3782,6 +3970,18 @@ export function loadPuzzle(data, { play = true } = {}) {
       : []
   }
   state.initialZones = normalizeZones(data.initial)
+  state.initialFloodedSites = normalizeFloodedSites(
+    data.initialFloodedSites ?? data.floodedSites
+  )
+  // Older puzzles stored a manual `water` flag on the site card. Migrate that
+  // authored state to the reversible Flood map so their board topology stays
+  // intact without making the legacy card field part of the rule calculation.
+  for (let square = 0; square < GRID_SIZE; square++) {
+    const id = state.initialZones[`site:${square}`]?.[0]
+    if (id && state.cards[id]?.water && !state.initialFloodedSites[String(square)]) {
+      state.initialFloodedSites[String(square)] = true
+    }
+  }
   state.initialCarry = { ...data.carry }
   state.carry = clone(state.initialCarry)
   state.grants = {}
@@ -3792,6 +3992,7 @@ export function loadPuzzle(data, { play = true } = {}) {
   state.wardBroken = {}
   storyStack = null
   state.zones = restoreZones(state.initialZones)
+  state.floodedSites = clone(state.initialFloodedSites)
   state.initialStats = normalizeStats(data.stats)
   state.stats = clone(state.initialStats)
   state.initialTapped = clone(data.initialTapped || {})
@@ -3845,6 +4046,8 @@ export function newPuzzle() {
   state.initialTapped = null
   state.damage = {}
   state.initialDamage = null
+  state.floodedSites = {}
+  state.initialFloodedSites = null
   state.solutions = []
   state.draft = []
   state.moves = []
@@ -3888,6 +4091,7 @@ function writeStore(map) {
 
 export async function savePuzzle() {
   if (!state.initialZones) state.initialZones = clone(state.zones)
+  if (!state.initialFloodedSites) state.initialFloodedSites = clone(state.floodedSites)
   const data = serialize()
   if (remote()) {
     const saved = await api('/puzzles', {

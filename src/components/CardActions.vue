@@ -10,7 +10,7 @@ import {
   clearSelection,
   removeCard,
   toggleSite,
-  toggleWater,
+  toggleOppSiteSummon,
   toggleAura,
   toggleArtifact,
   toggleMonument,
@@ -334,13 +334,15 @@ function onRemove() {
         ⛰ {{ card.site ? 'Not a site' : 'Mark as site' }}
       </button>
       <button
-        v-if="editing && card.site"
+        v-if="editing && card.unit && !card.avatar"
         class="btn"
-        :class="{ active: card.water }"
-        :title="card.water ? 'Water site: its subsurface is underwater' : 'Land site: its subsurface is underground'"
-        @click="toggleWater(ui.selected)"
+        :class="{ active: card.allowOpponentSiteSummon }"
+        :title="card.allowOpponentSiteSummon
+          ? 'May be summoned onto an opponent-controlled site'
+          : 'Cannot be summoned onto an opponent-controlled site (default)'"
+        @click="toggleOppSiteSummon(ui.selected)"
       >
-        ≈ {{ card.water ? 'Water site' : 'Land site' }}
+        ⚔ {{ card.allowOpponentSiteSummon ? 'Enemy-site summon' : 'No enemy-site summon' }}
       </button>
       <button
         v-if="editing && inPool"

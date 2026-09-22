@@ -35,7 +35,12 @@ const WHO = ['self', 'target']
 const ELEMENTS = ['air', 'earth', 'fire', 'water']
 
 // Friendlier labels for the terse effect-param option values.
-const amountRefLabel = (r) => (r === 'carriedCount' ? 'carried count' : 'a number')
+const amountRefLabel = (r) =>
+  r === 'carriedCount'
+    ? 'carried count'
+    : r === 'waterBodySize'
+    ? 'water-body size'
+    : 'a number'
 const locationLabel = (l) =>
   l === 'targetLocation' ? "the target's square" : "the source's square"
 
@@ -424,6 +429,28 @@ function onRemove(ability) {
             <select v-model="eff.keyword" class="text-input">
               <option v-for="k in KEYWORDS" :key="k" :value="k">{{ k }}</option>
             </select>
+          </template>
+          <template v-else-if="eff.op === 'flood' || eff.op === 'unflood'">
+            <select v-if="ability.target.mode !== 'grid'" v-model="eff.who" class="text-input">
+              <option v-for="w in WHO" :key="w" :value="w">{{ w }}'s site</option>
+            </select>
+            <span v-else class="hint effect-note">every site the target covers</span>
+            <label
+              v-if="eff.op === 'unflood' && ability.target.mode !== 'grid'"
+              class="hint effect-note"
+              style="display: flex; align-items: center; gap: 0.25rem"
+              title="Drain the whole orthogonally connected body of water, not just this site"
+            >
+              <input
+                type="checkbox"
+                :checked="eff.scope === 'body'"
+                @change="eff.scope = $event.target.checked ? 'body' : 'site'"
+              />
+              whole body of water
+            </label>
+            <span class="hint effect-note">
+              {{ eff.op === 'flood' ? '— becomes a water site' : '— becomes land again' }}
+            </span>
           </template>
           <span v-else class="hint effect-note">
             {{ eff.op === 'grantFrom' ? 'carries the target — gains its abilities' : 'releases granted cards' }}
