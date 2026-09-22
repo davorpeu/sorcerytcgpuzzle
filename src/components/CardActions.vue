@@ -11,6 +11,7 @@ import {
   removeCard,
   toggleSite,
   toggleOppSiteSummon,
+  toggleCastFromCemetery,
   toggleAura,
   toggleArtifact,
   toggleMonument,
@@ -56,6 +57,12 @@ const onBoard = computed(() => /^cell:\d+:(top|bot)$/.test(zone.value || ''))
 const editing = computed(() => state.mode === 'editor' && !state.recording)
 const inPool = computed(() => zone.value === 'pool')
 const inHand = computed(() => zone.value?.startsWith('hand:'))
+const inGrave = computed(() => zone.value?.startsWith('grave:'))
+// Where a spell can be cast from: the hand, or the cemetery if the card grants
+// it. Drives the Cast button / drag hint so a graveyard-castable spell is playable.
+const castSource = computed(
+  () => inHand.value || (inGrave.value && !!card.value?.castFromCemetery)
+)
 // What a card provides (mana / elemental affinity), for the header line.
 const providesText = computed(() => {
   const c = card.value
@@ -186,7 +193,7 @@ function onRemove() {
 
     <div class="ca-buttons">
       <button
-        v-if="inHand && card.magic && (state.mode === 'play' || state.recording)"
+        v-if="castSource && card.magic && (state.mode === 'play' || state.recording)"
         class="btn primary"
         :class="{ active: casting }"
         :disabled="(!canAffordCast(ui.selected) || !canCastFrom(ui.selected)) && !casting"
@@ -202,7 +209,7 @@ function onRemove() {
         {{ casting ? 'Cancel cast' : '✦ Cast' }}
       </button>
       <p
-        v-if="inHand && !card.magic && isSpell(ui.selected) && (state.mode === 'play' || state.recording)"
+        v-if="castSource && !card.magic && isSpell(ui.selected) && (state.mode === 'play' || state.recording)"
         class="ca-hint"
       >
         Drag onto the board (or click a square) to cast.
@@ -368,6 +375,17 @@ function onRemove() {
         @click="toggleMagic(ui.selected)"
       >
         ✦ {{ card.magic ? 'Not a magic' : 'Mark as magic' }}
+      </button>
+      <button
+        v-if="editing && isSpell(ui.selected)"
+        class="btn"
+        :class="{ active: card.castFromCemetery }"
+        :title="card.castFromCemetery
+          ? 'May be cast from the cemetery as well as the hand'
+          : 'Can only be cast from the hand (default)'"
+        @click="toggleCastFromCemetery(ui.selected)"
+      >
+        ⚰ {{ card.castFromCemetery ? 'Casts from cemetery' : 'Hand-cast only' }}
       </button>
       <button
         v-if="editing && card.artifact"

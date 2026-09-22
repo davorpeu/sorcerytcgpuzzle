@@ -2766,9 +2766,20 @@ export function canAffordCast(cardId) {
   return true
 }
 
-// A spell sitting in hand during play/recording is castable (subject to cost).
-export function spellInHand(cardId) {
-  return isSpell(cardId) && casting() && cardZoneCategory(cardId) === 'hand'
+// A spell is normally cast from hand. A card may also grant casting from the
+// cemetery (Sorcery cards that "cast from your cemetery"); only then is a spell
+// sitting in the graveyard a castable source.
+export function castsFromCemetery(cardId) {
+  return !!state.cards[cardId]?.castFromCemetery
+}
+
+// A spell in a zone it can be cast from during play/recording (subject to cost):
+// the hand always, the cemetery only when the card grants it.
+export function spellCastable(cardId) {
+  if (!isSpell(cardId) || !casting()) return false
+  const cat = cardZoneCategory(cardId)
+  if (cat === 'hand') return true
+  return cat === 'cemetery' && castsFromCemetery(cardId)
 }
 
 // Only Magic and Aura cards are true spells that need a caster; minions are
@@ -2794,7 +2805,7 @@ export function canCastFrom(cardId) {
 }
 
 export function canCast(cardId) {
-  return spellInHand(cardId) && canAffordCast(cardId) && canCastFrom(cardId)
+  return spellCastable(cardId) && canAffordCast(cardId) && canCastFrom(cardId)
 }
 
 // Pay the cost, resolve the magic's effect from the storyline, then send the
@@ -3509,6 +3520,14 @@ export function toggleOppSiteSummon(cardId) {
   card.allowOpponentSiteSummon = !card.allowOpponentSiteSummon
 }
 
+// Whether this spell may also be cast from its owner's cemetery, not just the
+// hand. A per-card capability for the few cards that grant it.
+export function toggleCastFromCemetery(cardId) {
+  const card = state.cards[cardId]
+  if (!card) return
+  card.castFromCemetery = !card.castFromCemetery
+}
+
 export function toggleUnit(cardId) {
   const card = state.cards[cardId]
   if (!card) return
@@ -3941,6 +3960,8 @@ export function loadPuzzle(data, { play = true } = {}) {
     c.magic = !!c.magic
     // Minion capability: may be summoned onto an opponent-controlled site.
     c.allowOpponentSiteSummon = !!c.allowOpponentSiteSummon
+    // Spell capability: may be cast from the cemetery, not just the hand.
+    c.castFromCemetery = !!c.castFromCemetery
     c.spellCost = {
       mana: Number(c.spellCost?.mana) || 0,
       air: Number(c.spellCost?.air) || 0,
