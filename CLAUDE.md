@@ -29,7 +29,7 @@ Nearly everything lives here — a single `reactive()` `state` object plus expor
 
 - **`config`** — host-page wiring, NOT puzzle data: `canEdit`, `apiUrl`, `nonce`. Set once at mount from the mount element's `data-*` attributes.
 - **`ui`** — transient interaction state, NOT puzzle data: which card is `selected`, `dragging`, and the mutually-exclusive "armed action" slots `attacker`/`striker`/`carrier`/`moving`. Only one action is ever armed at a time (arming one clears the others).
-- **`state`** — the puzzle and play session: `mode` (`'editor'|'play'`), `cards`, `zones`, `carry`, `stats`, `solutions`, plus play-attempt tracking (`moves`, `checked`, `firstWrong`, `tries`, `solved`).
+- **`state`** — the puzzle and play session: `mode` (`'editor'|'play'`), `cards`, `zones`, `carry`, `stats`, `solutions`, plus play-attempt tracking (`moves`, `checked`, `firstWrong`).
 
 ### Core model concepts
 
@@ -40,7 +40,9 @@ Nearly everything lives here — a single `reactive()` `state` object plus expor
 
 ### Solutions & checking
 
-A puzzle has **multiple solution lines** (`state.solutions`, an array of move sequences). Recording snapshots the start position (`initialZones`/`initialCarry`/`initialStats`/`initialTapped`); each recorded line restarts from that same snapshot (`restoreInitial()`). An attempt passes if it fully matches **any** line; otherwise `check()` reports the divergence point against the closest line. Move-equality is `sameEntry()`: it compares `cardId`/`from`/`to` (or `targetId`/`to` for special types) but deliberately ignores `prevTapped`/`from`/`held`/`carrierId`, which are undo bookkeeping. Entry types: plain move, `attack`, `strike`, `pickup`, `drop`.
+A puzzle has **multiple solution lines** (`state.solutions`, an array of move sequences). Recording snapshots the start position (`initialZones`/`initialCarry`/`initialStats`/`initialTapped`); each recorded line restarts from that same snapshot (`restoreInitial()`). Move-equality is `sameEntry()`: it compares `cardId`/`from`/`to` (or `targetId`/`to` for special types) but deliberately ignores `prevTapped`/`from`/`held`/`carrierId`, which are undo bookkeeping. Entry types: plain move, `attack`, `strike`, `pickup`, `drop`.
+
+**The solve is detected automatically — there is no submit button.** `solveStatus` is a computed that re-runs on every move and returns `'optimal'`, `'partial'`, or `null`. Per line, `matchLine()` classifies the attempt: `'exact'` (same moves, same length → optimal), `'loose'` (every solution move is present in order **and** the extra moves in between touch only cards the solution never manipulates → solved but not optimal), or `'no'`. "Touches" is `entryCards()` (a move's `cardId`/`targetId`/`defenderId`); the solution's cards are `solutionCards()`. Because the verdict just reflects the current board, an extra move that disturbs a solution card un-solves the board as honestly as it solved it. (`check()`/`divergence()` and `state.checked`/`firstWrong`/`targetLen` remain for the recorded-line divergence report but no longer drive a submit.)
 
 Only card moves count toward the solution. Life/mana/threshold counters (`stats`) and tap state are informational and reset with the board.
 
@@ -50,7 +52,7 @@ Only card moves count toward the solution. Life/mana/threshold counters (`stats`
 
 URL loading (`initFromUrl`): `?data=` (self-contained base64), `?src=` (hosted JSON), `?puzzle=<id>`, `?daily`. Non-editors default to the daily puzzle when nothing is specified.
 
-Wordle-style limit: non-editors get `MAX_TRIES` (3) submits per puzzle per day, tracked in `localStorage` under `ATTEMPTS_KEY` (soft — clearing storage resets it). Editors are exempt (`triesLimited()`).
+There is no attempt limit. The solve is auto-detected (see "Solutions & checking"), so players play freely until the board reports itself solved. (An earlier Wordle-style per-day try cap was removed along with the submit button.)
 
 ### Mounting & embedding (`src/main.js`)
 

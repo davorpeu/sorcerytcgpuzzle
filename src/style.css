@@ -100,10 +100,17 @@ body {
   gap: 6px;
 }
 
-.tries {
+.tries,
+.mistakes {
   color: var(--muted);
   font-size: 12px;
   white-space: nowrap;
+}
+
+/* The mistake counter turns red once the day's cap is reached. */
+.mistakes.danger {
+  color: var(--bad);
+  font-weight: 600;
 }
 
 .puzzle-title {
@@ -179,6 +186,13 @@ body {
   grid-template-columns: 340px 1fr;
   gap: 12px;
   align-items: start;
+}
+
+/* Once a limited player has solved or failed for the day, the play surface is
+   sealed: the verdict banner stays up and the board no longer takes input. */
+.layout.locked {
+  pointer-events: none;
+  opacity: 0.85;
 }
 
 .sidebar {

@@ -1,4 +1,4 @@
-import { reactive, computed } from 'vue'
+import { reactive, computed, watch } from 'vue'
 
 export const GRID_COLS = 5
 export const GRID_ROWS = 4
@@ -10,12 +10,10 @@ export const INTERSECTION_ROWS = GRID_ROWS - 1
 export const INTERSECTIONS = INTERSECTION_COLS * INTERSECTION_ROWS
 
 const STORAGE_KEY = 'sorceryPuzzles.v1'
+// Per-puzzle, per-day play progress (mistakes + solved/failed lock) for limited
+// players. Soft: clearing localStorage resets it.
 const ATTEMPTS_KEY = 'sorceryAttempts.v1'
 const FORMAT_VERSION = 1
-
-// Wordle-style limit: non-editors get this many submits per puzzle per day,
-// tracked in the browser's localStorage.
-export const MAX_TRIES = 3
 
 // A self-contained ?data= share link longer than this is treated as too big to
 // be usable (browsers and chat apps truncate very long URLs). Past it we steer
@@ -287,8 +285,12 @@ export const state = reactive({
   checked: false,
   firstWrong: -1, // index of first divergence after check(); -1 = fully correct
   targetLen: 0, // length of the closest solution line after check()
-  tries: 0, // submits used today for this puzzle (non-editors only)
-  solved: false, // this puzzle was solved today (non-editors only)
+  // Automatic solve/mistake tracking (see evaluatePlay). Wrong moves are snapped
+  // back and counted; solved/failed lock a limited player out for the day.
+  mistakes: 0, // wrong moves made today for this puzzle (non-editors only)
+  solved: false, // solved today (non-editors: persisted + locks input)
+  failed: false, // hit the mistake cap today (non-editors: persisted + locks)
+  solveQuality: '', // 'optimal' | 'partial' once solved, for the verdict banner
 })
 
 const FIXED_ZONE_LABELS = {
@@ -652,6 +654,15 @@ export const isSilenced = (id) => !!traits(id)?.silenced
 // The side a card belongs to.
 const sideOf = (id) => (state.cards[id]?.enemy ? 'opponent' : 'player')
 
+// In play mode the solver controls only their own side: an opponent's cards --
+// spells in their hand, the actions on their units' bar -- are look-only, since
+// the puzzle drives the opponent automatically. Editing and recording keep full
+// control of both sides so an author can set up and demonstrate a solution.
+export function playerControls(cardId) {
+  if (state.mode !== 'play') return true
+  return !state.cards[cardId]?.enemy
+}
+
 // Combat stats: base Power/Life from the card (authored, shown on the art),
 // modified in play. An avatar's Life is its side's life total.
 export const effectivePower = (id) =>
@@ -775,11 +786,31 @@ export function reachableNodes(unitId) {
 const enforcing = () =>
   state.enforce && (state.mode === 'play' || state.recording)
 
+// A minion that entered the realm this turn has summoning sickness: it cannot
+// tap, or be tapped, to pay for the costs of abilities (so no Move & Attack,
+// shoot, intercept, or tap-cost activated ability) until end of turn -- unless
+// it has Charge, which explicitly lets a just-summoned unit tap. Avatars are
+// never "summoned", so they are never sick. hasKeyword() reads the effective
+// traits, so Charge printed on the card, lent by a passive/aura, or granted
+// mid-turn by a spell or ability all lift the sickness at once.
+// (Rulebook p. 19, glossary "Charge".)
+export function hasSummoningSickness(cardId) {
+  return !!state.summoned[cardId] && !hasKeyword(cardId, 'charge')
+}
+
+// Player-initiated tap costs are refused for a summon-sick actor, but only while
+// rules are enforced (play/record) -- the free-form editor and forced effects
+// (the effect `move`/`tap` ops never route through these helpers) are
+// unaffected, mirroring how `enforcing()`/`combat` already scope the checks.
+export const tapBlockedBySickness = (cardId) => enforcing() && hasSummoningSickness(cardId)
+
 // May this unit legally move to a board zone? Non-cell destinations aren't
-// movement-gated (summoning from hand, etc.).
+// movement-gated (summoning from hand, etc.). A summon-sick unit can't move at
+// all: the Move action taps it (Move & Attack), so it is barred while enforcing.
 export function canMoveUnit(unitId, toZone) {
   const m = /^cell:(\d+):(top|bot)$/.exec(toZone || '')
   if (!m) return true
+  if (tapBlockedBySickness(unitId)) return false
   return reachableNodes(unitId).has(nodeKey(Number(m[1]), m[2]))
 }
 
@@ -787,15 +818,19 @@ export function canMoveUnit(unitId, toZone) {
 // keywords -- Airborne can only be hit by Airborne, Stealth not by opponents.
 export function canAttack(attackerId, targetId) {
   if (!isUnit(attackerId) || isDisabled(attackerId)) return false
+  if (tapBlockedBySickness(attackerId)) return false // Move & Attack taps
+  const target = state.cards[targetId]
+  // You may only attack the opposing side, and only its units or sites --
+  // never friendly cards, and never a non-unit/non-site (aura, artifact, etc.).
+  if (!target || (!isUnit(targetId) && !target.site)) return false
+  if (!oppositeSides(attackerId, targetId)) return false
   const t = nodeOf(targetId)
   if (!t || !reachableNodes(attackerId).has(nodeKey(t.sq, t.layer))) return false
   if (isUnit(targetId)) {
     const atk = effectiveKeywords(attackerId)
     const tgt = effectiveKeywords(targetId)
     if (tgt.has('airborne') && !atk.has('airborne')) return false
-    const oppose =
-      !!state.cards[attackerId].enemy !== !!state.cards[targetId].enemy
-    if (oppose && isStealthed(targetId)) return false
+    if (isStealthed(targetId)) return false
   }
   return true
 }
@@ -881,7 +916,7 @@ export function rangedTargets(shooterId) {
 }
 
 export const canShoot = (shooterId, targetId) =>
-  rangedTargets(shooterId).has(targetId)
+  !tapBlockedBySickness(shooterId) && rangedTargets(shooterId).has(targetId)
 
 export function armedShootLegal(targetId) {
   if (!ui.shooting || ui.shooting === targetId) return false
@@ -1478,11 +1513,22 @@ function moveCardImpl(cardId, from, to, { tapOnMove } = {}) {
   // After the entry snapshots the pre-move maps, a unit that left the realm
   // sheds its in-play state (damage, strength, granted keywords, ward, ...).
   shedInPlayState(cardId, to)
+  // A plain Move & Attack without the attack: the opponent may intercept the
+  // unit where it stopped (a separate, deterministic entry). Only the dedicated
+  // cell-to-cell Move action offers this -- not summons or effect relocations.
+  if (
+    shouldTap &&
+    isUnit(card) &&
+    from.startsWith('cell:') &&
+    to.startsWith('cell:')
+  )
+    maybeAutoIntercept(cardId)
 }
 
 // ---------- moves, attacks & strikes ----------
 
 export function beginMove(cardId) {
+  if (!playerControls(cardId)) return
   ui.moving = ui.moving === cardId ? null : cardId
   ui.attacker = null
   ui.striker = null
@@ -1495,6 +1541,7 @@ export function beginMove(cardId) {
 // Attacks and strikes don't change the board; they are logged as their own entry types
 // so a solution can require them in sequence with moves.
 export function beginAttack(cardId) {
+  if (!playerControls(cardId)) return
   ui.attacker = ui.attacker === cardId ? null : cardId
   ui.awaitingDefender = null
   ui.striker = null
@@ -1518,6 +1565,7 @@ export function beginStrike(cardId) {
 // Ranged: tap to fire at a unit in line of sight. Its own armed slot, mutually
 // exclusive with the other actions like attack/strike.
 export function beginShoot(cardId) {
+  if (!playerControls(cardId)) return
   ui.shooting = ui.shooting === cardId ? null : cardId
   ui.attacker = null
   ui.striker = null
@@ -1554,16 +1602,22 @@ export function beginIntercept(cardId) {
   ui.shooting = null
 }
 
-// Y may intercept X: opposing units, X within Y's reach, and -- if X is Airborne
+// Y may intercept X: opposing units already sharing X's square (the location the
+// move ended on -- an intercept never steps to engage), and -- if X is Airborne
 // -- Y is Airborne or Ranged.
 export function canIntercept(interceptorId, targetId) {
   if (!isUnit(interceptorId) || isDisabled(interceptorId) || !isUnit(targetId)) return false
+  if (tapBlockedBySickness(interceptorId)) return false // intercepting taps
   const iCard = state.cards[interceptorId]
   const tCard = state.cards[targetId]
   if (!iCard || !tCard || !!iCard.enemy === !!tCard.enemy) return false
   if (isStealthed(targetId)) return false // Stealth can't be intercepted
+  // Intercept only where the move ends: the interceptor must already stand on
+  // the exact same location -- same square and same layer (both on the surface,
+  // or both below) -- as the unit it fights.
+  const i = nodeOf(interceptorId)
   const t = nodeOf(targetId)
-  if (!t || !reachableNodes(interceptorId).has(nodeKey(t.sq, t.layer))) return false
+  if (!i || !t || i.sq !== t.sq || i.layer !== t.layer) return false
   if (hasKeyword(targetId, 'airborne')) {
     return hasKeyword(interceptorId, 'airborne') || effectiveRanged(interceptorId) > 0
   }
@@ -1576,17 +1630,83 @@ export function armedInterceptLegal(targetId) {
   return enforcing() ? canIntercept(ui.intercepting, targetId) : isUnit(targetId)
 }
 
-export function targetIntercept(targetId) {
-  if (!ui.intercepting || ui.intercepting === targetId) return
-  const interceptorId = ui.intercepting
-  if (blockedByStealth(interceptorId, targetId)) return
-  if (enforcing() && !canIntercept(interceptorId, targetId)) return
+// Resolve one intercept: the interceptor taps, the fight is logged, and (with
+// combat on) damage is dealt. Shared by the manual and auto-intercept paths.
+function performIntercept(interceptorId, targetId) {
   const prevTapped = clone(state.tapped)
   if (isUnit(interceptorId)) state.tapped[interceptorId] = true
   const entry = { type: 'intercept', cardId: interceptorId, targetId, prevTapped }
   logEntry(entry)
   if (combatActive()) resolveAttack(interceptorId, targetId, entry)
+}
+
+export function targetIntercept(targetId) {
+  if (!ui.intercepting || ui.intercepting === targetId) return
+  const interceptorId = ui.intercepting
+  if (blockedByStealth(interceptorId, targetId)) return
+  if (enforcing() && !canIntercept(interceptorId, targetId)) return
+  performIntercept(interceptorId, targetId)
   ui.intercepting = null
+}
+
+// Number of on-board units on a side (true = opponent/enemy, false = player).
+function boardUnitCount(enemySide) {
+  let n = 0
+  for (const u of boardUnits()) if (!!u.card.enemy === enemySide) n++
+  return n
+}
+
+// The opponent's auto-intercept: after a player unit finishes a plain move on a
+// square the opponent shares, decide whether an opposing unit steps up to fight
+// it. Deterministic (like chooseAutoDefender) so a recorded solution replays the
+// same way. Two modes mirror how a player weighs it:
+//  - Survival: while the opponent avatar faces a lethal swing (or is already at
+//    Death's Door), every unit that could defend the avatar is reserved -- never
+//    spent intercepting. Units that can't defend it anyway intercept freely when
+//    they can remove the mover, thinning the attack.
+//  - Otherwise: play for material like chess -- only intercept to actually kill
+//    the moved unit, and only at parity or a material edge, preferring a fight
+//    the interceptor survives.
+function chooseAutoInterceptor(movedUnitId) {
+  if (!combatActive()) return null
+  const mover = state.cards[movedUnitId]
+  if (!mover || !isUnit(movedUnitId) || mover.enemy) return null
+  const node = nodeOf(movedUnitId)
+  if (!node) return null
+
+  const candidates = []
+  for (const id of unitsOnSquare(node.sq)) {
+    // The avatar never intercepts -- it can't defend and must save itself.
+    if (isAvatar(id)) continue
+    if (state.cards[id]?.enemy && canIntercept(id, movedUnitId)) candidates.push(id)
+  }
+  if (!candidates.length) return null
+
+  const avatar = oppAvatarUnit()
+  const survival = avatarUnderThreat(avatar) || (state.stats.opponent?.life || 0) <= 0
+  const edge = boardUnitCount(true) >= boardUnitCount(false)
+
+  const mPow = effectivePower(movedUnitId)
+  const mLife = Math.max(1, effectiveLife(movedUnitId))
+  const mLethal = hasKeyword(movedUnitId, 'lethal')
+  const value = (id) => defenderValue(id, avatar)
+  const cheapestFirst = [...candidates].sort((a, b) => value(a) - value(b) || (a < b ? -1 : 1))
+
+  for (const id of cheapestFirst) {
+    if (survival && canReachAvatar(id, avatar)) continue // reserved to defend the avatar
+    const kills = effectivePower(id) >= mLife || hasKeyword(id, 'lethal')
+    if (!kills) continue // never spend an intercept without removing the piece
+    const survives = effectiveLife(id) > mPow && !mLethal
+    if (survival) return id // free removal of an attacker helps us survive
+    if (survives || edge) return id // trade only at parity/advantage
+  }
+  return null
+}
+
+// After a plain move, let the opponent interpose an intercept if its AI wants to.
+function maybeAutoIntercept(movedUnitId) {
+  const interceptorId = chooseAutoInterceptor(movedUnitId)
+  if (interceptorId) performIntercept(interceptorId, movedUnitId)
 }
 
 export function targetAttack(targetId) {
@@ -2088,6 +2208,7 @@ function fireTriggers(entry) {
 // has become a unit -- card.site stays true either way -- so refusing by that
 // flag would block the one case that most needs carrying.
 export function beginPickup(cardId) {
+  if (!playerControls(cardId)) return
   ui.carrier = ui.carrier === cardId ? null : cardId
   if (ui.carrier) {
     // Only one action is ever armed: a leftover striker or move would swallow
@@ -2131,6 +2252,7 @@ export function targetPickup(targetId) {
 export function dropCarried(itemId) {
   const carrierId = state.carry[itemId]
   if (!carrierId) return
+  if (!playerControls(carrierId)) return
   const zone = zoneOf(carrierId)
   if (!zone) return
   const to = dropTarget(itemId, zone)
@@ -2805,7 +2927,12 @@ export function canCastFrom(cardId) {
 }
 
 export function canCast(cardId) {
-  return spellCastable(cardId) && canAffordCast(cardId) && canCastFrom(cardId)
+  return (
+    playerControls(cardId) &&
+    spellCastable(cardId) &&
+    canAffordCast(cardId) &&
+    canCastFrom(cardId)
+  )
 }
 
 // Pay the cost, resolve the magic's effect from the storyline, then send the
@@ -3033,6 +3160,7 @@ export function deckSize(avatarId, kind) {
 // hand. Reuses moveCard, so the draw is a logged, undoable, gradeable move like
 // any other. The "top" of a deck is the last card in its zone.
 export function drawFromDeck(avatarId, kind) {
+  if (!playerControls(avatarId)) return
   if (!isAvatar(avatarId)) return
   if (kind !== 'atlas' && kind !== 'spellbook') return
   const side = sideOf(avatarId)
@@ -3055,6 +3183,7 @@ export function canCharge(cardId) {
 }
 
 export function chargeForMana(cardId) {
+  if (!playerControls(cardId)) return
   if (!canCharge(cardId)) return
   const entry = {
     type: 'charge',
@@ -3071,8 +3200,11 @@ export function chargeForMana(cardId) {
 // target picker (like attack/strike); one that doesn't fires straight away.
 // Re-invoking the armed ability cancels it.
 export function beginActivate(cardId, abilityId) {
+  if (!playerControls(cardId)) return
   const ability = findAbility(cardId, abilityId)
   if (!ability) return
+  // A tap cost can't be paid by a summon-sick card (Charge exempts).
+  if (ability.cost?.tap && tapBlockedBySickness(cardId)) return
   if (
     ui.activating &&
     ui.activating.cardId === cardId &&
@@ -3291,6 +3423,63 @@ const sameEntry = (a, b) => {
 const sameLine = (a, b) =>
   a.length === b.length && a.every((m, i) => sameEntry(m, b[i]))
 
+// The cards a logged entry acts on: the actor and, where present, the thing it
+// targets or the defender it drew in. Zones (from/to) are locations, not cards,
+// so they are not counted -- the "objects" of a move are cards.
+function entryCards(entry) {
+  const ids = new Set()
+  if (entry.cardId) ids.add(entry.cardId)
+  if (entry.targetId) ids.add(entry.targetId)
+  if (entry.defenderId) ids.add(entry.defenderId)
+  return ids
+}
+
+// Every card a solution line manipulates -- the union of entryCards over its
+// moves. An "in-between" move that touches none of these cards cannot change
+// where the solution's own pieces end up, so it is harmless padding.
+function solutionCards(line) {
+  const s = new Set()
+  for (const e of line) for (const id of entryCards(e)) s.add(id)
+  return s
+}
+
+// How an attempt lines up with one solution line:
+//   'exact'    -- the same moves, same length (the optimal path)
+//   'loose'    -- every solution move is present in order, and the extra moves
+//                 in between only touch cards the solution never manipulates (so
+//                 they can't disturb the puzzle's objects): solved, not optimal
+//   'progress' -- a valid partial run: every move so far is a solution move in
+//                 order or a harmless extra, but not all solution moves are in
+//                 yet, so the line can still be completed from here
+//   'dead'     -- a solution move is missing/out of order, or an extra move
+//                 touches one of the solution's own cards (a real detour): this
+//                 line can no longer be reached, so it is not being solved
+// Greedy is safe: a move that equals the next needed solution move necessarily
+// touches a solution card, so it could never be reclassified as harmless padding.
+function lineOutcome(line, moves) {
+  const solCards = solutionCards(line)
+  let j = 0
+  let extras = 0
+  for (const m of moves) {
+    if (j < line.length && sameEntry(m, line[j])) {
+      j++
+      continue
+    }
+    for (const id of entryCards(m)) {
+      if (solCards.has(id)) return 'dead'
+    }
+    extras++
+  }
+  if (j < line.length) return 'progress'
+  return extras > 0 ? 'loose' : 'exact'
+}
+
+// The attempt is still on track when at least one solution line is not dead --
+// it is complete, or a completable partial run. An empty attempt is on track
+// (every line is 'progress'), so a fresh board never reads as a mistake.
+const attemptViable = (moves) =>
+  state.solutions.some((l) => lineOutcome(l, moves) !== 'dead')
+
 // The undo-only fields on a logged entry -- snapshots and the seq tag. They are
 // consequences of the position, never compared by sameEntry(), and (prevZones
 // especially) large, so a committed solution line drops them.
@@ -3346,6 +3535,8 @@ export function enterPlay() {
   state.checked = false
   state.firstWrong = -1
   state.mode = 'play'
+  resetPlayTracking()
+  restoreAttempt()
   ui.attacker = null
   ui.striker = null
   ui.moving = null
@@ -3384,6 +3575,9 @@ export function resetPlay() {
   state.events = []
   state.checked = false
   state.firstWrong = -1
+  // Reset restores the starting position but keeps the day's mistake count and
+  // any solved/failed lock -- the limit is cumulative for the day, not per run.
+  resetPlayTracking()
   ui.attacker = null
   ui.carrier = null
   ui.striker = null
@@ -3632,28 +3826,62 @@ export function check() {
   return false
 }
 
-// ---------- daily attempt limit ----------
+// Live solve verdict, recomputed on every move (push, undo, reset). Null while
+// the board is not yet solved; 'optimal' when the attempt matches a solution
+// line exactly; 'partial' when it reaches a line with harmless extra moves --
+// the correct sequence plus fiddling that never touches the solution's objects.
+// There is no submit button: the verdict reflects the board as it stands, so a
+// detour that disturbs a puzzle piece un-solves it as honestly as it solved it.
+export const solveStatus = computed(() => {
+  if (state.mode !== 'play' || !hasSolution()) return null
+  let best = null
+  for (const line of state.solutions) {
+    const o = lineOutcome(line, state.moves)
+    if (o === 'exact') return 'optimal'
+    if (o === 'loose') best = 'partial'
+  }
+  return best
+})
 
-// Editors test their own puzzles, so only regular players are limited.
+// ---------- automatic solve / mistake detection ----------
+
+// A wrong move never stays on the board: the whole action that broke the
+// attempt is snapped back to the last on-track position, and a mistake is
+// counted. After this many mistakes a limited player fails the puzzle for the
+// day. Editors are exempt from the cap but still get the snap-back feedback.
+export const MAX_MISTAKES = 5
+
+// Only regular players are limited; editors test their own puzzles freely.
 const triesLimited = () => !config.canEdit
+
+// Input is sealed for the day once a limited player has solved or failed. The
+// verdict banner stays up; Undo/Reset can no longer change the outcome.
+export const playLocked = computed(
+  () => triesLimited() && (state.solved || state.failed)
+)
 
 export const localToday = () => new Date().toLocaleDateString('en-CA') // YYYY-MM-DD
 
 const attemptKey = () => `${state.puzzleId || 'adhoc'}:${localToday()}`
 
-export const outOfTries = () =>
-  triesLimited() && !state.solved && state.tries >= MAX_TRIES
-
+// The day's progress on this puzzle, persisted so a reload (or coming back
+// later the same day) restores the mistake count and any solved/failed lock.
+// Soft by design: clearing localStorage resets it.
 function persistAttempt() {
+  if (!triesLimited()) return
   try {
     const prev = JSON.parse(localStorage.getItem(ATTEMPTS_KEY)) || {}
-    // Only today's records are worth keeping, so stale days are dropped.
     const map = {}
     const suffix = `:${localToday()}`
     for (const [k, v] of Object.entries(prev)) {
-      if (k.endsWith(suffix)) map[k] = v
+      if (k.endsWith(suffix)) map[k] = v // keep only today's records
     }
-    map[attemptKey()] = { tries: state.tries, solved: state.solved }
+    map[attemptKey()] = {
+      mistakes: state.mistakes,
+      solved: state.solved,
+      failed: state.failed,
+      quality: state.solveQuality,
+    }
     localStorage.setItem(ATTEMPTS_KEY, JSON.stringify(map))
   } catch {
     /* storage unavailable: the limit degrades to per-pageload */
@@ -3661,36 +3889,78 @@ function persistAttempt() {
 }
 
 function restoreAttempt() {
-  state.tries = 0
+  state.mistakes = 0
   state.solved = false
+  state.failed = false
+  state.solveQuality = ''
   if (!triesLimited()) return
   try {
     const rec = JSON.parse(localStorage.getItem(ATTEMPTS_KEY))?.[attemptKey()]
     if (rec) {
-      state.tries = rec.tries || 0
+      state.mistakes = rec.mistakes || 0
       state.solved = !!rec.solved
+      state.failed = !!rec.failed
+      state.solveQuality = rec.quality || ''
     }
   } catch {
     /* ignore */
   }
 }
 
-// A submit is a checked attempt that consumes a try (for non-editors).
-// Returns true/false like check(), or null when there was nothing to check --
-// no recorded solution, or no try left. A puzzle with no solution must not
-// spend a try or set `solved`, or one click on an empty board would lock the
-// player out for the rest of the day.
-export function submit() {
-  if (!hasSolution()) return null
-  if (triesLimited() && (state.solved || state.tries >= MAX_TRIES)) return null
-  const ok = check()
-  if (triesLimited()) {
-    state.tries++
-    if (ok) state.solved = true
-    persistAttempt()
-  }
-  return ok
+// Length of the last on-track move list. A wrong move is rewound to here.
+let lastGoodLen = 0
+let evaluatingPlay = false
+
+export function resetPlayTracking() {
+  lastGoodLen = 0
 }
+
+// Runs after every change to the play move list (see the watch below). It keeps
+// the invariant that `state.moves` is always on track: a move (or whole action)
+// that leaves no solution line reachable is snapped back and counted; a move
+// that completes a line marks the puzzle solved.
+function evaluatePlay(len) {
+  if (evaluatingPlay) return
+  if (state.mode !== 'play' || state.recording || !hasSolution()) return
+  if (state.solved || state.failed) return
+  // A rewind (undo/reset) can only land on an on-track position, so just move
+  // the checkpoint back with it -- never read a shrinking list as a mistake.
+  if (len <= lastGoodLen) {
+    lastGoodLen = len
+    return
+  }
+  if (attemptViable(state.moves)) {
+    lastGoodLen = len
+    const status = solveStatus.value
+    if (status) {
+      state.solveQuality = status === 'optimal' && state.mistakes === 0
+        ? 'optimal'
+        : 'partial'
+      // The daily lock is only meaningful for limited players; editors keep
+      // testing without being sealed out.
+      if (triesLimited()) {
+        state.solved = true
+        persistAttempt()
+      }
+    }
+    return
+  }
+  // Off track: rewind the offending action back to the last good checkpoint.
+  evaluatingPlay = true
+  try {
+    while (state.moves.length > lastGoodLen) undo()
+  } finally {
+    evaluatingPlay = false
+  }
+  state.mistakes++
+  if (triesLimited() && state.mistakes >= MAX_MISTAKES) state.failed = true
+  persistAttempt()
+}
+
+watch(
+  () => state.moves.length,
+  (len) => evaluatePlay(len)
+)
 
 // ---------- cards ----------
 
@@ -4038,6 +4308,7 @@ export function loadPuzzle(data, { play = true } = {}) {
   ui.awaitingDefender = null
   ui.storyChoice = null
   ui.selected = null
+  resetPlayTracking()
   restoreAttempt()
   markSaved()
 }
@@ -4076,9 +4347,12 @@ export function newPuzzle() {
   state.recording = false
   state.checked = false
   state.firstWrong = -1
-  state.tries = 0
+  state.mistakes = 0
   state.solved = false
+  state.failed = false
+  state.solveQuality = ''
   state.mode = config.canEdit ? 'editor' : 'play'
+  resetPlayTracking()
   ui.attacker = null
   ui.striker = null
   ui.moving = null

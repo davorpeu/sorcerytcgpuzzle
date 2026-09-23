@@ -326,15 +326,20 @@ function nodeStyle(idx) {
     transparent 9px
   );
 }
-/* Animated water treatment under a water/flooded site. Sits over the square but
-   under the site art, and never takes the pointer (the global `.site-strip > *`
-   rule would otherwise make it swallow clicks, so it is overridden back here). */
+/* Animated water treatment under a water/flooded site. Confined to the lower
+   band (matching `.cell-half.bot`'s 26%) so it marks the underwater region
+   rather than washing over the whole square. Sits under the site art, and never
+   takes the pointer (the global `.site-strip > *` rule would otherwise make it
+   swallow clicks, so it is overridden back here). */
 .water-overlay {
   position: absolute;
-  inset: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 26%;
   z-index: 0;
   pointer-events: none;
-  border-radius: 6px;
+  border-radius: 0 0 6px 6px;
   overflow: hidden;
   background:
     linear-gradient(0deg, rgba(28, 74, 128, 0.34), rgba(44, 110, 176, 0.22)),

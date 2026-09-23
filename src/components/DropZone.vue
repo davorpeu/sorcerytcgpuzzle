@@ -16,6 +16,7 @@ import {
   spellCastable,
   canCast,
   castByDrop,
+  playerControls,
 } from '../store.js'
 
 const props = defineProps({
@@ -62,6 +63,10 @@ const tabbable = computed(() => armed.value && props.keyboard)
 // just places cards. An unaffordable spell does nothing rather than moving in
 // for free.
 function castOrMove(cardId, from, zone) {
+  // In play mode the solver drives only their own side: an opponent's cards
+  // (a spell in their hand, a unit of theirs on the board) can't be cast or
+  // moved by dragging/clicking. The puzzle moves the opponent automatically.
+  if (!playerControls(cardId)) return
   if (spellCastable(cardId)) {
     if (canCast(cardId)) castByDrop(cardId, zone)
     return
