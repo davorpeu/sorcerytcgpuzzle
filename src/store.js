@@ -1,4 +1,4 @@
-import { reactive, computed } from 'vue'
+import { reactive, computed, watch } from 'vue'
 
 export const GRID_COLS = 5
 export const GRID_ROWS = 4
@@ -10,12 +10,10 @@ export const INTERSECTION_ROWS = GRID_ROWS - 1
 export const INTERSECTIONS = INTERSECTION_COLS * INTERSECTION_ROWS
 
 const STORAGE_KEY = 'sorceryPuzzles.v1'
+// Per-puzzle, per-day play progress (mistakes + solved/failed lock) for limited
+// players. Soft: clearing localStorage resets it.
 const ATTEMPTS_KEY = 'sorceryAttempts.v1'
 const FORMAT_VERSION = 1
-
-// Wordle-style limit: non-editors get this many submits per puzzle per day,
-// tracked in the browser's localStorage.
-export const MAX_TRIES = 3
 
 // A self-contained ?data= share link longer than this is treated as too big to
 // be usable (browsers and chat apps truncate very long URLs). Past it we steer
@@ -256,6 +254,10 @@ export const state = reactive({
   initialTapped: null,
   damage: {}, // cardId -> number of damage counters on that card
   initialDamage: null,
+  // Reversible in-play water state by square. A site is water when its own
+  // affinity has a water threshold or when this map marks it as flooded.
+  floodedSites: {},
+  initialFloodedSites: null,
   // Gameplay-only modifiers, populated by effects (Layer C) and folded into the
   // derived `effective` map. Base strength/keywords live on the card art and are
   // never stored; only in-play changes are: strengthMod is a signed counter, and
@@ -283,8 +285,12 @@ export const state = reactive({
   checked: false,
   firstWrong: -1, // index of first divergence after check(); -1 = fully correct
   targetLen: 0, // length of the closest solution line after check()
-  tries: 0, // submits used today for this puzzle (non-editors only)
-  solved: false, // this puzzle was solved today (non-editors only)
+  // Automatic solve/mistake tracking (see evaluatePlay). Wrong moves are snapped
+  // back and counted; solved/failed lock a limited player out for the day.
+  mistakes: 0, // wrong moves made today for this puzzle (non-editors only)
+  solved: false, // solved today (non-editors: persisted + locks input)
+  failed: false, // hit the mistake cap today (non-editors: persisted + locks)
+  solveQuality: '', // 'optimal' | 'partial' once solved, for the verdict banner
 })
 
 const FIXED_ZONE_LABELS = {
@@ -370,6 +376,119 @@ function siteOn(square) {
   return id ? state.cards[id] : null
 }
 
+// A site's water type is derived from its authored threshold and the transient
+// Flood state. Other elemental thresholds do not turn off water; the presence
+// of a positive water affinity is enough.
+export function isWaterSite(square) {
+  const site = siteOn(square)
+  if (!site) return false
+  return Number(site.affinity?.water) > 0 || !!state.floodedSites[String(square)]
+}
+
+export function isLandSite(square) {
+  return !!siteOn(square) && !isWaterSite(square)
+}
+
+export function isFloodedSite(square) {
+  return !!siteOn(square) && !!state.floodedSites[String(square)]
+}
+
+// Change the reversible site state and immediately apply state-based survival.
+// Ability entries pass their own snapshot; direct setup changes get a small
+// synthetic transition so the same survival rules and death events are used.
+export function setFloodedSite(square, flooded, entry = null) {
+  const site = siteOn(square)
+  const n = Number(square)
+  if (!site || !Number.isInteger(n) || n < 0 || n >= GRID_SIZE) return false
+  const key = String(n)
+  const next = !!flooded
+  const previous = !!state.floodedSites[key]
+  if (previous === next) return false
+  const before = clone(state.floodedSites)
+  if (next) state.floodedSites[key] = true
+  else delete state.floodedSites[key]
+  // Survival only bites while a solution is played or recorded. The editor
+  // stays free-form, so toggling water while building a position never sweeps
+  // units off to the cemetery. An effect-driven change (with its own entry)
+  // always resolves survival, since it only happens during play anyway.
+  if (entry || enforcing()) {
+    const transition = entry || { type: 'flood', square: n, flooded: next }
+    if (!transition.prevFloodedSites) transition.prevFloodedSites = before
+    checkSurvival(transition)
+  }
+  return true
+}
+
+// The square a site card currently sits on, or null if it is not on the board.
+function squareOfSite(cardId) {
+  const m = /^site:(\d+)$/.exec(zoneOf(cardId) || '')
+  return m ? Number(m[1]) : null
+}
+
+// On-board orthogonal neighbours (up/down/left/right) of a grid square. Diagonals
+// are deliberately excluded: a body of water is connected cardinally only.
+function orthogonalSquares(square) {
+  const n = Number(square)
+  const row = Math.floor(n / GRID_COLS)
+  const col = n % GRID_COLS
+  const out = []
+  if (row > 0) out.push(n - GRID_COLS)
+  if (row < GRID_ROWS - 1) out.push(n + GRID_COLS)
+  if (col > 0) out.push(n - 1)
+  if (col < GRID_COLS - 1) out.push(n + 1)
+  return out
+}
+
+// The body of water a square belongs to: the maximal set of orthogonally
+// connected water sites reachable from it (flood-fill, cardinal steps only).
+// Returns null when the square itself is not a water site. `sites`/`squares`
+// are the member square indices (ascending) and `size` their count -- enough for
+// an ability to target the connected set, its area, or scale off its size.
+export function waterBodyAt(square) {
+  const n = Number(square)
+  if (!isWaterSite(n)) return null
+  const seen = new Set([n])
+  const stack = [n]
+  while (stack.length) {
+    const cur = stack.pop()
+    for (const nb of orthogonalSquares(cur)) {
+      if (!seen.has(nb) && isWaterSite(nb)) {
+        seen.add(nb)
+        stack.push(nb)
+      }
+    }
+  }
+  const sites = [...seen].sort((a, b) => a - b)
+  return { sites, squares: sites, size: sites.length }
+}
+
+// How large the body of water at a square is (0 if it is not water).
+export const waterBodySizeAt = (square) => waterBodyAt(square)?.size || 0
+
+// The side that controls the site on a square (its owner), or null with no site.
+// A minion may not be summoned onto a site the opponent controls unless its card
+// explicitly allows it.
+function siteControllerSide(square) {
+  const site = siteOn(square)
+  return site ? (site.enemy ? 'opponent' : 'player') : null
+}
+
+// Whether a minion may be cast onto a board location given site control. Only
+// minions are gated; avatars, artifacts, auras, and magic use their own paths.
+// An open square (no site) or one you control is always fine; an opponent's site
+// needs the card's `allowOpponentSiteSummon` capability.
+export function canCastMinionTo(cardId, zone) {
+  const card = state.cards[cardId]
+  if (!card || !card.unit || card.avatar) return true
+  const m = /^cell:(\d+):(top|bot)$/.exec(routeZone(cardId, zone) || '')
+  if (!m) return true
+  const owner = siteControllerSide(Number(m[1]))
+  if (!owner) return true
+  const casterSide = card.enemy ? 'opponent' : 'player'
+  if (owner === casterSide) return true
+  return !!card.allowOpponentSiteSummon
+}
+
 // Region of a square's surface / below slot:
 //   surface slot  -> 'surface' with a site, else 'void' (open air over the square)
 //   below slot    -> 'underwater' on a water site, 'underground' on a land site,
@@ -380,7 +499,7 @@ export function regionOf(square, layer) {
   if (layer === 'bot' || layer === 'below') {
     // No site means no subsurface at all -- you can't go below the open void.
     if (!site) return null
-    return site.water ? 'underwater' : 'underground'
+    return isWaterSite(square) ? 'underwater' : 'underground'
   }
   return null
 }
@@ -535,6 +654,15 @@ export const isSilenced = (id) => !!traits(id)?.silenced
 // The side a card belongs to.
 const sideOf = (id) => (state.cards[id]?.enemy ? 'opponent' : 'player')
 
+// In play mode the solver controls only their own side: an opponent's cards --
+// spells in their hand, the actions on their units' bar -- are look-only, since
+// the puzzle drives the opponent automatically. Editing and recording keep full
+// control of both sides so an author can set up and demonstrate a solution.
+export function playerControls(cardId) {
+  if (state.mode !== 'play') return true
+  return !state.cards[cardId]?.enemy
+}
+
 // Combat stats: base Power/Life from the card (authored, shown on the art),
 // modified in play. An avatar's Life is its side's life total.
 export const effectivePower = (id) =>
@@ -658,11 +786,31 @@ export function reachableNodes(unitId) {
 const enforcing = () =>
   state.enforce && (state.mode === 'play' || state.recording)
 
+// A minion that entered the realm this turn has summoning sickness: it cannot
+// tap, or be tapped, to pay for the costs of abilities (so no Move & Attack,
+// shoot, intercept, or tap-cost activated ability) until end of turn -- unless
+// it has Charge, which explicitly lets a just-summoned unit tap. Avatars are
+// never "summoned", so they are never sick. hasKeyword() reads the effective
+// traits, so Charge printed on the card, lent by a passive/aura, or granted
+// mid-turn by a spell or ability all lift the sickness at once.
+// (Rulebook p. 19, glossary "Charge".)
+export function hasSummoningSickness(cardId) {
+  return !!state.summoned[cardId] && !hasKeyword(cardId, 'charge')
+}
+
+// Player-initiated tap costs are refused for a summon-sick actor, but only while
+// rules are enforced (play/record) -- the free-form editor and forced effects
+// (the effect `move`/`tap` ops never route through these helpers) are
+// unaffected, mirroring how `enforcing()`/`combat` already scope the checks.
+export const tapBlockedBySickness = (cardId) => enforcing() && hasSummoningSickness(cardId)
+
 // May this unit legally move to a board zone? Non-cell destinations aren't
-// movement-gated (summoning from hand, etc.).
+// movement-gated (summoning from hand, etc.). A summon-sick unit can't move at
+// all: the Move action taps it (Move & Attack), so it is barred while enforcing.
 export function canMoveUnit(unitId, toZone) {
   const m = /^cell:(\d+):(top|bot)$/.exec(toZone || '')
   if (!m) return true
+  if (tapBlockedBySickness(unitId)) return false
   return reachableNodes(unitId).has(nodeKey(Number(m[1]), m[2]))
 }
 
@@ -670,15 +818,19 @@ export function canMoveUnit(unitId, toZone) {
 // keywords -- Airborne can only be hit by Airborne, Stealth not by opponents.
 export function canAttack(attackerId, targetId) {
   if (!isUnit(attackerId) || isDisabled(attackerId)) return false
+  if (tapBlockedBySickness(attackerId)) return false // Move & Attack taps
+  const target = state.cards[targetId]
+  // You may only attack the opposing side, and only its units or sites --
+  // never friendly cards, and never a non-unit/non-site (aura, artifact, etc.).
+  if (!target || (!isUnit(targetId) && !target.site)) return false
+  if (!oppositeSides(attackerId, targetId)) return false
   const t = nodeOf(targetId)
   if (!t || !reachableNodes(attackerId).has(nodeKey(t.sq, t.layer))) return false
   if (isUnit(targetId)) {
     const atk = effectiveKeywords(attackerId)
     const tgt = effectiveKeywords(targetId)
     if (tgt.has('airborne') && !atk.has('airborne')) return false
-    const oppose =
-      !!state.cards[attackerId].enemy !== !!state.cards[targetId].enemy
-    if (oppose && isStealthed(targetId)) return false
+    if (isStealthed(targetId)) return false
   }
   return true
 }
@@ -764,7 +916,7 @@ export function rangedTargets(shooterId) {
 }
 
 export const canShoot = (shooterId, targetId) =>
-  rangedTargets(shooterId).has(targetId)
+  !tapBlockedBySickness(shooterId) && rangedTargets(shooterId).has(targetId)
 
 export function armedShootLegal(targetId) {
   if (!ui.shooting || ui.shooting === targetId) return false
@@ -940,6 +1092,8 @@ export const EFFECT_OPS = [
   'heal',
   'grantFrom',
   'release',
+  'flood',
+  'unflood',
 ]
 
 // Authoring options for a grid target.
@@ -952,7 +1106,7 @@ export const TARGET_SIDES = ['any', 'friendly', 'enemy']
 // Where a `move` effect sends its subject.
 export const LOCATION_REFS = ['sourceLocation', 'targetLocation']
 // How a damage/strength amount is computed.
-export const AMOUNT_REFS = ['literal', 'carriedCount']
+export const AMOUNT_REFS = ['literal', 'carriedCount', 'waterBodySize']
 
 // Whose action fires a trigger: the card's own move, anyone's, or one side's.
 export const TRIGGER_SUBJECTS = ['self', 'any', 'enemy', 'friendly']
@@ -1114,6 +1268,9 @@ function newEffect(op = 'adjustStat') {
   if (op === 'move') Object.assign(e, { who: 'target', to: 'sourceLocation' })
   if (op === 'destroy' || op === 'banish' || op === 'bounce') e.who = 'target'
   if (op === 'heal') e.who = 'self'
+  // Flood/unflood a site: whose square, and whether the whole connected body of
+  // water is drained (unflood) rather than the single targeted site.
+  if (op === 'flood' || op === 'unflood') Object.assign(e, { who: 'target', scope: 'site' })
   return e
 }
 
@@ -1340,23 +1497,38 @@ function moveCardImpl(cardId, from, to, { tapOnMove } = {}) {
   const i = src?.indexOf(cardId) ?? -1
   if (i === -1) return
   const prevTapped = clone(state.tapped)
+  const prevFloodedSites = clone(state.floodedSites)
   src.splice(i, 1)
   state.zones[to].push(cardId)
 
   const card = state.cards[cardId]
+  if (card?.site && from.startsWith('site:')) {
+    delete state.floodedSites[from.slice('site:'.length)]
+  }
   const shouldTap = tapOnMove || ui.moving === cardId
   ui.moving = null
   applyMoveTaps(card, from, to, shouldTap)
 
-  logEntry({ cardId, from, to, prevTapped })
+  logEntry({ cardId, from, to, prevTapped, prevFloodedSites })
   // After the entry snapshots the pre-move maps, a unit that left the realm
   // sheds its in-play state (damage, strength, granted keywords, ward, ...).
   shedInPlayState(cardId, to)
+  // A plain Move & Attack without the attack: the opponent may intercept the
+  // unit where it stopped (a separate, deterministic entry). Only the dedicated
+  // cell-to-cell Move action offers this -- not summons or effect relocations.
+  if (
+    shouldTap &&
+    isUnit(card) &&
+    from.startsWith('cell:') &&
+    to.startsWith('cell:')
+  )
+    maybeAutoIntercept(cardId)
 }
 
 // ---------- moves, attacks & strikes ----------
 
 export function beginMove(cardId) {
+  if (!playerControls(cardId)) return
   ui.moving = ui.moving === cardId ? null : cardId
   ui.attacker = null
   ui.striker = null
@@ -1369,6 +1541,7 @@ export function beginMove(cardId) {
 // Attacks and strikes don't change the board; they are logged as their own entry types
 // so a solution can require them in sequence with moves.
 export function beginAttack(cardId) {
+  if (!playerControls(cardId)) return
   ui.attacker = ui.attacker === cardId ? null : cardId
   ui.awaitingDefender = null
   ui.striker = null
@@ -1392,6 +1565,7 @@ export function beginStrike(cardId) {
 // Ranged: tap to fire at a unit in line of sight. Its own armed slot, mutually
 // exclusive with the other actions like attack/strike.
 export function beginShoot(cardId) {
+  if (!playerControls(cardId)) return
   ui.shooting = ui.shooting === cardId ? null : cardId
   ui.attacker = null
   ui.striker = null
@@ -1428,16 +1602,22 @@ export function beginIntercept(cardId) {
   ui.shooting = null
 }
 
-// Y may intercept X: opposing units, X within Y's reach, and -- if X is Airborne
+// Y may intercept X: opposing units already sharing X's square (the location the
+// move ended on -- an intercept never steps to engage), and -- if X is Airborne
 // -- Y is Airborne or Ranged.
 export function canIntercept(interceptorId, targetId) {
   if (!isUnit(interceptorId) || isDisabled(interceptorId) || !isUnit(targetId)) return false
+  if (tapBlockedBySickness(interceptorId)) return false // intercepting taps
   const iCard = state.cards[interceptorId]
   const tCard = state.cards[targetId]
   if (!iCard || !tCard || !!iCard.enemy === !!tCard.enemy) return false
   if (isStealthed(targetId)) return false // Stealth can't be intercepted
+  // Intercept only where the move ends: the interceptor must already stand on
+  // the exact same location -- same square and same layer (both on the surface,
+  // or both below) -- as the unit it fights.
+  const i = nodeOf(interceptorId)
   const t = nodeOf(targetId)
-  if (!t || !reachableNodes(interceptorId).has(nodeKey(t.sq, t.layer))) return false
+  if (!i || !t || i.sq !== t.sq || i.layer !== t.layer) return false
   if (hasKeyword(targetId, 'airborne')) {
     return hasKeyword(interceptorId, 'airborne') || effectiveRanged(interceptorId) > 0
   }
@@ -1450,17 +1630,83 @@ export function armedInterceptLegal(targetId) {
   return enforcing() ? canIntercept(ui.intercepting, targetId) : isUnit(targetId)
 }
 
-export function targetIntercept(targetId) {
-  if (!ui.intercepting || ui.intercepting === targetId) return
-  const interceptorId = ui.intercepting
-  if (blockedByStealth(interceptorId, targetId)) return
-  if (enforcing() && !canIntercept(interceptorId, targetId)) return
+// Resolve one intercept: the interceptor taps, the fight is logged, and (with
+// combat on) damage is dealt. Shared by the manual and auto-intercept paths.
+function performIntercept(interceptorId, targetId) {
   const prevTapped = clone(state.tapped)
   if (isUnit(interceptorId)) state.tapped[interceptorId] = true
   const entry = { type: 'intercept', cardId: interceptorId, targetId, prevTapped }
   logEntry(entry)
   if (combatActive()) resolveAttack(interceptorId, targetId, entry)
+}
+
+export function targetIntercept(targetId) {
+  if (!ui.intercepting || ui.intercepting === targetId) return
+  const interceptorId = ui.intercepting
+  if (blockedByStealth(interceptorId, targetId)) return
+  if (enforcing() && !canIntercept(interceptorId, targetId)) return
+  performIntercept(interceptorId, targetId)
   ui.intercepting = null
+}
+
+// Number of on-board units on a side (true = opponent/enemy, false = player).
+function boardUnitCount(enemySide) {
+  let n = 0
+  for (const u of boardUnits()) if (!!u.card.enemy === enemySide) n++
+  return n
+}
+
+// The opponent's auto-intercept: after a player unit finishes a plain move on a
+// square the opponent shares, decide whether an opposing unit steps up to fight
+// it. Deterministic (like chooseAutoDefender) so a recorded solution replays the
+// same way. Two modes mirror how a player weighs it:
+//  - Survival: while the opponent avatar faces a lethal swing (or is already at
+//    Death's Door), every unit that could defend the avatar is reserved -- never
+//    spent intercepting. Units that can't defend it anyway intercept freely when
+//    they can remove the mover, thinning the attack.
+//  - Otherwise: play for material like chess -- only intercept to actually kill
+//    the moved unit, and only at parity or a material edge, preferring a fight
+//    the interceptor survives.
+function chooseAutoInterceptor(movedUnitId) {
+  if (!combatActive()) return null
+  const mover = state.cards[movedUnitId]
+  if (!mover || !isUnit(movedUnitId) || mover.enemy) return null
+  const node = nodeOf(movedUnitId)
+  if (!node) return null
+
+  const candidates = []
+  for (const id of unitsOnSquare(node.sq)) {
+    // The avatar never intercepts -- it can't defend and must save itself.
+    if (isAvatar(id)) continue
+    if (state.cards[id]?.enemy && canIntercept(id, movedUnitId)) candidates.push(id)
+  }
+  if (!candidates.length) return null
+
+  const avatar = oppAvatarUnit()
+  const survival = avatarUnderThreat(avatar) || (state.stats.opponent?.life || 0) <= 0
+  const edge = boardUnitCount(true) >= boardUnitCount(false)
+
+  const mPow = effectivePower(movedUnitId)
+  const mLife = Math.max(1, effectiveLife(movedUnitId))
+  const mLethal = hasKeyword(movedUnitId, 'lethal')
+  const value = (id) => defenderValue(id, avatar)
+  const cheapestFirst = [...candidates].sort((a, b) => value(a) - value(b) || (a < b ? -1 : 1))
+
+  for (const id of cheapestFirst) {
+    if (survival && canReachAvatar(id, avatar)) continue // reserved to defend the avatar
+    const kills = effectivePower(id) >= mLife || hasKeyword(id, 'lethal')
+    if (!kills) continue // never spend an intercept without removing the piece
+    const survives = effectiveLife(id) > mPow && !mLethal
+    if (survival) return id // free removal of an attacker helps us survive
+    if (survives || edge) return id // trade only at parity/advantage
+  }
+  return null
+}
+
+// After a plain move, let the opponent interpose an intercept if its AI wants to.
+function maybeAutoIntercept(movedUnitId) {
+  const interceptorId = chooseAutoInterceptor(movedUnitId)
+  if (interceptorId) performIntercept(interceptorId, movedUnitId)
 }
 
 export function targetAttack(targetId) {
@@ -1708,6 +1954,7 @@ function logEntry(entry) {
   if (!entry.prevTapped) entry.prevTapped = clone(state.tapped)
   if (!entry.prevStats) entry.prevStats = clone(state.stats)
   if (!entry.prevDamage) entry.prevDamage = clone(state.damage)
+  if (!entry.prevFloodedSites) entry.prevFloodedSites = clone(state.floodedSites)
   if (!entry.prevStrengthMod) entry.prevStrengthMod = clone(state.strengthMod)
   if (!entry.prevGrantedKeywords)
     entry.prevGrantedKeywords = clone(state.grantedKeywords)
@@ -1961,6 +2208,7 @@ function fireTriggers(entry) {
 // has become a unit -- card.site stays true either way -- so refusing by that
 // flag would block the one case that most needs carrying.
 export function beginPickup(cardId) {
+  if (!playerControls(cardId)) return
   ui.carrier = ui.carrier === cardId ? null : cardId
   if (ui.carrier) {
     // Only one action is ever armed: a leftover striker or move would swallow
@@ -2004,6 +2252,7 @@ export function targetPickup(targetId) {
 export function dropCarried(itemId) {
   const carrierId = state.carry[itemId]
   if (!carrierId) return
+  if (!playerControls(carrierId)) return
   const zone = zoneOf(carrierId)
   if (!zone) return
   const to = dropTarget(itemId, zone)
@@ -2182,19 +2431,25 @@ function squaresInShape(originSq, shape) {
   return out
 }
 
-// The cards an ability's grid target covers. The area emanates from the source's
-// layer (so it only hits same-layer locations) unless it is square-based
-// (throughLayers), which punches through both the surface and the under-site.
-function resolveGridArea(sourceId, pickedSquare, target) {
+// The board squares an ability's grid target covers (as opposed to the cards
+// standing on them). Shared by area effects so a site-state change (flood) and a
+// damage effect aim through exactly the same origin/shape logic. A picked origin
+// uses the chosen square; a self origin uses the source's own square, but a spell
+// cast from hand has none, so it falls back to the square it was dropped on.
+function resolveGridSquares(sourceId, pickedSquare, target) {
   const src = nodeOf(sourceId)
-  // A picked origin uses the chosen square; a self origin uses the source's own
-  // square, but a spell cast from hand has none, so it falls back to the square
-  // it was dropped on.
   const originSq = target.origin === 'pick' || src == null ? pickedSquare : src.sq
   if (originSq == null) return []
+  return squaresInShape(originSq, target.shape)
+}
+
+function resolveGridArea(sourceId, pickedSquare, target) {
+  const src = nodeOf(sourceId)
+  const squares = resolveGridSquares(sourceId, pickedSquare, target)
+  if (!squares.length) return []
   const layers = target.throughLayers ? ['top', 'bot'] : [src?.layer || 'top']
   const out = []
-  for (const sq of squaresInShape(originSq, target.shape)) {
+  for (const sq of squares) {
     for (const layer of layers) {
       for (const id of state.zones[`cell:${sq}:${layer}`] || []) {
         if (matchesFilter(state.cards[id], target.filter)) out.push(id)
@@ -2251,6 +2506,11 @@ function releaseGrant(carrierId, entry) {
 // number of cards the source is carrying (a projectile's picked-up payload).
 function effectAmount(eff, sourceId) {
   if (eff.amountRef === 'carriedCount') return carriedBy(sourceId).length
+  // Scale off the body of water the source stands on (or the site it is).
+  if (eff.amountRef === 'waterBodySize') {
+    const sq = nodeOf(sourceId)?.sq ?? squareOfSite(sourceId)
+    return sq == null ? 0 : waterBodySizeAt(sq)
+  }
   return Number(eff.amount) || 0
 }
 
@@ -2394,6 +2654,26 @@ function runEffects(ability, cardId, targetId, entry, gridSquare) {
       grantFrom(cardId, targetId, ability, entry)
     } else if (eff.op === 'release') {
       releaseGrant(cardId, entry)
+    } else if (eff.op === 'flood' || eff.op === 'unflood') {
+      const flooding = eff.op === 'flood'
+      // How many sites a flood/unflood reaches follows the ability's own target:
+      //  - a grid ability floods every site its shape covers (the picked site,
+      //    its adjacent ring, or a wider nearby area -- from self or a chosen
+      //    square), so "flood the sites you target / adjacent sites" is authored
+      //    entirely through the existing grid target;
+      //  - a card ability floods the single targeted (or own) site, or, when its
+      //    scope is 'body', drains the whole orthogonally connected water body.
+      let squares
+      if (ability.target?.mode === 'grid') {
+        squares = resolveGridSquares(cardId, pickSquare, ability.target)
+      } else {
+        const who = effectSubject(eff.who, cardId, targetId)
+        const sq = squareOfSite(who) ?? (typeof pickSquare === 'number' ? pickSquare : null)
+        if (sq == null) squares = []
+        else if (!flooding && eff.scope === 'body') squares = waterBodyAt(sq)?.squares || [sq]
+        else squares = [sq]
+      }
+      for (const s of squares) setFloodedSite(s, flooding, entry)
     }
   }
 }
@@ -2608,9 +2888,20 @@ export function canAffordCast(cardId) {
   return true
 }
 
-// A spell sitting in hand during play/recording is castable (subject to cost).
-export function spellInHand(cardId) {
-  return isSpell(cardId) && casting() && cardZoneCategory(cardId) === 'hand'
+// A spell is normally cast from hand. A card may also grant casting from the
+// cemetery (Sorcery cards that "cast from your cemetery"); only then is a spell
+// sitting in the graveyard a castable source.
+export function castsFromCemetery(cardId) {
+  return !!state.cards[cardId]?.castFromCemetery
+}
+
+// A spell in a zone it can be cast from during play/recording (subject to cost):
+// the hand always, the cemetery only when the card grants it.
+export function spellCastable(cardId) {
+  if (!isSpell(cardId) || !casting()) return false
+  const cat = cardZoneCategory(cardId)
+  if (cat === 'hand') return true
+  return cat === 'cemetery' && castsFromCemetery(cardId)
 }
 
 // Only Magic and Aura cards are true spells that need a caster; minions are
@@ -2636,7 +2927,12 @@ export function canCastFrom(cardId) {
 }
 
 export function canCast(cardId) {
-  return spellInHand(cardId) && canAffordCast(cardId) && canCastFrom(cardId)
+  return (
+    playerControls(cardId) &&
+    spellCastable(cardId) &&
+    canAffordCast(cardId) &&
+    canCastFrom(cardId)
+  )
 }
 
 // Pay the cost, resolve the magic's effect from the storyline, then send the
@@ -2689,6 +2985,9 @@ function legalSummonLocation(cardId, to) {
   const site = /^site:(\d+)$/.exec(to)
   if (site) return false // minions summon to a cell, not the site slot
   if (!m) return false
+  // A minion cannot be summoned onto an opponent-controlled site unless its card
+  // grants that capability -- checked here so every cast path shares the rule.
+  if (!canCastMinionTo(cardId, to)) return false
   const region = regionOf(Number(m[1]), m[2])
   if (region === 'surface') return true
   if (region === 'void') return hasKeyword(cardId, 'voidwalk')
@@ -2861,6 +3160,7 @@ export function deckSize(avatarId, kind) {
 // hand. Reuses moveCard, so the draw is a logged, undoable, gradeable move like
 // any other. The "top" of a deck is the last card in its zone.
 export function drawFromDeck(avatarId, kind) {
+  if (!playerControls(avatarId)) return
   if (!isAvatar(avatarId)) return
   if (kind !== 'atlas' && kind !== 'spellbook') return
   const side = sideOf(avatarId)
@@ -2883,6 +3183,7 @@ export function canCharge(cardId) {
 }
 
 export function chargeForMana(cardId) {
+  if (!playerControls(cardId)) return
   if (!canCharge(cardId)) return
   const entry = {
     type: 'charge',
@@ -2899,8 +3200,11 @@ export function chargeForMana(cardId) {
 // target picker (like attack/strike); one that doesn't fires straight away.
 // Re-invoking the armed ability cancels it.
 export function beginActivate(cardId, abilityId) {
+  if (!playerControls(cardId)) return
   const ability = findAbility(cardId, abilityId)
   if (!ability) return
+  // A tap cost can't be paid by a summon-sick card (Charge exempts).
+  if (ability.cost?.tap && tapBlockedBySickness(cardId)) return
   if (
     ui.activating &&
     ui.activating.cardId === cardId &&
@@ -3018,6 +3322,7 @@ export function undo() {
   if (m.prevTapped) state.tapped = clone(m.prevTapped)
   if (m.prevStats) state.stats = clone(m.prevStats)
   if (m.prevDamage) state.damage = clone(m.prevDamage)
+  if (m.prevFloodedSites) state.floodedSites = clone(m.prevFloodedSites)
   if (m.prevStrengthMod) state.strengthMod = clone(m.prevStrengthMod)
   if (m.prevGrantedKeywords) state.grantedKeywords = clone(m.prevGrantedKeywords)
   if (m.prevSummoned) state.summoned = clone(m.prevSummoned)
@@ -3079,6 +3384,7 @@ export function startRecording() {
     state.initialStats = clone(state.stats)
     state.initialTapped = clone(state.tapped)
     state.initialDamage = clone(state.damage)
+    state.initialFloodedSites = clone(state.floodedSites)
     state.solutions = []
   }
   state.draft = []
@@ -3094,6 +3400,7 @@ function restoreInitial() {
   if (state.initialStats) state.stats = clone(state.initialStats)
   state.tapped = clone(state.initialTapped || {})
   state.damage = clone(state.initialDamage || {})
+  state.floodedSites = clone(state.initialFloodedSites || {})
   // Grants and gameplay modifiers only exist mid-play; a start position has none.
   state.grants = {}
   state.strengthMod = {}
@@ -3134,6 +3441,63 @@ const sameEntry = (a, b) => {
 const sameLine = (a, b) =>
   a.length === b.length && a.every((m, i) => sameEntry(m, b[i]))
 
+// The cards a logged entry acts on: the actor and, where present, the thing it
+// targets or the defender it drew in. Zones (from/to) are locations, not cards,
+// so they are not counted -- the "objects" of a move are cards.
+function entryCards(entry) {
+  const ids = new Set()
+  if (entry.cardId) ids.add(entry.cardId)
+  if (entry.targetId) ids.add(entry.targetId)
+  if (entry.defenderId) ids.add(entry.defenderId)
+  return ids
+}
+
+// Every card a solution line manipulates -- the union of entryCards over its
+// moves. An "in-between" move that touches none of these cards cannot change
+// where the solution's own pieces end up, so it is harmless padding.
+function solutionCards(line) {
+  const s = new Set()
+  for (const e of line) for (const id of entryCards(e)) s.add(id)
+  return s
+}
+
+// How an attempt lines up with one solution line:
+//   'exact'    -- the same moves, same length (the optimal path)
+//   'loose'    -- every solution move is present in order, and the extra moves
+//                 in between only touch cards the solution never manipulates (so
+//                 they can't disturb the puzzle's objects): solved, not optimal
+//   'progress' -- a valid partial run: every move so far is a solution move in
+//                 order or a harmless extra, but not all solution moves are in
+//                 yet, so the line can still be completed from here
+//   'dead'     -- a solution move is missing/out of order, or an extra move
+//                 touches one of the solution's own cards (a real detour): this
+//                 line can no longer be reached, so it is not being solved
+// Greedy is safe: a move that equals the next needed solution move necessarily
+// touches a solution card, so it could never be reclassified as harmless padding.
+function lineOutcome(line, moves) {
+  const solCards = solutionCards(line)
+  let j = 0
+  let extras = 0
+  for (const m of moves) {
+    if (j < line.length && sameEntry(m, line[j])) {
+      j++
+      continue
+    }
+    for (const id of entryCards(m)) {
+      if (solCards.has(id)) return 'dead'
+    }
+    extras++
+  }
+  if (j < line.length) return 'progress'
+  return extras > 0 ? 'loose' : 'exact'
+}
+
+// The attempt is still on track when at least one solution line is not dead --
+// it is complete, or a completable partial run. An empty attempt is on track
+// (every line is 'progress'), so a fresh board never reads as a mistake.
+const attemptViable = (moves) =>
+  state.solutions.some((l) => lineOutcome(l, moves) !== 'dead')
+
 // The undo-only fields on a logged entry -- snapshots and the seq tag. They are
 // consequences of the position, never compared by sameEntry(), and (prevZones
 // especially) large, so a committed solution line drops them.
@@ -3142,6 +3506,7 @@ function stripBookkeeping(entry) {
     prevTapped,
     prevStats,
     prevDamage,
+    prevFloodedSites,
     prevStrengthMod,
     prevGrantedKeywords,
     prevSummoned,
@@ -3181,6 +3546,7 @@ export function enterPlay() {
     state.initialStats = clone(state.stats)
     state.initialTapped = clone(state.tapped)
     state.initialDamage = clone(state.damage)
+    state.initialFloodedSites = clone(state.floodedSites)
   }
   restoreInitial()
   state.moves = []
@@ -3188,6 +3554,8 @@ export function enterPlay() {
   state.checked = false
   state.firstWrong = -1
   state.mode = 'play'
+  resetPlayTracking()
+  restoreAttempt()
   ui.attacker = null
   ui.striker = null
   ui.moving = null
@@ -3226,6 +3594,9 @@ export function resetPlay() {
   state.events = []
   state.checked = false
   state.firstWrong = -1
+  // Reset restores the starting position but keeps the day's mistake count and
+  // any solved/failed lock -- the limit is cumulative for the day, not per run.
+  resetPlayTracking()
   ui.attacker = null
   ui.carrier = null
   ui.striker = null
@@ -3352,12 +3723,22 @@ export function toggleLanceToken(cardId) {
   }
 }
 
-// A water site's subsurface is underwater rather than underground; only
-// meaningful on a site card, but harmless to carry otherwise.
-export function toggleWater(cardId) {
+// Whether this minion may be summoned onto an opponent-controlled site. A site's
+// water type is no longer a manual flag -- it comes from the site's water
+// threshold (affinity.water) plus the reversible in-play Flood state -- so the
+// old per-card water toggle is gone; legacy `water` flags still migrate on load.
+export function toggleOppSiteSummon(cardId) {
   const card = state.cards[cardId]
   if (!card) return
-  card.water = !card.water
+  card.allowOpponentSiteSummon = !card.allowOpponentSiteSummon
+}
+
+// Whether this spell may also be cast from its owner's cemetery, not just the
+// hand. A per-card capability for the few cards that grant it.
+export function toggleCastFromCemetery(cardId) {
+  const card = state.cards[cardId]
+  if (!card) return
+  card.castFromCemetery = !card.castFromCemetery
 }
 
 export function toggleUnit(cardId) {
@@ -3464,28 +3845,62 @@ export function check() {
   return false
 }
 
-// ---------- daily attempt limit ----------
+// Live solve verdict, recomputed on every move (push, undo, reset). Null while
+// the board is not yet solved; 'optimal' when the attempt matches a solution
+// line exactly; 'partial' when it reaches a line with harmless extra moves --
+// the correct sequence plus fiddling that never touches the solution's objects.
+// There is no submit button: the verdict reflects the board as it stands, so a
+// detour that disturbs a puzzle piece un-solves it as honestly as it solved it.
+export const solveStatus = computed(() => {
+  if (state.mode !== 'play' || !hasSolution()) return null
+  let best = null
+  for (const line of state.solutions) {
+    const o = lineOutcome(line, state.moves)
+    if (o === 'exact') return 'optimal'
+    if (o === 'loose') best = 'partial'
+  }
+  return best
+})
 
-// Editors test their own puzzles, so only regular players are limited.
+// ---------- automatic solve / mistake detection ----------
+
+// A wrong move never stays on the board: the whole action that broke the
+// attempt is snapped back to the last on-track position, and a mistake is
+// counted. After this many mistakes a limited player fails the puzzle for the
+// day. Editors are exempt from the cap but still get the snap-back feedback.
+export const MAX_MISTAKES = 5
+
+// Only regular players are limited; editors test their own puzzles freely.
 const triesLimited = () => !config.canEdit
+
+// Input is sealed for the day once a limited player has solved or failed. The
+// verdict banner stays up; Undo/Reset can no longer change the outcome.
+export const playLocked = computed(
+  () => triesLimited() && (state.solved || state.failed)
+)
 
 export const localToday = () => new Date().toLocaleDateString('en-CA') // YYYY-MM-DD
 
 const attemptKey = () => `${state.puzzleId || 'adhoc'}:${localToday()}`
 
-export const outOfTries = () =>
-  triesLimited() && !state.solved && state.tries >= MAX_TRIES
-
+// The day's progress on this puzzle, persisted so a reload (or coming back
+// later the same day) restores the mistake count and any solved/failed lock.
+// Soft by design: clearing localStorage resets it.
 function persistAttempt() {
+  if (!triesLimited()) return
   try {
     const prev = JSON.parse(localStorage.getItem(ATTEMPTS_KEY)) || {}
-    // Only today's records are worth keeping, so stale days are dropped.
     const map = {}
     const suffix = `:${localToday()}`
     for (const [k, v] of Object.entries(prev)) {
-      if (k.endsWith(suffix)) map[k] = v
+      if (k.endsWith(suffix)) map[k] = v // keep only today's records
     }
-    map[attemptKey()] = { tries: state.tries, solved: state.solved }
+    map[attemptKey()] = {
+      mistakes: state.mistakes,
+      solved: state.solved,
+      failed: state.failed,
+      quality: state.solveQuality,
+    }
     localStorage.setItem(ATTEMPTS_KEY, JSON.stringify(map))
   } catch {
     /* storage unavailable: the limit degrades to per-pageload */
@@ -3493,36 +3908,78 @@ function persistAttempt() {
 }
 
 function restoreAttempt() {
-  state.tries = 0
+  state.mistakes = 0
   state.solved = false
+  state.failed = false
+  state.solveQuality = ''
   if (!triesLimited()) return
   try {
     const rec = JSON.parse(localStorage.getItem(ATTEMPTS_KEY))?.[attemptKey()]
     if (rec) {
-      state.tries = rec.tries || 0
+      state.mistakes = rec.mistakes || 0
       state.solved = !!rec.solved
+      state.failed = !!rec.failed
+      state.solveQuality = rec.quality || ''
     }
   } catch {
     /* ignore */
   }
 }
 
-// A submit is a checked attempt that consumes a try (for non-editors).
-// Returns true/false like check(), or null when there was nothing to check --
-// no recorded solution, or no try left. A puzzle with no solution must not
-// spend a try or set `solved`, or one click on an empty board would lock the
-// player out for the rest of the day.
-export function submit() {
-  if (!hasSolution()) return null
-  if (triesLimited() && (state.solved || state.tries >= MAX_TRIES)) return null
-  const ok = check()
-  if (triesLimited()) {
-    state.tries++
-    if (ok) state.solved = true
-    persistAttempt()
-  }
-  return ok
+// Length of the last on-track move list. A wrong move is rewound to here.
+let lastGoodLen = 0
+let evaluatingPlay = false
+
+export function resetPlayTracking() {
+  lastGoodLen = 0
 }
+
+// Runs after every change to the play move list (see the watch below). It keeps
+// the invariant that `state.moves` is always on track: a move (or whole action)
+// that leaves no solution line reachable is snapped back and counted; a move
+// that completes a line marks the puzzle solved.
+function evaluatePlay(len) {
+  if (evaluatingPlay) return
+  if (state.mode !== 'play' || state.recording || !hasSolution()) return
+  if (state.solved || state.failed) return
+  // A rewind (undo/reset) can only land on an on-track position, so just move
+  // the checkpoint back with it -- never read a shrinking list as a mistake.
+  if (len <= lastGoodLen) {
+    lastGoodLen = len
+    return
+  }
+  if (attemptViable(state.moves)) {
+    lastGoodLen = len
+    const status = solveStatus.value
+    if (status) {
+      state.solveQuality = status === 'optimal' && state.mistakes === 0
+        ? 'optimal'
+        : 'partial'
+      // The daily lock is only meaningful for limited players; editors keep
+      // testing without being sealed out.
+      if (triesLimited()) {
+        state.solved = true
+        persistAttempt()
+      }
+    }
+    return
+  }
+  // Off track: rewind the offending action back to the last good checkpoint.
+  evaluatingPlay = true
+  try {
+    while (state.moves.length > lastGoodLen) undo()
+  } finally {
+    evaluatingPlay = false
+  }
+  state.mistakes++
+  if (triesLimited() && state.mistakes >= MAX_MISTAKES) state.failed = true
+  persistAttempt()
+}
+
+watch(
+  () => state.moves.length,
+  (len) => evaluatePlay(len)
+)
 
 // ---------- cards ----------
 
@@ -3670,6 +4127,12 @@ export function fingerprint() {
     enforce: state.enforce,
     combat: state.combat,
     cards: state.cards,
+    initial: state.initialZones || state.zones,
+    tapped: state.initialTapped || state.tapped,
+    damage: state.initialDamage || state.damage,
+    floodedSites: state.initialFloodedSites || state.floodedSites,
+    carry: state.initialCarry || state.carry,
+    stats: state.initialStats || state.stats,
     ...startPosition(),
     solutions: state.solutions,
   })
@@ -3697,6 +4160,12 @@ export function serialize() {
     enforce: !!state.enforce,
     combat: !!state.combat,
     cards: clone(state.cards),
+    initial: clone(state.initialZones || state.zones),
+    initialTapped: clone(state.initialTapped || state.tapped || {}),
+    initialDamage: clone(state.initialDamage || state.damage || {}),
+    initialFloodedSites: clone(state.initialFloodedSites || state.floodedSites || {}),
+    carry: clone(state.initialCarry || state.carry),
+    stats: clone(state.initialStats || state.stats),
     ...clone(startPosition()),
     solutions: clone(state.solutions),
     savedAt: new Date().toISOString(),
@@ -3753,6 +4222,22 @@ function normalizeZones(z) {
   return out
 }
 
+function normalizeFloodedSites(sites) {
+  const out = {}
+  if (Array.isArray(sites)) {
+    for (const square of sites) {
+      const n = Number(square)
+      if (Number.isInteger(n) && n >= 0 && n < GRID_SIZE) out[String(n)] = true
+    }
+    return out
+  }
+  for (const [square, flooded] of Object.entries(sites || {})) {
+    const n = Number(square)
+    if (flooded && Number.isInteger(n) && n >= 0 && n < GRID_SIZE) out[String(n)] = true
+  }
+  return out
+}
+
 function normalizeStats(s) {
   const out = defaultStats()
   for (const side of ['player', 'opponent']) {
@@ -3779,6 +4264,10 @@ export function loadPuzzle(data, { play = true } = {}) {
     c.monument = !!c.monument
     c.lanceToken = !!c.lanceToken
     c.magic = !!c.magic
+    // Minion capability: may be summoned onto an opponent-controlled site.
+    c.allowOpponentSiteSummon = !!c.allowOpponentSiteSummon
+    // Spell capability: may be cast from the cemetery, not just the hand.
+    c.castFromCemetery = !!c.castFromCemetery
     c.spellCost = {
       mana: Number(c.spellCost?.mana) || 0,
       air: Number(c.spellCost?.air) || 0,
@@ -3808,6 +4297,18 @@ export function loadPuzzle(data, { play = true } = {}) {
       : []
   }
   state.initialZones = normalizeZones(data.initial)
+  state.initialFloodedSites = normalizeFloodedSites(
+    data.initialFloodedSites ?? data.floodedSites
+  )
+  // Older puzzles stored a manual `water` flag on the site card. Migrate that
+  // authored state to the reversible Flood map so their board topology stays
+  // intact without making the legacy card field part of the rule calculation.
+  for (let square = 0; square < GRID_SIZE; square++) {
+    const id = state.initialZones[`site:${square}`]?.[0]
+    if (id && state.cards[id]?.water && !state.initialFloodedSites[String(square)]) {
+      state.initialFloodedSites[String(square)] = true
+    }
+  }
   state.initialCarry = { ...data.carry }
   state.carry = clone(state.initialCarry)
   state.grants = {}
@@ -3818,6 +4319,7 @@ export function loadPuzzle(data, { play = true } = {}) {
   state.wardBroken = {}
   storyStack = null
   state.zones = restoreZones(state.initialZones)
+  state.floodedSites = clone(state.initialFloodedSites)
   state.initialStats = normalizeStats(data.stats)
   state.stats = clone(state.initialStats)
   state.initialTapped = clone(data.initialTapped || {})
@@ -3842,6 +4344,7 @@ export function loadPuzzle(data, { play = true } = {}) {
   ui.awaitingDefender = null
   ui.storyChoice = null
   ui.selected = null
+  resetPlayTracking()
   restoreAttempt()
   markSaved()
 }
@@ -3871,6 +4374,8 @@ export function newPuzzle() {
   state.initialTapped = null
   state.damage = {}
   state.initialDamage = null
+  state.floodedSites = {}
+  state.initialFloodedSites = null
   state.solutions = []
   state.draft = []
   state.moves = []
@@ -3878,9 +4383,12 @@ export function newPuzzle() {
   state.recording = false
   state.checked = false
   state.firstWrong = -1
-  state.tries = 0
+  state.mistakes = 0
   state.solved = false
+  state.failed = false
+  state.solveQuality = ''
   state.mode = config.canEdit ? 'editor' : 'play'
+  resetPlayTracking()
   ui.attacker = null
   ui.striker = null
   ui.moving = null
@@ -3914,6 +4422,7 @@ function writeStore(map) {
 
 export async function savePuzzle() {
   if (!state.initialZones) state.initialZones = clone(state.zones)
+  if (!state.initialFloodedSites) state.initialFloodedSites = clone(state.floodedSites)
   const data = serialize()
   if (remote()) {
     const saved = await api('/puzzles', {

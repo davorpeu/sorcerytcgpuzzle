@@ -13,9 +13,10 @@ import {
   activeStoryGridPick,
   canStoryPickSquare,
   pickStorySquare,
-  spellInHand,
+  spellCastable,
   canCast,
   castByDrop,
+  playerControls,
 } from '../store.js'
 
 const props = defineProps({
@@ -55,12 +56,18 @@ const gridPickable = computed(
 // every real control, and do nothing when activated.
 const tabbable = computed(() => armed.value && props.keyboard)
 
-// A spell dragged/clicked from hand into play is cast at the drop location (a
-// magic targets what's there; a permanent enters the realm), not moved. In the
-// editor spellInHand is false, so setting up a puzzle still just places cards.
-// An unaffordable spell does nothing rather than moving in for free.
+// A spell dragged/clicked from a castable source into play is cast at the drop
+// location (a magic targets what's there; a permanent enters the realm), not
+// moved. The source is the hand, or the cemetery for a card that grants it --
+// spellCastable decides. In the editor it is false, so setting up a puzzle still
+// just places cards. An unaffordable spell does nothing rather than moving in
+// for free.
 function castOrMove(cardId, from, zone) {
-  if (/^hand:/.test(from || '') && spellInHand(cardId)) {
+  // In play mode the solver drives only their own side: an opponent's cards
+  // (a spell in their hand, a unit of theirs on the board) can't be cast or
+  // moved by dragging/clicking. The puzzle moves the opponent automatically.
+  if (!playerControls(cardId)) return
+  if (spellCastable(cardId)) {
     if (canCast(cardId)) castByDrop(cardId, zone)
     return
   }

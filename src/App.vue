@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   state,
   ui,
@@ -10,11 +10,10 @@ import {
   enterPlay,
   enterEditor,
   resetPlay,
-  submit,
-  outOfTries,
-  hasSolution,
+  solveStatus,
+  playLocked,
+  MAX_MISTAKES,
   hasUnsavedWork,
-  MAX_TRIES,
   savePuzzle,
   listPuzzles,
   loadById,
@@ -160,42 +159,6 @@ async function onCopyLink() {
   }
 }
 
-function onSubmit() {
-  const ok = submit()
-  if (ok === null) {
-    // Either there is nothing to check against or there is no try left. The
-    // banner explains the second case; the first one has no banner, because
-    // nothing was checked.
-    if (!hasSolution())
-      flash('This puzzle has no recorded solution, so there is nothing to check.')
-    return
-  }
-  if (ok) {
-    flash('Correct — puzzle solved!')
-  } else if (config.canEdit) {
-    flash('Not quite — see the move log.')
-  } else {
-    const left = MAX_TRIES - state.tries
-    flash(
-      left > 0
-        ? `Not quite — ${tries(left)} left.`
-        : 'Out of tries for today.'
-    )
-  }
-}
-
-// Non-editors can no longer submit once solved or out of tries. Nobody can
-// submit against a puzzle with no recorded line: there is no answer to be
-// measured against, and pressing it used to report a win.
-const submitLocked = computed(
-  () => !hasSolution() || (!config.canEdit && (state.solved || outOfTries()))
-)
-
-const submitTitle = computed(() => {
-  if (!hasSolution()) return 'This puzzle has no recorded solution to check against'
-  return config.canEdit ? 'Unlimited submits in editor preview' : ''
-})
-
 // Shortest recorded solution line; what the play header advertises.
 const targetMoves = computed(() =>
   state.solutions.length
@@ -204,9 +167,6 @@ const targetMoves = computed(() =>
 )
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
-
-// "try" pluralizes irregularly, so it gets its own helper rather than plural().
-const tries = (n) => `${n} ${n === 1 ? 'try' : 'tries'}`
 
 // Hold Alt while hovering a card to see it enlarged.
 const previewCard = computed(() =>
@@ -275,33 +235,39 @@ onUnmounted(() => {
   stopDragScroll?.()
 })
 
+// The solve is detected automatically as the player moves -- there is no submit
+// button. A wrong move is snapped back and counted; after MAX_MISTAKES a limited
+// player fails for the day. `state.solved`/`failed` are the persisted daily lock
+// (non-editors); `solveStatus` is the live read that also drives an editor's
+// preview, where nothing is sealed.
+const solvedMsg = () =>
+  (state.solveQuality || solveStatus.value) === 'optimal' && state.mistakes === 0
+    ? '✔ Solved! This is the optimal solution.'
+    : '✔ Solved — but not the optimal path.'
+
 const result = computed(() => {
   if (state.mode !== 'play') return null
-  // Persistent states for limited players, shown even before any submit
-  // this pageload (e.g. after a reload).
-  if (!config.canEdit) {
-    if (state.solved && !state.checked)
-      return { ok: true, msg: '✔ Already solved — come back tomorrow for the next puzzle.' }
-    if (outOfTries())
-      return {
-        ok: false,
-        msg: `✘ Out of tries for today (${MAX_TRIES}/${MAX_TRIES}) — come back tomorrow.`,
-      }
-  }
-  if (!state.checked) return null
-  if (state.firstWrong === -1)
-    return { ok: true, msg: '✔ Correct! You solved the puzzle.' }
-  // For limited players every wrong verdict states what it cost.
-  const left = config.canEdit
-    ? ''
-    : ` — ${tries(MAX_TRIES - state.tries)} left today.`
-  if (state.firstWrong >= state.moves.length)
+  if (state.failed)
     return {
       ok: false,
-      msg: `Correct so far, but this solution needs ${state.targetLen} moves — keep going.${left}`,
+      msg: `✘ Out of moves — ${MAX_MISTAKES} mistakes. Come back tomorrow.`,
     }
-  return { ok: false, msg: `✘ Wrong move at step ${state.firstWrong + 1}.${left}` }
+  if (state.solved) return { ok: true, msg: solvedMsg() }
+  // Editor preview (and the instant before the daily lock is written): read the
+  // live verdict directly.
+  if (solveStatus.value) return { ok: true, msg: solvedMsg() }
+  return null
 })
+
+// A wrong move increments the counter; announce it as it happens. The board has
+// already snapped back to the last good position by the time this fires.
+watch(
+  () => state.mistakes,
+  (n, prev) => {
+    if (n > prev && !state.failed)
+      flash(`✘ Wrong move — ${n}/${MAX_MISTAKES} mistakes.`)
+  }
+)
 </script>
 
 <template>
@@ -325,23 +291,25 @@ const result = computed(() => {
           Play
         </button>
       </div>
-      <!-- Undo, Reset and Submit are what you reach for on every move, so
-           they sit next to Play rather than in a sidebar panel. -->
+      <!-- Undo and Reset are what you reach for on every move, so they sit next
+           to Play rather than in a sidebar panel. The solve is detected
+           automatically, so there is no Submit button; a wrong move is snapped
+           back and counted instead. -->
       <div v-if="state.mode === 'play'" class="topbar-actions">
-        <button class="btn" :disabled="!state.moves.length" @click="undo">
+        <button
+          class="btn"
+          :disabled="!state.moves.length || playLocked"
+          @click="undo"
+        >
           Undo
         </button>
         <button class="btn" @click="resetPlay">Reset</button>
-        <button
-          class="btn primary"
-          :disabled="submitLocked"
-          :title="submitTitle"
-          @click="onSubmit"
+        <span
+          v-if="!config.canEdit && state.solutions.length"
+          class="mistakes"
+          :class="{ danger: state.mistakes >= MAX_MISTAKES }"
         >
-          Submit solution
-        </button>
-        <span v-if="!config.canEdit" class="tries">
-          {{ state.tries }}/{{ MAX_TRIES }} tries
+          {{ state.mistakes }}/{{ MAX_MISTAKES }} mistakes
         </span>
       </div>
 
@@ -368,7 +336,7 @@ const result = computed(() => {
       </div>
     </div>
 
-    <div class="layout">
+    <div class="layout" :class="{ locked: playLocked }">
       <aside class="sidebar">
         <!-- Everything above your own zones scrolls inside the column, so the
              editor's panels can be as tall as they like without pushing your
@@ -544,8 +512,8 @@ const result = computed(() => {
               </template>
             </p>
             <p v-else class="hint warn">
-              This puzzle has no recorded solution, so there is nothing to
-              submit against.
+              This puzzle has no recorded solution, so a solve cannot be
+              detected.
             </p>
           </div>
 

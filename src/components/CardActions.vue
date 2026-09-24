@@ -10,7 +10,8 @@ import {
   clearSelection,
   removeCard,
   toggleSite,
-  toggleWater,
+  toggleOppSiteSummon,
+  toggleCastFromCemetery,
   toggleAura,
   toggleArtifact,
   toggleMonument,
@@ -45,6 +46,7 @@ import {
   carriedBy,
   carrierOf,
   isTapped,
+  tapBlockedBySickness,
 } from '../store.js'
 
 // Everything a card can do lives here rather than on postage-stamp buttons
@@ -56,6 +58,12 @@ const onBoard = computed(() => /^cell:\d+:(top|bot)$/.test(zone.value || ''))
 const editing = computed(() => state.mode === 'editor' && !state.recording)
 const inPool = computed(() => zone.value === 'pool')
 const inHand = computed(() => zone.value?.startsWith('hand:'))
+const inGrave = computed(() => zone.value?.startsWith('grave:'))
+// Where a spell can be cast from: the hand, or the cemetery if the card grants
+// it. Drives the Cast button / drag hint so a graveyard-castable spell is playable.
+const castSource = computed(
+  () => inHand.value || (inGrave.value && !!card.value?.castFromCemetery)
+)
 // What a card provides (mana / elemental affinity), for the header line.
 const providesText = computed(() => {
   const c = card.value
@@ -79,16 +87,25 @@ const casting = computed(
 // attack, shoot, or use activated abilities. This applies to minions and
 // avatars alike (both report as units).
 const tapped = computed(() => !!ui.selected && isTapped(ui.selected))
-const canFight = computed(() => onBoard.value && isUnit(ui.selected) && !tapped.value)
-const canMove = computed(() => onBoard.value && isUnit(ui.selected) && !tapped.value)
+// In play mode the solver only drives their own side: an opponent card's action
+// bar (cast, move, attack, abilities, pick up…) is look-only. The editor and
+// recording keep full control of both sides. Mirrors playerControls() in the
+// store, which enforces the same rule for drag actions.
+const enemyLocked = computed(() => state.mode === 'play' && !!card.value?.enemy)
+// Summoning sickness: a minion that entered the realm this turn can't tap to pay
+// costs (no Move & Attack, Shoot, or tap-cost abilities) unless it has Charge.
+// Only while rules are enforced -- mirrors the store's own gates.
+const sick = computed(() => !!ui.selected && tapBlockedBySickness(ui.selected))
+const canFight = computed(() => onBoard.value && isUnit(ui.selected) && !tapped.value && !sick.value && !enemyLocked.value)
+const canMove = computed(() => onBoard.value && isUnit(ui.selected) && !tapped.value && !sick.value && !enemyLocked.value)
 const moving = computed(() => ui.moving && ui.moving === ui.selected)
 const attacking = computed(() => ui.attacker && ui.attacker === ui.selected)
 const shooting = computed(() => ui.shooting && ui.shooting === ui.selected)
 // A unit shows Shoot only when it actually has range (from a Ranged keyword).
-const canShoot = computed(() => onBoard.value && effectiveRanged(ui.selected) > 0 && !tapped.value)
+const canShoot = computed(() => onBoard.value && effectiveRanged(ui.selected) > 0 && !tapped.value && !sick.value && !enemyLocked.value)
 // An avatar on the board can draw from its owner's decks (its basic action, in
 // place of tapping). The buttons appear only when the matching deck has cards.
-const isAvatarInPlay = computed(() => onBoard.value && isAvatar(ui.selected))
+const isAvatarInPlay = computed(() => onBoard.value && isAvatar(ui.selected) && !enemyLocked.value)
 const atlasCount = computed(() =>
   isAvatarInPlay.value ? deckSize(ui.selected, 'atlas') : 0
 )
@@ -96,7 +113,7 @@ const spellbookCount = computed(() =>
   isAvatarInPlay.value ? deckSize(ui.selected, 'spellbook') : 0
 )
 // Charge: only offered while logging, for a unit summoned this turn.
-const chargeable = computed(() => logging.value && !!ui.selected && canCharge(ui.selected))
+const chargeable = computed(() => logging.value && !!ui.selected && canCharge(ui.selected) && !enemyLocked.value)
 const carrying = computed(() => ui.carrier && ui.carrier === ui.selected)
 // Pick up and put down are logged moves, so they belong wherever moves are
 // being written down: while recording a solution, and while playing one.
@@ -106,11 +123,13 @@ const logging = computed(() => state.recording || state.mode === 'play')
 // A card in a hand or cemetery is not in play, and a site or aura is not a
 // unit, so none of them offer Pick up.
 const canPickUp = computed(
-  () => (logging.value || editing.value) && onBoard.value && isUnit(ui.selected)
+  () => (logging.value || editing.value) && onBoard.value && isUnit(ui.selected) && !enemyLocked.value
 )
 // What this card holds, and who holds it -- the two sides of the same relation
 // and the two buttons the bar has to offer.
-const holding = computed(() => (ui.selected ? carriedBy(ui.selected) : []))
+const holding = computed(() =>
+  ui.selected && !enemyLocked.value ? carriedBy(ui.selected) : []
+)
 const heldBy = computed(() => (ui.selected ? carrierOf(ui.selected) : null))
 
 // The abilities editor is a modal, opened from the bar. How many a card has is
@@ -122,11 +141,12 @@ const abilityCount = computed(() => card.value?.abilities?.length || 0)
 // Activated abilities usable right now: only while a solution is being recorded
 // or played (they log a move), and only those live in the card's current zone.
 const liveAbilities = computed(() => {
-  if (!logging.value || !ui.selected) return []
+  if (!logging.value || !ui.selected || enemyLocked.value) return []
   const abilities = activatedAbilities(ui.selected)
   // A tapped card can't pay a tap cost, so abilities that require tapping drop
-  // out; abilities with no tap cost stay usable even while tapped.
-  if (tapped.value) return abilities.filter((a) => !a.cost?.tap)
+  // out; abilities with no tap cost stay usable even while tapped. The same
+  // goes for a summon-sick card, which can't tap to pay costs.
+  if (tapped.value || sick.value) return abilities.filter((a) => !a.cost?.tap)
   return abilities
 })
 const isArming = (abilityId) =>
@@ -186,7 +206,7 @@ function onRemove() {
 
     <div class="ca-buttons">
       <button
-        v-if="inHand && card.magic && (state.mode === 'play' || state.recording)"
+        v-if="castSource && card.magic && (state.mode === 'play' || state.recording) && !enemyLocked"
         class="btn primary"
         :class="{ active: casting }"
         :disabled="(!canAffordCast(ui.selected) || !canCastFrom(ui.selected)) && !casting"
@@ -202,7 +222,7 @@ function onRemove() {
         {{ casting ? 'Cancel cast' : '✦ Cast' }}
       </button>
       <p
-        v-if="inHand && !card.magic && isSpell(ui.selected) && (state.mode === 'play' || state.recording)"
+        v-if="castSource && !card.magic && isSpell(ui.selected) && (state.mode === 'play' || state.recording) && !enemyLocked"
         class="ca-hint"
       >
         Drag onto the board (or click a square) to cast.
@@ -268,7 +288,7 @@ function onRemove() {
         ⚡ Charge for mana
       </button>
       <button
-        v-if="onBoard && damageOf(ui.selected)"
+        v-if="onBoard && damageOf(ui.selected) && !enemyLocked"
         class="btn"
         @click="markDamage(ui.selected, -1)"
       >
@@ -283,7 +303,7 @@ function onRemove() {
         {{ carrying ? ' Cancel pick up' : ' Pick up' }}
       </button>
       <button
-        v-if="(logging || editing) && heldBy"
+        v-if="(logging || editing) && heldBy && !enemyLocked"
         class="btn"
         @click="dropCarried(ui.selected)"
       >
@@ -334,13 +354,15 @@ function onRemove() {
         ⛰ {{ card.site ? 'Not a site' : 'Mark as site' }}
       </button>
       <button
-        v-if="editing && card.site"
+        v-if="editing && card.unit && !card.avatar"
         class="btn"
-        :class="{ active: card.water }"
-        :title="card.water ? 'Water site: its subsurface is underwater' : 'Land site: its subsurface is underground'"
-        @click="toggleWater(ui.selected)"
+        :class="{ active: card.allowOpponentSiteSummon }"
+        :title="card.allowOpponentSiteSummon
+          ? 'May be summoned onto an opponent-controlled site'
+          : 'Cannot be summoned onto an opponent-controlled site (default)'"
+        @click="toggleOppSiteSummon(ui.selected)"
       >
-        ≈ {{ card.water ? 'Water site' : 'Land site' }}
+        ⚔ {{ card.allowOpponentSiteSummon ? 'Enemy-site summon' : 'No enemy-site summon' }}
       </button>
       <button
         v-if="editing && inPool"
@@ -366,6 +388,17 @@ function onRemove() {
         @click="toggleMagic(ui.selected)"
       >
         ✦ {{ card.magic ? 'Not a magic' : 'Mark as magic' }}
+      </button>
+      <button
+        v-if="editing && isSpell(ui.selected)"
+        class="btn"
+        :class="{ active: card.castFromCemetery }"
+        :title="card.castFromCemetery
+          ? 'May be cast from the cemetery as well as the hand'
+          : 'Can only be cast from the hand (default)'"
+        @click="toggleCastFromCemetery(ui.selected)"
+      >
+        ⚰ {{ card.castFromCemetery ? 'Casts from cemetery' : 'Hand-cast only' }}
       </button>
       <button
         v-if="editing && card.artifact"
@@ -472,6 +505,14 @@ function onRemove() {
     <p v-else-if="heldBy" class="ca-hint">
       Carried by {{ state.cards[heldBy]?.name }} and travelling with it. Put it
       down to move it on its own.
+    </p>
+    <p v-else-if="sick && onBoard && !enemyLocked" class="ca-hint">
+      Summoned this turn: summoning sickness stops it tapping to move, attack,
+      shoot, or pay for abilities until end of turn.
+    </p>
+    <p v-else-if="enemyLocked" class="ca-hint">
+      This is your opponent's card — you can't act with it. The puzzle plays the
+      opponent's side automatically.
     </p>
     <p v-else class="ca-hint">Click any zone to move without tapping, or choose an action above.</p>
 

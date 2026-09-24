@@ -14,6 +14,8 @@ import {
   zoneOf,
   zoneLabel,
   regionOf,
+  isWaterSite,
+  isFloodedSite,
   GRID_SIZE,
   GRID_COLS,
   GRID_ROWS,
@@ -164,6 +166,17 @@ function nodeStyle(idx) {
                it; opponent-controlled sites render upside down against the top
                edge, mirroring the mat. -->
           <div class="site-strip">
+            <!-- A native animated water treatment over any water site (threshold
+                 or Flood). Purely cosmetic and non-blocking: it never eats the
+                 pointer, so the site art underneath stays clickable/draggable.
+                 Flood water shimmers a touch brighter than authored water so the
+                 two read apart. -->
+            <div
+              v-if="siteCard(n - 1) && isWaterSite(n - 1)"
+              class="water-overlay"
+              :class="{ flooded: isFloodedSite(n - 1) }"
+              aria-hidden="true"
+            />
             <img
               v-if="siteCard(n - 1) && siteCard(n - 1).img"
               class="site-bg"
@@ -312,6 +325,62 @@ function nodeStyle(idx) {
     transparent 4px,
     transparent 9px
   );
+}
+/* Animated water treatment under a water/flooded site. Confined to the lower
+   band (matching `.cell-half.bot`'s 26%) so it marks the underwater region
+   rather than washing over the whole square. Sits under the site art, and never
+   takes the pointer (the global `.site-strip > *` rule would otherwise make it
+   swallow clicks, so it is overridden back here). */
+.water-overlay {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 26%;
+  z-index: 0;
+  pointer-events: none;
+  border-radius: 0 0 6px 6px;
+  overflow: hidden;
+  background:
+    linear-gradient(0deg, rgba(28, 74, 128, 0.34), rgba(44, 110, 176, 0.22)),
+    repeating-linear-gradient(
+      115deg,
+      rgba(150, 205, 255, 0.16) 0,
+      rgba(150, 205, 255, 0.16) 6px,
+      rgba(90, 160, 220, 0.05) 6px,
+      rgba(90, 160, 220, 0.05) 14px
+    );
+  box-shadow: inset 0 0 14px rgba(10, 40, 80, 0.45);
+}
+/* Flood water (a reversible in-play state) glints brighter and cooler than an
+   authored water-threshold site, so the two are distinguishable at a glance. */
+.water-overlay.flooded {
+  background:
+    linear-gradient(0deg, rgba(30, 96, 150, 0.4), rgba(70, 150, 210, 0.28)),
+    repeating-linear-gradient(
+      115deg,
+      rgba(190, 235, 255, 0.24) 0,
+      rgba(190, 235, 255, 0.24) 6px,
+      rgba(110, 190, 240, 0.06) 6px,
+      rgba(110, 190, 240, 0.06) 14px
+    );
+}
+@media (prefers-reduced-motion: no-preference) {
+  .water-overlay {
+    background-size: 100% 100%, 200% 200%;
+    animation: water-drift 6s linear infinite;
+  }
+  .water-overlay.flooded {
+    animation-duration: 4s;
+  }
+}
+@keyframes water-drift {
+  0% {
+    background-position: 0 0, 0 0;
+  }
+  100% {
+    background-position: 0 0, 56px 28px;
+  }
 }
 .region-tag {
   position: absolute;
