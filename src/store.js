@@ -3049,7 +3049,25 @@ function restoreZones(snapshot) {
   return z
 }
 
+// Outside a recording, the editor board IS the start position -- a load,
+// enterEditor() and stopRecording() all restore it there -- so an edit on it is
+// an edit to the start position. The initial* snapshot is only a copy, though,
+// and anything that reads it (play, another solution line, a save) would
+// silently drop the edit: a card added after the snapshot was swept into the
+// hidden pool. Commit the board before any of those read it.
+const editingStart = () => state.mode === 'editor' && !state.recording
+
+function commitStartPosition() {
+  if (!editingStart()) return
+  state.initialZones = clone(state.zones)
+  state.initialCarry = clone(state.carry)
+  state.initialStats = clone(state.stats)
+  state.initialTapped = clone(state.tapped)
+  state.initialDamage = clone(state.damage)
+}
+
 export function startRecording() {
+  if (state.initialZones) commitStartPosition()
   if (state.solutions.length && state.initialZones) {
     // Every solution line must start from the same position, so recording
     // an alternative line first snaps the board back to it.
@@ -3156,6 +3174,7 @@ export function removeSolutionLine(i) {
 
 export function enterPlay() {
   if (state.recording) stopRecording()
+  commitStartPosition()
   if (!state.initialZones) {
     state.initialZones = clone(state.zones)
     state.initialCarry = clone(state.carry)
@@ -3624,6 +3643,21 @@ function removeCardImpl(cardId) {
 
 // ---------- serialization / persistence ----------
 
+// The start position a save writes. Read-only (fingerprint() runs on page
+// unload), so it reads the live board where commitStartPosition() would commit
+// it rather than committing.
+function startPosition() {
+  const live = editingStart() || !state.initialZones
+  const pick = (initial, current) => (live ? current : initial || current)
+  return {
+    initial: pick(state.initialZones, state.zones),
+    initialTapped: pick(state.initialTapped, state.tapped) || {},
+    initialDamage: pick(state.initialDamage, state.damage) || {},
+    carry: pick(state.initialCarry, state.carry),
+    stats: pick(state.initialStats, state.stats),
+  }
+}
+
 // Everything a save would write, minus the timestamp and the generated id --
 // both change on every call and would make the puzzle look permanently dirty.
 // Taken on demand (a page unload, a New) rather than watched, so editing pays
@@ -3636,11 +3670,7 @@ export function fingerprint() {
     enforce: state.enforce,
     combat: state.combat,
     cards: state.cards,
-    initial: state.initialZones || state.zones,
-    tapped: state.initialTapped || state.tapped,
-    damage: state.initialDamage || state.damage,
-    carry: state.initialCarry || state.carry,
-    stats: state.initialStats || state.stats,
+    ...startPosition(),
     solutions: state.solutions,
   })
 }
@@ -3667,11 +3697,7 @@ export function serialize() {
     enforce: !!state.enforce,
     combat: !!state.combat,
     cards: clone(state.cards),
-    initial: clone(state.initialZones || state.zones),
-    initialTapped: clone(state.initialTapped || state.tapped || {}),
-    initialDamage: clone(state.initialDamage || state.damage || {}),
-    carry: clone(state.initialCarry || state.carry),
-    stats: clone(state.initialStats || state.stats),
+    ...clone(startPosition()),
     solutions: clone(state.solutions),
     savedAt: new Date().toISOString(),
   }
