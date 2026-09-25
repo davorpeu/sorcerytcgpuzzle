@@ -292,6 +292,11 @@ export const state = reactive({
   stealthLost: {}, // cardId -> true
   // A Ward breaks once it absorbs an opponent's targeting/damage/destroy ability.
   wardBroken: {}, // cardId -> true
+  // Named counters placed on cards during play by addCounter/removeCounter
+  // effects: cardId -> { name: count }. The reserved name 'shield' is damage
+  // prevention: each point absorbs one point of damage to that card
+  // (preventDamage adds them). Shed when the card leaves the realm.
+  counters: {},
   // A puzzle can have several valid solutions; each line is a full move
   // sequence recorded from the same start position, and check() accepts an
   // attempt that matches any of them.
@@ -909,7 +914,54 @@ export function canAffordAbility(cardId, ability) {
   if ((s.mana || 0) < abilityManaCost(cardId, ability)) return false
   for (const el of ELEMENTS)
     if (effectiveThreshold(side, el) < (Number(ability.cost?.threshold?.[el]) || 0)) return false
+  const cost = ability.cost || {}
+  if ((s.life || 0) < (Number(cost.life) || 0)) return false
+  if (costCards(cardId, 'hand').length < (Number(cost.discard) || 0)) return false
+  if (costCards(cardId, 'grave').length < (Number(cost.banish) || 0)) return false
+  if (cost.sacrifice === 'self' && !sacrificeable(cardId, cardId)) return false
+  if (cost.sacrifice === 'target') {
+    const t = ability.target
+    const any = Object.keys(state.cards).some(
+      (id) => id !== cardId && sacrificeable(cardId, id) && (!t?.required || satisfiesTarget(cardId, id, t))
+    )
+    if (!any) return false
+  }
   return true
+}
+
+// A card an ability of `sourceId` may sacrifice: a non-avatar in play on the
+// source's side (the source itself, for a self-sacrifice).
+function sacrificeable(sourceId, id) {
+  const c = state.cards[id]
+  if (!c || c.avatar) return false
+  if (!inPlay(id)) return false
+  return !oppositeSides(sourceId, id)
+}
+
+// The cards a discard ('hand') or banish-from-cemetery ('grave') cost draws on,
+// in the order they are paid: the source's side, first cards first (there is no
+// choice UI for costs yet), never the source itself.
+function costCards(sourceId, zonePrefix) {
+  return (state.zones[`${zonePrefix}:${sideOf(sourceId)}`] || []).filter((id) => id !== sourceId)
+}
+
+// Pay an activated ability's card costs (after it is logged, so their events
+// and "move" triggers key off its seq). Pays what it can: the free-form editor
+// doesn't gate on affordability.
+function payCardCosts(cardId, ability, targetId, entry) {
+  const cost = ability.cost || {}
+  const side = sideOf(cardId)
+  for (const id of costCards(cardId, 'hand').slice(0, Number(cost.discard) || 0))
+    effectMove(id, `grave:${side}`, entry, 'Discarded', `${cardName(id)} is discarded as a cost.`)
+  for (const id of costCards(cardId, 'grave').slice(0, Number(cost.banish) || 0))
+    effectMove(id, `banished:${side}`, entry, 'Banished', `${cardName(id)} is banished from the cemetery as a cost.`)
+  const victim = cost.sacrifice === 'self' ? cardId : cost.sacrifice === 'target' ? targetId : null
+  if (victim && sacrificeable(cardId, victim)) {
+    const text = `${cardName(victim)} is sacrificed.`
+    // A sacrificed unit dies (Deathrite fires); anything else just goes.
+    if (isUnit(victim)) sendToCemetery(victim, entry, 'Sacrificed', text)
+    else effectMove(victim, `grave:${sideOf(victim)}`, entry, 'Sacrificed', text)
+  }
 }
 
 // Cost gating bites only while rules are enforced (play and recording), like
@@ -1698,7 +1750,49 @@ const inPlay = (id) => ['realm', 'aura'].includes(cardZoneCategory(id))
 // A batch of simultaneous hits: who a Lethal source touched, every damage
 // instance dealt, and where each party stood when it landed, so the batch can
 // settle (deaths, then damage triggers) as one.
-const newHits = () => ({ lethal: new Set(), dealt: [], at: {} })
+const newHits = () => ({ lethal: new Set(), dealt: [], at: {}, prevented: [] })
+
+// ---------- counters & damage prevention ----------
+
+export const counterOf = (id, name) => state.counters[id]?.[name] || 0
+// The named counters on a card, for its badge.
+export const countersOf = (id) =>
+  Object.entries(state.counters[id] || {}).filter(([, n]) => n > 0)
+
+// Add (or, negative, remove) counters on a card; never below zero, and an
+// emptied name/card is dropped so the map stays tidy. Returns the change.
+function addCounters(id, name, delta) {
+  if (!id || !name) return 0
+  const cur = counterOf(id, name)
+  const next = Math.max(0, cur + delta)
+  const map = state.counters[id] || (state.counters[id] = {})
+  if (next) map[name] = next
+  else delete map[name]
+  if (!Object.keys(map).length) delete state.counters[id]
+  return next - cur
+}
+
+// Consume shield counters on a card against incoming damage; how much they
+// prevented.
+function absorbDamage(id, amount) {
+  const shield = counterOf(id, SHIELD_COUNTER)
+  if (!shield || amount <= 0) return 0
+  const n = Math.min(shield, amount)
+  addCounters(id, SHIELD_COUNTER, -n)
+  return n
+}
+
+function announcePrevented(entry, prevented) {
+  for (const p of prevented) {
+    state.events.push({
+      id: uid(),
+      seq: entry?.seq,
+      cardId: p.targetId,
+      name: 'Damage prevented',
+      text: `${p.amount} damage to ${cardName(p.targetId)} is prevented.`,
+    })
+  }
+}
 
 // Note where a card stood (square and layer) when a hit in this batch landed.
 function recordHitAt(hits, id) {
@@ -1725,6 +1819,13 @@ function applyHit(sourceId, targetId, amount, hits) {
   // the hit went on to kill (and its Deathrite's area can be measured there).
   recordHitAt(hits, targetId)
   recordHitAt(hits, sourceId)
+  // Damage prevention: shield counters soak it up first.
+  const prevented = absorbDamage(targetId, amount)
+  if (prevented) {
+    hits.prevented.push({ targetId, amount: prevented })
+    amount -= prevented
+    if (amount <= 0) return
+  }
   if (isUnit(targetId) && !tgt.avatar) {
     state.damage[targetId] = (state.damage[targetId] || 0) + amount
     if (hasKeyword(sourceId, 'lethal')) hits.lethal.add(targetId)
@@ -1761,6 +1862,7 @@ function fireDamage(entry, dealt, killed = null, at = null) {
 // Settle a batch of hits: state-based deaths first (damage is immediate), then
 // the damage events go onto the storyline.
 function settleHits(entry, hits) {
+  announcePrevented(entry, hits.prevented)
   const before = Object.keys(hits.at).filter(inPlay)
   resolveDeaths(entry, hits.lethal)
   const killed = new Set(before.filter((id) => !inPlay(id)))
@@ -1942,7 +2044,35 @@ export const EFFECT_OPS = [
   'summonToken',
   'animate',
   'banishAndCast',
+  'untap',
+  'draw',
+  'discard',
+  'search',
+  'returnToHand',
+  'reanimate',
+  'gainControl',
+  'swap',
+  'addCounter',
+  'removeCounter',
+  'preventDamage',
 ]
+
+// Which deck a draw/search reads: the Spellbook (spells) or the Atlas (sites).
+export const DECKS = ['spellbook', 'atlas']
+// Whose hand/deck a draw, discard or search uses, relative to the source.
+export const EFFECT_SIDES = ['self', 'enemy']
+// How a discard picks its cards: the cards its selector names (e.g. a target
+// chosen from hand), or a number of cards from a side's hand. The count form
+// takes the first cards in hand order -- there is no hand-choice UI yet.
+export const DISCARD_PICKS = ['chosen', 'count']
+// Where a reanimated card may be summoned, relative to the source: a picked
+// location anywhere, or one adjacent/nearby.
+export const REANIMATE_REACH = ['any', 'nearby', 'adjacent']
+// An activated ability's sacrifice cost: nothing, the card itself, or the
+// ability's chosen target (which must then be a friendly card in play).
+export const SACRIFICE_COSTS = ['none', 'self', 'target']
+// The counter name damage prevention uses.
+export const SHIELD_COUNTER = 'shield'
 
 // Authoring options for a grid target.
 export const TARGET_MODES = ['card', 'grid']
@@ -2068,7 +2198,9 @@ const PICKED_TOKEN_LOCATIONS = ['adjacent', 'nearby', 'anySite']
 // 'power' is the source unit's current combat power (what it would strike for).
 // 'count' counts the cards a nested selector (`eff.countOf`) picks -- e.g. the
 // friendly minions nearby.
-export const AMOUNT_REFS = ['literal', 'power', 'carriedCount', 'waterBodySize', 'count']
+// 'counter' totals the named counter (`eff.counterName`) on the cards `countOf`
+// picks.
+export const AMOUNT_REFS = ['literal', 'power', 'carriedCount', 'waterBodySize', 'count', 'counter']
 
 // Who an effect hits (its selector):
 //   self       -- the card whose ability it is
@@ -2104,9 +2236,25 @@ const WHO_OPS = new Set([
   'animate',
   'flood',
   'unflood',
+  'untap',
+  'discard',
+  'returnToHand',
+  'reanimate',
+  'gainControl',
+  'swap',
+  'addCounter',
+  'removeCounter',
+  'preventDamage',
 ])
 // Ops whose number is an amount (and so take an amountRef).
-const AMOUNT_OPS = new Set(['dealDamage', 'gridDamage', 'modifyStrength'])
+const AMOUNT_OPS = new Set([
+  'dealDamage',
+  'gridDamage',
+  'modifyStrength',
+  'addCounter',
+  'removeCounter',
+  'preventDamage',
+])
 
 // Whose action fires a trigger: the card's own move, anyone's, or one side's.
 export const TRIGGER_SUBJECTS = ['self', 'any', 'enemy', 'friendly']
@@ -2406,6 +2554,13 @@ export function normalizeAbility(a = {}) {
     cost: {
       mana: Number(a.cost?.mana) || 0,
       tap: !!a.cost?.tap,
+      // Extra costs paid on activation (activated abilities): sacrifice this
+      // card or the chosen target, discard / banish-from-cemetery N cards (the
+      // first ones -- there is no choice UI for costs yet), pay N life.
+      sacrifice: SACRIFICE_COSTS.includes(a.cost?.sacrifice) ? a.cost.sacrifice : 'none',
+      discard: Math.max(0, Number(a.cost?.discard) || 0),
+      life: Math.max(0, Number(a.cost?.life) || 0),
+      banish: Math.max(0, Number(a.cost?.banish) || 0),
       // Activations allowed per turn; 0 = unlimited. A puzzle is one turn, so
       // this is per attempt.
       perTurn: Math.max(0, Number(a.cost?.perTurn) || 0),
@@ -2588,6 +2743,15 @@ function newEffect(op = 'adjustStat') {
   // Flood/unflood a site: whose square, and whether the whole connected body of
   // water is drained (unflood) rather than the single targeted site.
   if (op === 'flood' || op === 'unflood') Object.assign(e, { who: 'target', scope: 'site' })
+  if (op === 'untap') e.who = 'self'
+  if (op === 'draw') Object.assign(e, { side: 'self', count: 1, deck: 'spellbook' })
+  if (op === 'discard') Object.assign(e, { who: 'target', pick: 'chosen', side: 'enemy', count: 1 })
+  if (op === 'search') Object.assign(e, { side: 'self', deck: 'spellbook', filter: 'any' })
+  if (op === 'returnToHand' || op === 'reanimate' || op === 'gainControl' || op === 'swap')
+    e.who = 'target'
+  if (op === 'addCounter' || op === 'removeCounter')
+    Object.assign(e, { who: 'self', name: 'charge', amount: 1, amountRef: 'literal' })
+  if (op === 'preventDamage') Object.assign(e, { who: 'self', amount: 1, amountRef: 'literal' })
   return normalizeEffect(e)
 }
 
@@ -2631,8 +2795,10 @@ export function setSelectorWho(sel, who) {
 // Switch an effect's amount source in the editor; a count needs its selector.
 export function setAmountRef(eff, ref) {
   eff.amountRef = AMOUNT_REFS.includes(ref) ? ref : 'literal'
-  if (eff.amountRef === 'count' && !eff.countOf)
+  const counted = eff.amountRef === 'count' || eff.amountRef === 'counter'
+  if (counted && !eff.countOf)
     eff.countOf = normalizeSelector({ who: 'area', area: { side: 'friendly', filter: 'minion' } }, 'area')
+  if (eff.amountRef === 'counter' && !eff.counterName) eff.counterName = 'charge'
 }
 
 // Back-fill params added to an op after puzzles were saved with it, so older
@@ -2659,10 +2825,25 @@ function normalizeEffect(eff) {
   }
   if (AMOUNT_OPS.has(e.op)) {
     if (!AMOUNT_REFS.includes(e.amountRef)) e.amountRef = 'literal'
-    if (e.amountRef === 'count')
+    if (e.amountRef === 'count' || e.amountRef === 'counter')
       e.countOf = normalizeSelector(e.countOf || { who: 'area', area: { side: 'friendly', filter: 'minion' } }, 'area')
     else delete e.countOf
+    if (e.amountRef === 'counter') e.counterName = String(e.counterName || 'charge')
+    else delete e.counterName
   }
+  if (e.op === 'draw' || e.op === 'search') {
+    e.side = EFFECT_SIDES.includes(e.side) ? e.side : 'self'
+    e.deck = DECKS.includes(e.deck) ? e.deck : 'spellbook'
+  }
+  if (e.op === 'draw') e.count = Math.max(1, Number(e.count) || 1)
+  if (e.op === 'search') e.filter = TARGET_FILTERS.includes(e.filter) ? e.filter : 'any'
+  if (e.op === 'discard') {
+    e.pick = DISCARD_PICKS.includes(e.pick) ? e.pick : 'chosen'
+    e.side = EFFECT_SIDES.includes(e.side) ? e.side : 'enemy'
+    e.count = Math.max(1, Number(e.count) || 1)
+  }
+  if (e.op === 'reanimate') e.reach = REANIMATE_REACH.includes(e.reach) ? e.reach : 'any'
+  if (e.op === 'addCounter' || e.op === 'removeCounter') e.name = String(e.name || 'charge')
   if (e.op === 'animate') {
     if (!ANIMATE_POWER_REFS.includes(e.powerRef)) e.powerRef = 'literal'
     e.powerBonus = Number(e.powerBonus) || 0
@@ -2913,6 +3094,7 @@ function shedInPlayState(cardId, toZone, entry) {
   delete state.stealthLost[cardId]
   delete state.summoned[cardId]
   delete state.tapped[cardId]
+  delete state.counters[cardId]
 }
 
 export function moveCard(cardId, from, to, opts = {}) {
@@ -3415,6 +3597,7 @@ function logEntry(entry) {
   if (!entry.prevSummoned) entry.prevSummoned = clone(state.summoned)
   if (!entry.prevStealthLost) entry.prevStealthLost = clone(state.stealthLost)
   if (!entry.prevWardBroken) entry.prevWardBroken = clone(state.wardBroken)
+  if (!entry.prevCounters) entry.prevCounters = clone(state.counters)
   // A card played from hand into the realm is summoned this turn (Charge).
   if (
     (entry.type || 'move') === 'move' &&
@@ -3691,7 +3874,7 @@ function needsCardChoice(ev) {
 // continueActivate applies to activated abilities).
 function needsDestChoice(ev, targetId) {
   const spec = destSpec(ev.ability)
-  if (!spec || (spec.anchor === 'target' && !targetId)) return false
+  if (!spec || (specNeedsTarget(spec) && !targetId)) return false
   return anyDestLegal(spec, ev.ownerId, targetId)
 }
 
@@ -4140,6 +4323,20 @@ function destSpec(ability) {
         label: eff.kind === 'forced' ? 'where to move it' : 'where to teleport',
       }
     }
+    // Reanimate always summons onto a picked location; when it names the target
+    // (or the source itself), the pick is checked as a legal summon of that card.
+    if (eff.op === 'reanimate') {
+      return {
+        anchor: 'source',
+        mover: null,
+        summon: eff.who === 'target' ? 'target' : eff.who === 'self' ? 'source' : null,
+        reach: eff.reach || 'any',
+        needSite: false,
+        layers: ['top', 'bot'],
+        sameRegion: false,
+        label: 'where it is summoned',
+      }
+    }
     if (eff.op === 'summonToken' && PICKED_TOKEN_LOCATIONS.includes(eff.at)) {
       return {
         anchor: 'source',
@@ -4180,6 +4377,11 @@ function destLegal(spec, sourceId, targetId, zone) {
       return false
     if (spec.reach === 'nearby' && !areNearby(anchorSq, sq)) return false
   }
+  const summonId =
+    spec.summon === 'target' ? targetId : spec.summon === 'source' ? sourceId : null
+  if (summonId && enforcing() && isUnit(summonId) && !state.cards[summonId]?.avatar) {
+    if (!legalSummonLocation(summonId, zone)) return false
+  }
   const moverId =
     spec.mover === 'target' ? targetId : spec.mover === 'source' ? sourceId : null
   if (moverId) {
@@ -4197,6 +4399,10 @@ const CELL_ZONES = Array.from({ length: GRID_SIZE }, (_, i) => [
   `cell:${i}:bot`,
 ]).flat()
 
+// A destination measured from, moving, or summoning the target needs one.
+const specNeedsTarget = (spec) =>
+  spec.anchor === 'target' || spec.mover === 'target' || spec.summon === 'target'
+
 const anyDestLegal = (spec, sourceId, targetId) =>
   CELL_ZONES.some((z) => destLegal(spec, sourceId, targetId, z))
 
@@ -4213,7 +4419,7 @@ function continueActivate(cardId, abilityId, cast, targetId, extra = null, dropS
   if (
     !extra?.targetIds &&
     spec &&
-    !(spec.anchor === 'target' && !targetId) &&
+    !(specNeedsTarget(spec) && !targetId) &&
     anyDestLegal(spec, cardId, targetId)
   ) {
     ui.activating = {
@@ -4346,6 +4552,9 @@ export function canActivateTarget(targetId) {
   if (ui.activating.choosing) return (ui.activating.picked || []).includes(targetId)
   if (targetId === ui.activating.cardId) return false
   if ((ui.activating.picked || []).includes(targetId)) return false
+  // A target that is also the sacrifice cost must be sacrificeable.
+  if (ability.cost?.sacrifice === 'target' && !sacrificeable(ui.activating.cardId, targetId))
+    return false
   return satisfiesTarget(ui.activating.cardId, targetId, ability.target)
 }
 
@@ -4671,8 +4880,10 @@ function animateCard(id, spec, entry, sourceId) {
 function effectAmount(eff, sourceId, ctx) {
   if (eff.amountRef === 'carriedCount') return carriedBy(sourceId).length
   // How many cards a nested selector picks (counting doesn't touch them, so
-  // Ward is not involved).
+  // Ward is not involved), or the total of a named counter on them.
   if (eff.amountRef === 'count') return ctx ? selectCards(eff.countOf, ctx).length : 0
+  if (eff.amountRef === 'counter')
+    return ctx ? selectCards(eff.countOf, ctx).reduce((n, id) => n + counterOf(id, eff.counterName), 0) : 0
   if (eff.amountRef === 'power') return combatPower(sourceId)
   // Scale off the body of water the source stands on (or the site it is).
   if (eff.amountRef === 'waterBodySize') {
@@ -5041,10 +5252,14 @@ function runEffects(ability, cardId, targetId, entry, gridSquare, destZone, extr
         for (const t of ts) applyHit(cardId, t, amount, hits)
         settleHits(entry, hits)
       } else if (ts.length) {
-        for (const t of ts) adjustDamage(t, amount)
-        const dealt = ts
-          .filter((t) => inPlay(t) || isAvatar(t))
-          .map((t) => ({ sourceId: cardId, targetId: t, amount }))
+        const dealt = []
+        for (const t of ts) {
+          const prevented = absorbDamage(t, amount)
+          if (prevented) announcePrevented(entry, [{ targetId: t, amount: prevented }])
+          if (amount - prevented <= 0) continue
+          adjustDamage(t, amount - prevented)
+          if (inPlay(t) || isAvatar(t)) dealt.push({ sourceId: cardId, targetId: t, amount: amount - prevented })
+        }
         if (dealt.length) fireDamage(entry, dealt)
       }
     } else if (eff.op === 'strike') {
@@ -5124,8 +5339,200 @@ function runEffects(ability, cardId, targetId, entry, gridSquare, destZone, extr
         squares = [...set]
       }
       for (const s of squares) setFloodedSite(s, flooding, entry)
+    } else if (eff.op === 'untap') {
+      for (const t of recipients(eff)) {
+        if (!state.tapped[t]) continue
+        delete state.tapped[t]
+        state.events.push({ id: uid(), seq: entry?.seq, cardId: t, name: 'Untaps', text: `${cardName(t)} untaps.` })
+      }
+    } else if (eff.op === 'draw') {
+      effectDraw(eff, cardId, entry)
+    } else if (eff.op === 'discard') {
+      effectDiscard(eff.pick === 'count' ? [] : recipients(eff), eff, cardId, entry)
+    } else if (eff.op === 'search') {
+      effectSearch(eff, cardId, entry)
+    } else if (eff.op === 'returnToHand') {
+      for (const who of recipients(eff)) effectReturnToHand(who, entry)
+    } else if (eff.op === 'reanimate') {
+      const to = dest || (typeof pickSquare === 'number' ? `cell:${pickSquare}:top` : null)
+      for (const who of recipients(eff)) effectReanimate(who, to, entry)
+      checkSurvival(entry)
+    } else if (eff.op === 'gainControl') {
+      for (const who of recipients(eff)) effectGainControl(who, cardId, entry)
+    } else if (eff.op === 'swap') {
+      const other = recipients(eff).find((id) => id !== cardId)
+      effectSwap(cardId, other, entry)
+    } else if (eff.op === 'addCounter' || eff.op === 'removeCounter' || eff.op === 'preventDamage') {
+      const name = eff.op === 'preventDamage' ? SHIELD_COUNTER : eff.name
+      const amount = effectAmount(eff, cardId, ctx) * (eff.op === 'removeCounter' ? -1 : 1)
+      for (const who of recipients(eff)) counterEvent(entry, who, name, addCounters(who, name, amount))
     }
   }
+}
+
+// ---------- card-flow effects (draw, discard, search, reanimate, ...) ----------
+
+// A side named relative to an effect's source ('self' | 'enemy').
+const relSide = (sourceId, rel) => (rel === 'enemy' ? otherSide(sideOf(sourceId)) : sideOf(sourceId))
+const sideWho = (side) => (side === 'player' ? 'You' : 'The opponent')
+const verbFor = (side, verb) => (side === 'player' ? verb : `${verb}s`)
+// The side a player-owned off-board zone (hand:x, grave:x, ...) belongs to.
+const zoneSide = (zone) => (zone || '').split(':')[1] || null
+
+// Move a card between zones as a consequence of `entry` (not a logged move):
+// snapshot for undo, announce it, and fire "move" triggers as a replay keyed to
+// the causing entry, like sendToCemetery.
+function effectMove(id, to, entry, name, text) {
+  if (!id || !state.zones[to]) return false
+  const from = zoneOf(id)
+  if (from === to) return false
+  snapshotStructural(entry)
+  delete state.carry[id]
+  delete state.grants[id]
+  removeFromZones(state.zones, id)
+  state.zones[to].push(id)
+  state.events.push({ id: uid(), seq: entry?.seq, cardId: id, name, text })
+  shedInPlayState(id, to, entry)
+  fireTriggers({ type: 'move', cardId: id, from, to, seq: entry?.seq, root: entry })
+  return true
+}
+
+// Draw the top card(s) of a deck (the last in its zone, as drawFromDeck).
+function effectDraw(eff, sourceId, entry) {
+  const side = relSide(sourceId, eff.side)
+  const deck = `${eff.deck || 'spellbook'}:${side}`
+  for (let n = 0; n < Math.max(1, Number(eff.count) || 1); n++) {
+    const pile = state.zones[deck]
+    if (!pile?.length) break
+    const id = pile[pile.length - 1]
+    effectMove(id, `hand:${side}`, entry, 'Draws', `${sideWho(side)} ${verbFor(side, 'draw')} ${cardName(id)}.`)
+  }
+}
+
+// Discard: the selector's cards that are in a hand, or (pick 'count') the first
+// N cards of a side's hand -- hand order, as there is no hand-choice UI yet.
+function effectDiscard(ids, eff, sourceId, entry) {
+  let picked = ids
+  if (eff.pick === 'count') {
+    const side = relSide(sourceId, eff.side)
+    picked = (state.zones[`hand:${side}`] || []).slice(0, Math.max(1, Number(eff.count) || 1))
+  }
+  for (const id of picked) {
+    const z = zoneOf(id)
+    if (zoneCategory(z) !== 'hand') continue
+    effectMove(id, `grave:${zoneSide(z)}`, entry, 'Discarded', `${cardName(id)} is discarded.`)
+  }
+}
+
+// Search a deck for its first card (from the top) matching a kind filter and put
+// it into that side's hand. Deterministic: no shuffle and no choice among
+// several matches yet.
+function effectSearch(eff, sourceId, entry) {
+  const side = relSide(sourceId, eff.side)
+  const deck = state.zones[`${eff.deck || 'spellbook'}:${side}`] || []
+  const found = [...deck].reverse().find((id) => matchesFilter(state.cards[id], eff.filter || 'any'))
+  if (!found) {
+    state.events.push({
+      id: uid(),
+      seq: entry?.seq,
+      cardId: sourceId,
+      name: 'Search',
+      text: `${sideWho(side)} ${verbFor(side, 'find')} nothing in the ${eff.deck}.`,
+    })
+    return
+  }
+  effectMove(found, `hand:${side}`, entry, 'Search', `${cardName(found)} is searched out of the ${eff.deck} into hand.`)
+}
+
+// Return a card from a cemetery to that side's hand.
+function effectReturnToHand(id, entry) {
+  const z = zoneOf(id)
+  if (zoneCategory(z) !== 'cemetery') return
+  effectMove(id, `hand:${zoneSide(z)}`, entry, 'Returned', `${cardName(id)} returns from the cemetery to hand.`)
+}
+
+// Reanimate: summon a card from a cemetery onto a location. A real summon (not
+// movement): it is summoned this turn, fires its genesis ("move" into the
+// realm) and faces the survival check (run by the caller).
+function effectReanimate(id, to, entry) {
+  if (!to || zoneCategory(zoneOf(id)) !== 'cemetery') return
+  const routed = routeZone(id, to)
+  if (!/^cell:\d+:(top|bot)$/.test(routed) || !state.zones[routed]) return
+  if (enforcing() && isUnit(id) && !state.cards[id].avatar && !legalSummonLocation(id, routed)) return
+  const from = zoneOf(id)
+  snapshotStructural(entry)
+  removeFromZones(state.zones, id)
+  state.zones[routed].push(id)
+  if (isUnit(id) && !state.cards[id].avatar) state.summoned[id] = true
+  state.events.push({
+    id: uid(),
+    seq: entry?.seq,
+    cardId: id,
+    name: 'Reanimated',
+    text: `${cardName(id)} returns from the cemetery to ${zoneLabel(routed)}.`,
+  })
+  emitFx('genesis', { cardId: id })
+  fireTriggers({ type: 'move', cardId: id, from, to: routed, seq: entry?.seq, root: entry })
+}
+
+// Gain control: the card joins the source's side (takeControl, so undo, a
+// reset and a save hand it back).
+function effectGainControl(id, sourceId, entry) {
+  const c = state.cards[id]
+  if (!c || c.avatar || !inPlay(id)) return
+  const side = sideOf(sourceId)
+  if (sideOf(id) === side) return
+  takeControl(id, side)
+  state.events.push({
+    id: uid(),
+    seq: entry?.seq,
+    cardId: id,
+    name: 'Changes sides',
+    text: `${side === 'opponent' ? 'The opponent gains' : 'You gain'} control of ${cardName(id)}.`,
+  })
+}
+
+// Swap two units' locations. Forced movement for both (no step, Immobile
+// doesn't stop it), so both fire "move" triggers; survival is rechecked.
+function effectSwap(a, b, entry) {
+  if (!a || !b || a === b || !isUnit(a) || !isUnit(b)) return
+  const za = zoneOf(a)
+  const zb = zoneOf(b)
+  if (za === zb || state.carry[a] || state.carry[b]) return
+  if (!/^cell:/.test(za || '') || !/^cell:/.test(zb || '')) return
+  snapshotStructural(entry)
+  removeFromZones(state.zones, a)
+  removeFromZones(state.zones, b)
+  state.zones[zb].push(a)
+  state.zones[za].push(b)
+  state.events.push({
+    id: uid(),
+    seq: entry?.seq,
+    cardId: a,
+    name: 'Swap',
+    text: `${cardName(a)} and ${cardName(b)} swap places.`,
+  })
+  fireTriggers({ type: 'move', cardId: a, from: za, to: zb, seq: entry?.seq, forced: true, root: entry })
+  fireTriggers({ type: 'move', cardId: b, from: zb, to: za, seq: entry?.seq, forced: true, root: entry })
+  checkSurvival(entry)
+}
+
+function counterEvent(entry, id, name, delta) {
+  if (!delta) return
+  const n = Math.abs(delta)
+  const text =
+    name === SHIELD_COUNTER
+      ? delta > 0
+        ? `${cardName(id)} will prevent the next ${n} damage.`
+        : `${cardName(id)} loses ${n} damage prevention.`
+      : `${cardName(id)} ${delta > 0 ? 'gets' : 'loses'} ${n} ${name} counter${n === 1 ? '' : 's'}.`
+  state.events.push({
+    id: uid(),
+    seq: entry?.seq,
+    cardId: id,
+    name: name === SHIELD_COUNTER ? 'Damage shield' : 'Counters',
+    text,
+  })
 }
 
 // ---------- loseWhen: gained abilities fall away ----------
@@ -5222,10 +5629,13 @@ function performAbility(cardId, abilityId, targetId, gridSquare, destZone, extra
   const side = card.enemy ? 'opponent' : 'player'
   const mana = abilityManaCost(cardId, ability)
   if (mana) adjustStat(side, 'mana', -mana)
+  if (ability.cost.life) adjustStat(side, 'life', -ability.cost.life)
   if (ability.cost.tap) state.tapped[cardId] = true
   // Log first so the entry has its seq before effects run -- a damage effect can
   // kill a minion and queue a death event, which undo keys off that seq.
   logEntry(entry)
+  payCardCosts(cardId, ability, targetId, entry)
+
   // A projectile ability flies from its source to the unit it hits. Emitted
   // before the effects run; FxOverlay reads positions pre-render, so a "pull
   // the shooter in" effect still launches from where the source stood.
@@ -5981,6 +6391,7 @@ export function undo() {
   if (m.prevSummoned) state.summoned = clone(m.prevSummoned)
   if (m.prevStealthLost) state.stealthLost = clone(m.prevStealthLost)
   if (m.prevWardBroken) state.wardBroken = clone(m.prevWardBroken)
+  if (m.prevCounters) state.counters = clone(m.prevCounters)
   // Structural snapshots (present only when an effect/trigger changed the board)
   // peel the effects off first, back to just after the base action; undoEntry
   // then reverses the base action itself.
@@ -6066,6 +6477,7 @@ function restoreInitial() {
   state.summoned = {}
   state.stealthLost = {}
   state.wardBroken = {}
+  state.counters = {}
   storyStack = null
 }
 
@@ -6185,6 +6597,10 @@ function stripBookkeeping(entry) {
     prevSummoned,
     prevStealthLost,
     prevWardBroken,
+    prevAnimated,
+    prevCastPermits,
+    prevControlFlips,
+    prevCounters,
     prevZones,
     prevCarry,
     prevGrants,
@@ -7010,6 +7426,7 @@ export function loadPuzzle(data, { play = true } = {}) {
   state.summoned = {}
   state.stealthLost = {}
   state.wardBroken = {}
+  state.counters = {}
   storyStack = null
   state.zones = restoreZones(state.initialZones)
   state.floodedSites = clone(state.initialFloodedSites)
@@ -7063,6 +7480,7 @@ export function newPuzzle() {
   state.summoned = {}
   state.stealthLost = {}
   state.wardBroken = {}
+  state.counters = {}
   storyStack = null
   state.initialZones = null
   state.initialCarry = null

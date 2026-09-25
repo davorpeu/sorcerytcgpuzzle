@@ -173,8 +173,11 @@ Every field below is back-filled on load, so older puzzle files load unchanged a
 
 **Modes and multi-target.** A modal ability has `modes: [{ name, target, effects }]` and `chooseCount`; the player picks the modes before targeting, and the logged entry carries `modes` (chosen indices), which solution matching compares as a set — entries without `modes` compare exactly as before. A card target with `count` > 1 may set `upTo` so the player can stop early; triggered abilities can now take several targets too (and never wait on more than there are). Multi-target entries keep `targetId` (the first) and `targetIds`, compared in pick order as before.
 
+**More effects and costs.** New ops: `untap`; `draw` (`side`, `count`, `deck`: `spellbook`/`atlas`, from the top); `discard` (`pick: "chosen"` — the selector's cards in a hand — or `"count"`, the first `count` cards of a `side`'s hand); `search` (the first card from the top of a deck matching `filter`, into hand; no shuffle yet); `returnToHand` (from a cemetery); `reanimate` (summon from a cemetery onto a picked location within `reach`, with its genesis and the survival check); `gainControl` (the card joins the ability's side — undo, a reset and a save hand it back); `swap` (this unit with the selected one); `addCounter`/`removeCounter` (named counters, `name`, shown on the card; `amountRef: "counter"` totals one); and `preventDamage` (`shield` counters, each absorbing one damage). Activated abilities may also cost `life`, `discard` N and `banish` N (the first cards of your hand / cemetery — there is no choice UI for costs yet) and `sacrifice` (`self`, or the chosen `target`, which must then be your own card in play); all are refunded by undo. Counters are shed when a card leaves the realm.
+
 *Changed:*
 - `nearby`/`adjacent` passives on a site
+
  now reach the units around the site (they used to reach only sites and artifacts there, never units). An older puzzle that put such a passive on a site will see it apply.
 - A Ward is now checked
  for every card an effect hits, not only the chosen target, so `gridDamage` over an enemy with an intact Ward spares it (and breaks the Ward) instead of damaging through it, as the rules require.

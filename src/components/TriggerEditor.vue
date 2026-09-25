@@ -28,6 +28,11 @@ import {
   setTokenKind,
   AMOUNT_REFS,
   EFFECT_OPS,
+  DECKS,
+  EFFECT_SIDES,
+  DISCARD_PICKS,
+  REANIMATE_REACH,
+  SACRIFICE_COSTS,
   KEYWORDS,
   PASSIVE_SCOPES,
   PASSIVE_AFFECTS,
@@ -69,7 +74,11 @@ const amountRefLabel = (r) =>
     ? 'water-body size'
     : r === 'count'
     ? 'count of…'
+    : r === 'counter'
+    ? 'counters on…'
     : 'a number'
+const SIDE_LABELS = { self: 'you', enemy: 'opponent' }
+const SACRIFICE_LABELS = { none: 'nothing', self: 'this card', target: 'the target (friendly)' }
 const locationLabel = (l) =>
   l === 'targetLocation'
     ? "the target's location"
@@ -638,6 +647,37 @@ function onRemove(ability) {
             <p class="hint" style="align-self: end">
               {{ ability.cost.perTurn ? `At most ${ability.cost.perTurn}× per turn` : 'Unlimited' }}
             </p>
+            <label class="field-label">
+              Life cost
+              <input v-model.number="ability.cost.life" type="number" min="0" class="text-input" />
+            </label>
+            <label class="field-label">
+              Sacrifice
+              <select v-model="ability.cost.sacrifice" class="text-input">
+                <option v-for="c in SACRIFICE_COSTS" :key="c" :value="c">{{ SACRIFICE_LABELS[c] }}</option>
+              </select>
+            </label>
+            <label class="field-label">
+              Discard (cards)
+              <input v-model.number="ability.cost.discard" type="number" min="0" class="text-input" />
+            </label>
+            <label class="field-label">
+              Banish from cemetery
+              <input v-model.number="ability.cost.banish" type="number" min="0" class="text-input" />
+            </label>
+            <p
+              v-if="ability.cost.sacrifice === 'target' || ability.cost.discard || ability.cost.banish"
+              class="hint span2"
+            >
+              <template v-if="ability.cost.sacrifice === 'target'">
+                Sacrificing the target needs a required card target; only your own
+                non-avatar cards in play can be picked.
+              </template>
+              <template v-if="ability.cost.discard || ability.cost.banish">
+                Discard / banish costs take the first cards in your hand / cemetery
+                (no choice yet).
+              </template>
+            </p>
             <label v-for="el in ELEMENTS" :key="el" class="field-label">
               {{ el }} threshold
               <input
@@ -824,8 +864,15 @@ function onRemove(ability) {
               <option v-for="r in AMOUNT_REFS" :key="r" :value="r">{{ amountRefLabel(r) }}</option>
             </select>
             <input v-if="!eff.amountRef || eff.amountRef === 'literal'" v-model.number="eff.amount" type="number" class="text-input num" />
+            <input
+              v-if="eff.amountRef === 'counter'"
+              v-model="eff.counterName"
+              class="text-input"
+              placeholder="counter name"
+              title="Which named counter to total"
+            />
             <EffectSelector
-              v-else-if="eff.amountRef === 'count' && eff.countOf"
+              v-if="(eff.amountRef === 'count' || eff.amountRef === 'counter') && eff.countOf"
               :sel="eff.countOf"
               :grid="ability.target.mode === 'grid'"
               :triggered="ability.kind === 'triggered'"
@@ -842,8 +889,15 @@ function onRemove(ability) {
               <option v-for="r in AMOUNT_REFS" :key="r" :value="r">{{ amountRefLabel(r) }}</option>
             </select>
             <input v-if="!eff.amountRef || eff.amountRef === 'literal'" v-model.number="eff.amount" type="number" class="text-input num" />
+            <input
+              v-if="eff.amountRef === 'counter'"
+              v-model="eff.counterName"
+              class="text-input"
+              placeholder="counter name"
+              title="Which named counter to total"
+            />
             <EffectSelector
-              v-else-if="eff.amountRef === 'count' && eff.countOf"
+              v-if="(eff.amountRef === 'count' || eff.amountRef === 'counter') && eff.countOf"
               :sel="eff.countOf"
               :grid="ability.target.mode === 'grid'"
               :triggered="ability.kind === 'triggered'"
@@ -940,8 +994,15 @@ function onRemove(ability) {
               <option v-for="r in AMOUNT_REFS" :key="r" :value="r">{{ amountRefLabel(r) }}</option>
             </select>
             <input v-if="!eff.amountRef || eff.amountRef === 'literal'" v-model.number="eff.amount" type="number" class="text-input num" />
+            <input
+              v-if="eff.amountRef === 'counter'"
+              v-model="eff.counterName"
+              class="text-input"
+              placeholder="counter name"
+              title="Which named counter to total"
+            />
             <EffectSelector
-              v-else-if="eff.amountRef === 'count' && eff.countOf"
+              v-if="(eff.amountRef === 'count' || eff.amountRef === 'counter') && eff.countOf"
               :sel="eff.countOf"
               :grid="ability.target.mode === 'grid'"
               :triggered="ability.kind === 'triggered'"
@@ -982,6 +1043,111 @@ function onRemove(ability) {
             <span class="hint effect-note">
               {{ eff.op === 'flood' ? '— becomes a water site' : '— becomes land again' }}
             </span>
+          </template>
+          <template v-else-if="eff.op === 'untap' || eff.op === 'returnToHand' || eff.op === 'gainControl'">
+            <EffectSelector :sel="eff" :grid="ability.target.mode === 'grid'" :triggered="ability.kind === 'triggered'" />
+            <span class="hint effect-note">
+              {{
+                eff.op === 'returnToHand'
+                  ? '— from the cemetery to hand'
+                  : eff.op === 'gainControl'
+                  ? '— joins your side'
+                  : ''
+              }}
+            </span>
+          </template>
+          <template v-else-if="eff.op === 'draw'">
+            <select v-model="eff.side" class="text-input" title="Who draws">
+              <option v-for="d in EFFECT_SIDES" :key="d" :value="d">{{ SIDE_LABELS[d] }}</option>
+            </select>
+            <input v-model.number="eff.count" type="number" min="1" class="text-input num" title="How many cards" />
+            <span class="hint effect-note">from</span>
+            <select v-model="eff.deck" class="text-input">
+              <option v-for="d in DECKS" :key="d" :value="d">{{ d }}</option>
+            </select>
+          </template>
+          <template v-else-if="eff.op === 'discard'">
+            <select v-model="eff.pick" class="text-input" title="Which cards are discarded">
+              <option v-for="d in DISCARD_PICKS" :key="d" :value="d">
+                {{ d === 'chosen' ? 'the chosen card(s)' : 'cards from a hand' }}
+              </option>
+            </select>
+            <EffectSelector
+              v-if="eff.pick === 'chosen'"
+              :sel="eff"
+              :grid="ability.target.mode === 'grid'"
+              :triggered="ability.kind === 'triggered'"
+            />
+            <template v-else>
+              <select v-model="eff.side" class="text-input" title="Whose hand">
+                <option v-for="d in EFFECT_SIDES" :key="d" :value="d">{{ SIDE_LABELS[d] }}</option>
+              </select>
+              <input v-model.number="eff.count" type="number" min="1" class="text-input num" />
+            </template>
+            <span class="hint effect-note">
+              {{ eff.pick === 'chosen' ? '— e.g. a target picked from hand' : '— the first cards in hand order' }}
+            </span>
+          </template>
+          <template v-else-if="eff.op === 'search'">
+            <select v-model="eff.side" class="text-input" title="Whose deck">
+              <option v-for="d in EFFECT_SIDES" :key="d" :value="d">{{ SIDE_LABELS[d] }}</option>
+            </select>
+            <select v-model="eff.deck" class="text-input">
+              <option v-for="d in DECKS" :key="d" :value="d">{{ d }}</option>
+            </select>
+            <span class="hint effect-note">for a</span>
+            <select v-model="eff.filter" class="text-input">
+              <option v-for="f in TARGET_FILTERS" :key="f" :value="f">{{ f }}</option>
+            </select>
+            <span class="hint effect-note">— first match from the top, to hand</span>
+          </template>
+          <template v-else-if="eff.op === 'reanimate'">
+            <EffectSelector :sel="eff" :grid="ability.target.mode === 'grid'" :triggered="ability.kind === 'triggered'" />
+            <span class="hint effect-note">from the cemetery to</span>
+            <select
+              v-if="ability.target.mode !== 'grid'"
+              v-model="eff.reach"
+              class="text-input"
+              title="Where the picked summon location may be, relative to this card"
+            >
+              <option v-for="r in REANIMATE_REACH" :key="r" :value="r">
+                {{ r === 'any' ? 'a picked location' : `a picked ${r} location` }}
+              </option>
+            </select>
+            <span v-else class="hint effect-note">the picked square</span>
+          </template>
+          <template v-else-if="eff.op === 'swap'">
+            <span class="hint effect-note">this unit with</span>
+            <EffectSelector :sel="eff" :grid="ability.target.mode === 'grid'" :triggered="ability.kind === 'triggered'" />
+          </template>
+          <template v-else-if="['addCounter', 'removeCounter', 'preventDamage'].includes(eff.op)">
+            <EffectSelector :sel="eff" :grid="ability.target.mode === 'grid'" :triggered="ability.kind === 'triggered'" />
+            <input
+              v-if="eff.op !== 'preventDamage'"
+              v-model="eff.name"
+              class="text-input"
+              placeholder="counter name"
+              title="Counter name. 'shield' counters prevent damage"
+            />
+            <span class="hint effect-note">{{ eff.op === 'preventDamage' ? 'prevent next' : '×' }}</span>
+            <select :value="eff.amountRef || 'literal'" class="text-input" @change="setAmountRef(eff, $event.target.value)">
+              <option v-for="r in AMOUNT_REFS" :key="r" :value="r">{{ amountRefLabel(r) }}</option>
+            </select>
+            <input v-if="!eff.amountRef || eff.amountRef === 'literal'" v-model.number="eff.amount" type="number" min="0" class="text-input num" />
+            <input
+              v-if="eff.amountRef === 'counter'"
+              v-model="eff.counterName"
+              class="text-input"
+              placeholder="counter name"
+              title="Which named counter to total"
+            />
+            <EffectSelector
+              v-if="(eff.amountRef === 'count' || eff.amountRef === 'counter') && eff.countOf"
+              :sel="eff.countOf"
+              :grid="ability.target.mode === 'grid'"
+              :triggered="ability.kind === 'triggered'"
+            />
+            <span v-if="eff.op === 'preventDamage'" class="hint effect-note">damage</span>
           </template>
           <span v-else class="hint effect-note">
             {{ eff.op === 'grantFrom' ? 'carries the target — gains its abilities' : 'releases granted cards' }}
@@ -1040,9 +1206,14 @@ function onRemove(ability) {
         <em>animate</em> turns a non-minion in the realm into a minion until it
         leaves the realm; for animation that depends on a condition, use a
         passive with <em>Animate</em> and an <em>only while</em> condition.
-        A <em>move</em> or <em>summonToken</em> to a picked location asks the
-        player for a square after any target (a grid ability uses its picked
-        square instead).
+        A <em>move</em>, <em>reanimate</em> or <em>summonToken</em> to a picked
+        location asks the player for a square after any target (a grid ability
+        uses its picked square instead). For <em>reanimate</em> /
+        <em>returnToHand</em>, give the ability a target from the cemetery.
+        <em>preventDamage</em> puts <em>shield</em> counters on a card; each
+        absorbs one damage. <em>gainControl</em> hands the card to this card's
+        side; undo, a reset and a save hand it back.
+
       </p>
 
       <div class="btn-row">

@@ -35,6 +35,8 @@ import {
   cantBeTargeted,
   effectiveStrengthMod,
   grantedKeywordsOf,
+  countersOf,
+  SHIELD_COUNTER,
   cardTypeLabel,
   isAnimated,
   wardTokenArt,
@@ -88,6 +90,10 @@ const restrictions = computed(() => {
 // granted in play (base strength/keywords are already on the card art).
 const strengthMod = computed(() => effectiveStrengthMod(props.cardId))
 const grantedKw = computed(() => grantedKeywordsOf(props.cardId))
+// Named counters placed in play (a 'shield' counter is damage prevention).
+const counters = computed(() => countersOf(props.cardId))
+const counterTag = ([name, n]) =>
+  name === SHIELD_COUNTER ? `🛡${n}` : `${name.slice(0, 4)}×${n}`
 const signedStr = computed(() =>
   strengthMod.value > 0 ? `+${strengthMod.value}` : `${strengthMod.value}`
 )
@@ -140,6 +146,8 @@ const label = computed(() => {
   for (const r of restrictions.value) bits.push(r.title.toLowerCase())
   if (strengthMod.value) bits.push(`strength ${signedStr.value}`)
   if (grantedKw.value.length) bits.push(`gained ${grantedKw.value.join(', ')}`)
+  for (const [name, n] of counters.value)
+    bits.push(name === SHIELD_COUNTER ? `prevents next ${n} damage` : `${n} ${name} counters`)
   if (dmg.value) bits.push(`${dmg.value} damage`)
   if (carried.value.length) bits.push(`carrying ${carried.value.length}`)
   const what = bits.join(', ')
@@ -323,6 +331,17 @@ function onClick() {
       <span v-for="kw in grantedKw" :key="kw" class="kw-tag">{{ kw }}</span>
     </div>
 
+    <!-- Named counters from effects, stacked down the left edge. -->
+    <div v-if="counters.length" class="ctr-tags" aria-hidden="true">
+      <span
+        v-for="c in counters"
+        :key="c[0]"
+        class="ctr-tag"
+        :class="{ shield: c[0] === SHIELD_COUNTER }"
+        :title="c[0] === SHIELD_COUNTER ? `Prevents the next ${c[1]} damage` : `${c[1]} ${c[0]} counter(s)`"
+      >{{ counterTag(c) }}</span>
+    </div>
+
     <!-- What this card is holding. A carried card is in no zone, so this is the
          only place it is drawn: at the holder's own size, fanned down and to
          the right so every face stays readable, inside one dashed frame that
@@ -457,7 +476,32 @@ function onClick() {
   max-width: 80%;
   pointer-events: none;
 }
+.ctr-tags {
+  position: absolute;
+  top: 1.4em;
+  left: 2px;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  pointer-events: none;
+}
+.ctr-tag {
+  padding: 0 0.25em;
+  border-radius: 2px;
+  background: rgba(150, 110, 40, 0.92);
+  color: #fff;
+  font-size: 0.5em;
+  font-weight: 700;
+  line-height: 1.5;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+.ctr-tag.shield {
+  background: rgba(70, 140, 170, 0.95);
+}
 .kw-tag {
+
   padding: 0 0.2em;
   border-radius: 2px;
   background: rgba(60, 120, 200, 0.9);

@@ -191,6 +191,10 @@ function abilityLabel(a) {
   const bits = [a.name || 'Ability']
   const mana = ui.selected ? abilityManaCost(ui.selected, a) : a.cost.mana
   if (mana) bits.push(`${mana}◇`)
+  if (a.cost.life) bits.push(`${a.cost.life}♥`)
+  if (a.cost.discard) bits.push(`discard ${a.cost.discard}`)
+  if (a.cost.banish) bits.push(`banish ${a.cost.banish}`)
+  if (a.cost.sacrifice && a.cost.sacrifice !== 'none') bits.push('sacrifice')
   // A limited ability shows its uses left this turn while solving/recording.
   const limit = Number(a.cost.perTurn) || 0
   if (limit && ui.selected && (state.mode === 'play' || state.recording)) {
@@ -274,7 +278,7 @@ function onRemove() {
           usedUp(a)
             ? 'Already used as many times as allowed this turn'
             : abilityCostBlocked(ui.selected, a)
-              ? 'Not enough mana or threshold to activate'
+              ? 'Cannot pay its cost (mana, threshold, life or cards)'
               : a.text || a.name
         "
         :disabled="(usedUp(a) || abilityCostBlocked(ui.selected, a)) && !isArming(a.id)"
