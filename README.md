@@ -158,3 +158,14 @@ The puzzle's `stats` object stores each player's starting life, mana and thresho
 `hideAtlas` / `hideSpellbook` (optional booleans, default `false`) hide both players' Atlas or Spellbook zones for puzzles that don't use the draw decks. A hidden deck still shows while it holds cards.
 
 `desc` is the player-facing brief. It is optional; puzzles saved before it existed simply show no brief.
+
+### Abilities: newer fields and deliberate behaviour changes
+
+Every field below is back-filled on load, so older puzzle files load unchanged and `version` stays 1. Where the engine's behaviour for an older puzzle changed on purpose, it is listed under *Changed*; re-record a solution line if a change affects the intended play.
+
+**Triggers.** A triggered ability's `trigger` also takes `role` (`actor` — the card doing the action, the default — or `target`, the card it is done to: the attacked, struck, targeted or damaged card), `filter` (a card kind the subject must match), `within` (`any`/`adjacent`/`nearby`, measured from the ability's card to the subject) and `targets` (`subject` or `other`: which party the effects auto-target, e.g. the attacker of a "when this is attacked" trigger). The new action `death` fires when a unit goes from the realm to a cemetery. Chains of triggers stop after 200 resolutions with a "Storyline halted" event rather than freezing the page. Activated abilities check their `cost.threshold` (elemental threshold, not spent) as well as their mana before they can be activated while rules are enforced.
+
+*Changed:*
+- Every hit (combat, strike, shoot, damage effects, `gridDamage`) is now a damage event, so an older `damage` trigger — which keyed off manual damage marks only — also fires on combat and effect damage, and so does a `loseWhen: "damaged"` grant. Older damage triggers load with `role: "target"` (the damaged card), which is what they meant.
+- Removing a damage counter by hand (a −1 mark) no longer fires `damage` triggers: only damage actually dealt does.
+- A card that has already left the mat can no longer be hit by combat damage (it could not be damaged there anyway); an Avatar kept off the board as a life stat still loses life.

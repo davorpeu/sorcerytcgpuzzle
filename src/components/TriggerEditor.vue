@@ -6,6 +6,9 @@ import {
   ZONE_CATEGORIES,
   TRIGGER_ACTIONS,
   TRIGGER_SUBJECTS,
+  TRIGGER_ROLES,
+  TRIGGER_TARGET_REFS,
+  TARGETED_TRIGGER_ACTIONS,
   LOSE_CONDITIONS,
   TARGET_FILTERS,
   TARGET_MODES,
@@ -44,6 +47,9 @@ import {
 const STAT_SIDES = ['self', 'enemy', 'player', 'opponent']
 const STAT_KEYS = ['mana', 'life', 'air', 'earth', 'fire', 'water']
 const WHO = ['self', 'target']
+// Readable labels for a trigger's role / auto-target reference.
+const ROLE_LABELS = { actor: 'does it', target: 'has it done to them' }
+const REF_LABELS = { subject: 'the subject', other: 'the other party' }
 const ELEMENTS = ['air', 'earth', 'fire', 'water']
 
 // Friendlier labels for the terse effect-param option values.
@@ -228,7 +234,44 @@ function onRemove(ability) {
                 <option v-for="z in fromToOptions" :key="z" :value="z">{{ z }}</option>
               </select>
             </label>
+            <label
+              v-if="TARGETED_TRIGGER_ACTIONS.includes(ability.trigger.action)"
+              class="field-label"
+            >
+              Subject
+              <select v-model="ability.trigger.role" class="text-input">
+                <option v-for="r in TRIGGER_ROLES" :key="r" :value="r">{{ ROLE_LABELS[r] }}</option>
+              </select>
+            </label>
+            <label class="field-label">
+              Subject kind
+              <select v-model="ability.trigger.filter" class="text-input">
+                <option v-for="f in TARGET_FILTERS" :key="f" :value="f">{{ f }}</option>
+              </select>
+            </label>
+            <label class="field-label">
+              Subject within
+              <select v-model="ability.trigger.within" class="text-input">
+                <option v-for="w in TARGET_WITHIN.filter((w) => w !== 'projectile')" :key="w" :value="w">{{ w }}</option>
+              </select>
+            </label>
+            <label class="field-label">
+              Effects hit
+              <select v-model="ability.trigger.targets" class="text-input">
+                <option v-for="r in TRIGGER_TARGET_REFS" :key="r" :value="r">{{ REF_LABELS[r] }}</option>
+              </select>
+            </label>
           </div>
+          <p class="hint">
+            The subject is the card that <em>does</em> the action (mover, attacker,
+            damage source) or that <em>has it done to them</em> (the attacked,
+            struck, targeted or damaged card). <em>By</em>, kind and within
+            (measured from this card) all test the subject. &ldquo;When this is
+            attacked&rdquo;: attack · self · has it done to them. <em>death</em>
+            is a unit going from the realm to a cemetery; <em>damage</em> fires
+            on every hit (combat, strikes, shots, damage effects) as well as a
+            damage mark.
+          </p>
 
           <!-- By default a trigger's effects auto-hit the triggering card / its
                grid area. Optionally let the player pick a target when it fires. -->
@@ -475,6 +518,16 @@ function onRemove(ability) {
             <p class="hint" style="align-self: end">
               {{ ability.cost.perTurn ? `At most ${ability.cost.perTurn}× per turn` : 'Unlimited' }}
             </p>
+            <label v-for="el in ELEMENTS" :key="el" class="field-label">
+              {{ el }} threshold
+              <input
+                v-model.number="ability.cost.threshold[el]"
+                type="number"
+                min="0"
+                class="text-input"
+                title="Elemental threshold needed to activate (checked, not spent)"
+              />
+            </label>
           </div>
 
           <label class="field-label">

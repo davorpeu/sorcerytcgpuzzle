@@ -25,6 +25,7 @@ import {
   castControlled,
   castManaCost,
   abilityManaCost,
+  abilityCostBlocked,
   abilityUsesLeft,
   activatePickState,
   beginCast,
@@ -258,8 +259,14 @@ function onRemove() {
         :key="a.id"
         class="btn"
         :class="{ active: isArming(a.id) }"
-        :title="usedUp(a) ? 'Already used as many times as allowed this turn' : a.text || a.name"
-        :disabled="usedUp(a) && !isArming(a.id)"
+        :title="
+          usedUp(a)
+            ? 'Already used as many times as allowed this turn'
+            : abilityCostBlocked(ui.selected, a)
+              ? 'Not enough mana or threshold to activate'
+              : a.text || a.name
+        "
+        :disabled="(usedUp(a) || abilityCostBlocked(ui.selected, a)) && !isArming(a.id)"
         @click="beginActivate(ui.selected, a.id)"
       >
         ✧ {{ isArming(a.id) ? `Cancel ${a.name || 'ability'}` : abilityLabel(a) }}

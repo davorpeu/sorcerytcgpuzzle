@@ -813,6 +813,25 @@ export function abilityUsesLeft(cardId, ability) {
   return Math.max(0, limit - used)
 }
 
+// Whether a card's side can pay an activated ability's mana (abilityManaCost)
+// and meet its elemental threshold (checked, not spent) -- the same test a spell
+// cast uses.
+export function canAffordAbility(cardId, ability) {
+  if (!ability) return false
+  const side = sideOf(cardId)
+  const s = state.stats[side]
+  if (!s) return false
+  if ((s.mana || 0) < abilityManaCost(cardId, ability)) return false
+  for (const el of ELEMENTS)
+    if (effectiveThreshold(side, el) < (Number(ability.cost?.threshold?.[el]) || 0)) return false
+  return true
+}
+
+// Cost gating bites only while rules are enforced (play and recording), like
+// the other activation gates; the free-form editor never activates anyway.
+export const abilityCostBlocked = (cardId, ability) =>
+  enforcing() && !canAffordAbility(cardId, ability)
+
 // An activated ability's mana cost now: its printed cost, plus any cemetery
 // tax when it picks cemetery cards.
 export function abilityManaCost(cardId, ability) {
@@ -1491,19 +1510,80 @@ const combatActive = () =>
 // Power a unit actually deals: none while Disabled ("doesn't strike when fighting").
 const combatPower = (id) => (isDisabled(id) ? 0 : effectivePower(id))
 
+// A card on the mat: in the realm (a cell or site slot, or carried there) or on
+// an intersection (an aura, or an oversized minion).
+const inPlay = (id) => ['realm', 'aura'].includes(cardZoneCategory(id))
+
+// A batch of simultaneous hits: who a Lethal source touched, every damage
+// instance dealt, and where each party stood when it landed, so the batch can
+// settle (deaths, then damage triggers) as one.
+const newHits = () => ({ lethal: new Set(), dealt: [], at: {} })
+
+// Note where a card stood (square and layer) when a hit in this batch landed.
+function recordHitAt(hits, id) {
+  if (!id || hits.at[id]) return
+  const n = nodeOf(id)
+  if (n) hits.at[id] = n
+}
+
 // One source->target damage instance. A minion accumulates damage (and a lethal
 // flag if the source has Lethal); a site or avatar has no toughness, so its
-// controller loses that much life instead.
-function applyHit(sourceId, targetId, amount, lethalHit) {
+// controller loses that much life instead. Recorded on `hits` so settleHits can
+// announce it as a damage event.
+function applyHit(sourceId, targetId, amount, hits) {
   if (amount <= 0) return
   const tgt = state.cards[targetId]
   if (!tgt) return
+  // A card already off the mat (killed earlier in this storyline, say) can't be
+  // hit -- otherwise damage triggers could ping a dead card forever. An Avatar
+  // is the exception: a puzzle may keep it off the board as a life stat, and
+  // damage to it is only life loss (it never dies, so it can't loop on death).
+  const offBoard = !inPlay(targetId)
+  if (offBoard && !tgt.avatar) return
+  // Where both parties stood, so a trigger's `within` can still measure a unit
+  // the hit went on to kill (and its Deathrite's area can be measured there).
+  recordHitAt(hits, targetId)
+  recordHitAt(hits, sourceId)
   if (isUnit(targetId) && !tgt.avatar) {
     state.damage[targetId] = (state.damage[targetId] || 0) + amount
-    if (hasKeyword(sourceId, 'lethal')) lethalHit.add(targetId)
+    if (hasKeyword(sourceId, 'lethal')) hits.lethal.add(targetId)
   } else {
     adjustStat(sideOf(targetId), 'life', -amount)
   }
+  hits.dealt.push({ sourceId, targetId, amount })
+}
+
+// Announce damage as trigger events ("when damaged", "whenever this deals
+// damage") and to the loseWhen watcher. Not a logged move -- like a death's
+// replayed move it is a consequence of the causing entry: it carries that
+// entry's seq, and `root` so effects snapshot onto it for undo. `killed` is the
+// set of cards this batch's deaths removed (only their own damage triggers may
+// still resolve from the cemetery); `at` maps a card to the node it stood on.
+function fireDamage(entry, dealt, killed = null, at = null) {
+  for (const d of dealt) {
+    if (!(d.amount > 0)) continue
+    const ev = {
+      type: 'damage',
+      cardId: d.targetId,
+      sourceId: d.sourceId || null,
+      amount: d.amount,
+      seq: entry?.seq,
+      root: entry,
+      killed,
+      at,
+    }
+    fireTriggers(ev)
+    checkGrantLoss(ev)
+  }
+}
+
+// Settle a batch of hits: state-based deaths first (damage is immediate), then
+// the damage events go onto the storyline.
+function settleHits(entry, hits) {
+  const before = Object.keys(hits.at).filter(inPlay)
+  resolveDeaths(entry, hits.lethal)
+  const killed = new Set(before.filter((id) => !inPlay(id)))
+  fireDamage(entry, hits.dealt, killed, hits.at)
 }
 
 // Move a unit to its cemetery as a consequence of `entry`: snapshot for undo,
@@ -1518,7 +1598,7 @@ function sendToCemetery(unitId, entry, name, text) {
   state.events.push({ id: uid(), seq: entry.seq, cardId: unitId, name, text })
   emitFx('death', { cardId: unitId })
   shedInPlayState(unitId, `grave:${side}`, entry)
-  fireTriggers({ type: 'move', cardId: unitId, from, to: `grave:${side}`, seq: entry.seq })
+  fireTriggers({ type: 'move', cardId: unitId, from, to: `grave:${side}`, seq: entry.seq, root: entry })
 }
 
 // State-based death after damage: any minion at or over its Life, or hit by a
@@ -1569,10 +1649,10 @@ function resolveAttack(attackerId, targetId, entry) {
   if (isUnit(targetId)) breakLances(targetId, entry)
   // Both or neither strike first -> the usual simultaneous exchange.
   if (aFS === dFS) {
-    const lethalHit = new Set()
-    applyHit(attackerId, targetId, aDmg, lethalHit)
-    if (isUnit(targetId)) applyHit(targetId, attackerId, dDmg, lethalHit)
-    resolveDeaths(entry, lethalHit)
+    const hits = newHits()
+    applyHit(attackerId, targetId, aDmg, hits)
+    if (isUnit(targetId)) applyHit(targetId, attackerId, dDmg, hits)
+    settleHits(entry, hits)
     return
   }
   // One strikes first; the other hits back only if it survived that strike.
@@ -1580,13 +1660,13 @@ function resolveAttack(attackerId, targetId, entry) {
   const second = aFS ? targetId : attackerId
   const firstDmg = aFS ? aDmg : dDmg
   const secondDmg = aFS ? dDmg : aDmg
-  const l1 = new Set()
-  applyHit(first, second, firstDmg, l1)
-  resolveDeaths(entry, l1)
+  const h1 = newHits()
+  applyHit(first, second, firstDmg, h1)
+  settleHits(entry, h1)
   if (isUnit(second) && zoneOf(second)?.startsWith('cell:')) {
-    const l2 = new Set()
-    applyHit(second, first, secondDmg, l2)
-    resolveDeaths(entry, l2)
+    const h2 = newHits()
+    applyHit(second, first, secondDmg, h2)
+    settleHits(entry, h2)
   }
 }
 
@@ -1599,9 +1679,9 @@ function strikeWithLance(sourceId, targetId, entry) {
 
 // A one-way hit (strike, shoot, or a damage effect).
 function resolveHit(sourceId, targetId, amount, entry) {
-  const lethalHit = new Set()
-  applyHit(sourceId, targetId, amount, lethalHit)
-  resolveDeaths(entry, lethalHit)
+  const hits = newHits()
+  applyHit(sourceId, targetId, amount, hits)
+  settleHits(entry, hits)
 }
 
 // The category a card is actually in right now, resolving a carried card to
@@ -1636,7 +1716,21 @@ export const TRIGGER_ACTIONS = [
   'ability',
   'cast',
   'damage',
+  // Convenience: a unit goes from the realm to a cemetery (dies).
+  'death',
 ]
+
+// Which party of the action is the trigger's subject: the card performing it
+// ('actor' -- the mover, attacker, caster; for damage, the source dealing it) or
+// the card it is done to ('target' -- the attacked/struck/targeted card, the
+// damaged card). "When this is attacked" = action attack, role target, subject self.
+export const TRIGGER_ROLES = ['actor', 'target']
+// Actions that have an acted-upon party, so a 'target' role can mean something.
+// For the rest (a move, drop or death) the role is always 'actor'.
+export const TARGETED_TRIGGER_ACTIONS = ['attack', 'strike', 'pickup', 'ability', 'cast', 'damage']
+// What a triggered ability's effects auto-target: the trigger's subject, or the
+// other party of the action (e.g. the attacker, for a role-target attack trigger).
+export const TRIGGER_TARGET_REFS = ['subject', 'other']
 
 // The structured effect ops an ability can carry, for the editor's picker.
 export const EFFECT_OPS = [
@@ -1922,6 +2016,18 @@ export function normalizeAbility(a = {}) {
       from: a.trigger?.from || 'any',
       to: a.trigger?.to || 'any',
       subject: a.trigger?.subject || 'self',
+      // Older files had no role, and their damage triggers keyed off the damaged
+      // card -- which is now the 'target' role -- so back-fill accordingly.
+      role: TRIGGER_ROLES.includes(a.trigger?.role)
+        ? a.trigger.role
+        : a.trigger?.action === 'damage'
+        ? 'target'
+        : 'actor',
+      // Card-kind and range restrictions on the subject (range measured from the
+      // ability's owner), as for an ability's target.
+      filter: TARGET_FILTERS.includes(a.trigger?.filter) ? a.trigger.filter : 'any',
+      within: TARGET_WITHIN.includes(a.trigger?.within) ? a.trigger.within : 'any',
+      targets: TRIGGER_TARGET_REFS.includes(a.trigger?.targets) ? a.trigger.targets : 'subject',
     },
     cost: {
       mana: Number(a.cost?.mana) || 0,
@@ -2839,17 +2945,95 @@ function subjectMatches(subject, owner, actingId) {
   return subject === 'friendly' ? sameSide : !sameSide
 }
 
-// Does a logged entry satisfy a triggered ability's condition? Zone parts are
-// compared as categories, and a wildcard ('any') side matches an entry that has
-// no such zone (an attack has neither from nor to, for instance).
-function triggerMatches(trigger, owner, entry) {
-  if (trigger.action !== (entry.type || 'move')) return false
-  if (!subjectMatches(trigger.subject, owner, entry.cardId)) return false
-  if (trigger.from !== 'any' && zoneCategory(entry.from) !== trigger.from)
-    return false
-  if (trigger.to !== 'any' && zoneCategory(entry.to) !== trigger.to)
-    return false
+// The card performing an entry. A damage event's actor is its source (a manual
+// damage mark has none); everything else is performed by its cardId.
+const entryActor = (entry) =>
+  entry.type === 'damage' ? entry.sourceId || null : entry.cardId || null
+
+// The cards an entry is done to. An attack is done to both the attacked card and
+// any defender that stepped in (the one actually fought); damage to the damaged
+// card; an ability or cast to every card it picked.
+function entryTargets(entry) {
+  const type = entry.type || 'move'
+  if (type === 'attack') return [entry.defenderId, entry.targetId].filter(Boolean)
+  if (type === 'damage') return [entry.cardId].filter(Boolean)
+  if (['strike', 'shoot', 'intercept', 'pickup', 'ability', 'cast'].includes(type))
+    return (entry.targetIds?.length ? entry.targetIds : [entry.targetId]).filter(Boolean)
+  return []
+}
+
+// A trigger's candidate { subject, other } pairs from an entry, by its role.
+function triggerParties(trigger, entry) {
+  const actor = entryActor(entry)
+  const targets = entryTargets(entry)
+  if (trigger.role === 'target' && TARGETED_TRIGGER_ACTIONS.includes(trigger.action))
+    return targets.map((t) => ({ subject: t, other: actor }))
+  return [{ subject: actor, other: targets[0] || null }]
+}
+
+// Does the entry's type fit the trigger's action? 'death' is a convenience for a
+// unit's realm->cemetery move; damage only counts when some was actually dealt.
+function actionMatches(action, entry) {
+  const type = entry.type || 'move'
+  if (action === 'death')
+    return (
+      type === 'move' &&
+      ['realm', 'aura'].includes(zoneCategory(entry.from)) &&
+      zoneCategory(entry.to) === 'cemetery' &&
+      isUnit(entry.cardId)
+    )
+  if (action !== type) return false
+  if (type === 'damage' && !((entry.amount || 0) > 0)) return false
   return true
+}
+
+// Where the subject is for a trigger's range: the square(s) it is on now, else
+// where it was when the event happened (hit on, or left from -- a unit that
+// just died).
+function subjectSquares(subjectId, entry) {
+  const now = areaSquares(subjectId)
+  if (now.length) return now
+  if (entry.at?.[subjectId]) return [entry.at[subjectId].sq]
+  if (subjectId === entry.cardId) {
+    const m = /^(?:cell|site):(\d+)/.exec(entry.from || '')
+    if (m) return [Number(m[1])]
+    const a = /^aura:(\d+)$/.exec(entry.from || '')
+    if (a) return intersectionSquares(Number(a[1]))
+  }
+  return []
+}
+
+// Range from the owner to the subject for a trigger's `within` (adjacent =
+// cardinal, nearby = king), measured from any square the owner is on (an aura's
+// four). Unlike a target pick, an unmeasurable card is never in range.
+function triggerWithin(ownerId, subjectId, within, entry) {
+  if (within === 'any' || !within) return true
+  if (ownerId === subjectId) return true
+  const t = subjectSquares(subjectId, entry)
+  if (!t.length) return false
+  return areaSquares(ownerId).some((s) =>
+    t.some((q) => (within === 'adjacent' ? areAdjacent(s, q) : s === q || areNearby(s, q)))
+  )
+}
+
+// Does a logged entry satisfy a triggered ability's condition? Returns the
+// matched { subject, other } party, or null. Zone parts are compared as
+// categories, and a wildcard ('any') side matches an entry that has no such zone
+// (an attack has neither from nor to, for instance).
+function triggerMatches(trigger, owner, entry) {
+  if (!actionMatches(trigger.action, entry)) return null
+  if (trigger.from !== 'any' && zoneCategory(entry.from) !== trigger.from)
+    return null
+  if (trigger.to !== 'any' && zoneCategory(entry.to) !== trigger.to)
+    return null
+  for (const party of triggerParties(trigger, entry)) {
+    if (!party.subject) continue
+    if (!subjectMatches(trigger.subject, owner, party.subject)) continue
+    if (!matchesFilter(state.cards[party.subject], trigger.filter || 'any')) continue
+    if (!triggerWithin(owner.id, party.subject, trigger.within, entry)) continue
+    return party
+  }
+  return null
 }
 
 // ---------- the storyline (trigger resolution stack) ----------
@@ -2867,6 +3051,9 @@ function triggerMatches(trigger, owner, entry) {
 // The stack being drained right now, or null when idle. A nested trigger (a
 // death mid-resolution, say) sees this set and unshifts onto it to interrupt.
 let storyStack = null
+// Events resolved in the current drain, capped by STORY_LIMIT.
+let storyResolved = 0
+const STORY_LIMIT = 200
 
 // The events one logged entry sets off: one per matching triggered ability. The
 // `entry` carried is the object effects snapshot onto (the root causing entry),
@@ -2891,9 +3078,19 @@ function collectTriggers(entry) {
       if (a.kind !== 'triggered') continue
       // Silence strips abilities: a silenced card's triggers don't fire.
       if (isSilenced(owner.id)) continue
-      if (!triggerMatches(a.trigger, owner, entry)) continue
+      const party = triggerMatches(a.trigger, owner, entry)
+      if (!party) continue
       if (!triggerLive(owner, a)) continue
-      out.push({ ownerId: owner.id, ability: a, triggeringId: entry.cardId, entry })
+      // A consequence event (damage, a death's replayed move) snapshots onto the
+      // logged entry that caused it.
+      out.push({
+        ownerId: owner.id,
+        ability: a,
+        triggeringId: party.subject,
+        otherId: party.other,
+        killed: entry.killed || null,
+        entry: entry.root || entry,
+      })
     }
   }
   return out
@@ -2907,6 +3104,17 @@ function sourceGone(ev) {
   const to = ev.ability.trigger.to
   // Departure triggers (Deathrite) are meant to resolve after the owner leaves.
   if (to === 'cemetery' || to === 'banished') return false
+  if (ev.ability.trigger.action === 'death' && ev.triggeringId === ev.ownerId) return false
+  // Deaths settle before damage events do, so a unit killed in the exchange still
+  // gets its own "when damaged" / "whenever this deals damage" ability -- but
+  // only from the batch that killed it: later damage to or from a dead card must
+  // not keep its abilities alive.
+  if (
+    ev.ability.trigger.action === 'damage' &&
+    ev.killed?.has(ev.ownerId) &&
+    (ev.triggeringId === ev.ownerId || ev.otherId === ev.ownerId)
+  )
+    return false
   // Otherwise the event is ignored once its source has left the board (it is no
   // longer in the realm nor an aura on the mat).
   const cat = cardZoneCategory(ev.ownerId)
@@ -2964,8 +3172,12 @@ function logStoryEvent(ev, ignored) {
 function autoTarget(ev) {
   const t = ev.ability.target
   if (t.mode === 'card' && t.required && t.optional) return null
-  return ev.triggeringId
+  return triggerRef(ev)
 }
+
+// The card a trigger refers to by default: its subject, or the other party.
+const triggerRef = (ev) =>
+  ev.ability.trigger?.targets === 'other' ? ev.otherId || null : ev.triggeringId
 
 // Drain the storyline. Resumable: if an event needs a player choice, it pauses
 // (leaving the rest on storyStack) and returns; resolveStoryChoice runs the
@@ -2973,6 +3185,20 @@ function autoTarget(ev) {
 function resolveStory() {
   while (storyStack && storyStack.length) {
     const ev = storyStack.shift()
+    // Safety net against abilities that keep re-triggering each other: halt the
+    // storyline rather than freeze the page.
+    if (++storyResolved > STORY_LIMIT) {
+      state.events.push({
+        id: uid(),
+        seq: ev.entry.seq,
+        cardId: ev.ownerId,
+        name: 'Storyline halted',
+        text: `Too many chained abilities (over ${STORY_LIMIT}); the rest are ignored.`,
+        status: 'ignored',
+      })
+      storyStack = null
+      return
+    }
     if (!sourceGone(ev) && needsChoice(ev)) {
       // Suspend for the player to choose. The rest of the storyline waits. With
       // no card to pick it goes straight to the destination pick.
@@ -2982,6 +3208,8 @@ function resolveStory() {
         ability: ev.ability,
         entry: ev.entry,
         triggeringId: ev.triggeringId,
+        otherId: ev.otherId,
+        killed: ev.killed,
         dest: !pickCard,
         targetId: pickCard ? null : autoTarget(ev),
       }
@@ -3001,7 +3229,7 @@ function resolveStory() {
 export function resolveStoryChoice(targetId, gridSquare) {
   const c = ui.storyChoice
   if (!c || c.dest) return
-  const t = targetId ?? c.triggeringId
+  const t = targetId ?? triggerRef(c)
   // A destination still to pick: stay paused, now asking for the square.
   if (gridSquare == null && needsDestChoice(c, t)) {
     ui.storyChoice = { ...c, dest: true, targetId: t }
@@ -3013,7 +3241,14 @@ export function resolveStoryChoice(targetId, gridSquare) {
 
 // Resolve a paused trigger with everything chosen, then resume the storyline.
 function finishStoryChoice(c, targetId, gridSquare, destZone) {
-  const ev = { ability: c.ability, ownerId: c.ownerId, entry: c.entry, triggeringId: c.triggeringId }
+  const ev = {
+    ability: c.ability,
+    ownerId: c.ownerId,
+    entry: c.entry,
+    triggeringId: c.triggeringId,
+    otherId: c.otherId,
+    killed: c.killed,
+  }
   const ignored = sourceGone(ev)
   logStoryEvent(ev, ignored)
   if (!ignored) runEffects(c.ability, c.ownerId, targetId, c.entry, gridSquare, destZone)
@@ -3068,6 +3303,7 @@ function fireTriggers(entry) {
   if (storyStack) storyStack.unshift(...events)
   else {
     storyStack = events
+    storyResolved = 0
     resolveStory()
   }
 }
@@ -3716,7 +3952,7 @@ function forceMove(id, to, eff, entry) {
     name: teleport ? 'Teleports' : 'Moved',
     text: `${cardName(id)} ${teleport ? 'teleports' : 'is moved'} to ${zoneLabel(routed)}.`,
   })
-  fireTriggers({ type: 'move', cardId: id, from, to: routed, seq: entry?.seq, forced: true })
+  fireTriggers({ type: 'move', cardId: id, from, to: routed, seq: entry?.seq, forced: true, root: entry })
   checkSurvival(entry) // moving into a hostile region can kill
 }
 
@@ -3869,7 +4105,7 @@ function summonTokens(eff, cardId, targetId, entry, destZone, pickSquare) {
         : `${cardName(id)} token enters the realm.`,
     })
     emitFx('genesis', { cardId: id })
-    fireTriggers({ type: 'move', cardId: id, from: null, to: landed, seq: entry?.seq })
+    fireTriggers({ type: 'move', cardId: id, from: null, to: landed, seq: entry?.seq, root: entry })
   }
   checkSurvival(entry)
 }
@@ -3965,17 +4201,13 @@ function runEffects(ability, cardId, targetId, entry, gridSquare, destZone) {
     if (wardedTarget && (eff.who === 'target' || eff.op === 'grantFrom')) continue
     if (eff.op === 'gridDamage') {
       const amt = effectAmount(eff, cardId)
-      const lethalHit = new Set()
+      const hits = newHits()
       for (const id of gridArea || []) {
-        const c = state.cards[id]
         // Area damage hits minions on the square; it never causes life loss to
         // an avatar or a site's controller (unlike an attack).
-        if (isUnit(id) && !c.avatar) {
-          state.damage[id] = (state.damage[id] || 0) + amt
-          if (hasKeyword(cardId, 'lethal')) lethalHit.add(id)
-        }
+        if (isUnit(id) && !state.cards[id].avatar) applyHit(cardId, id, amt, hits)
       }
-      resolveDeaths(entry, lethalHit)
+      settleHits(entry, hits)
       continue
     }
 
@@ -3996,7 +4228,12 @@ function runEffects(ability, cardId, targetId, entry, gridSquare, destZone) {
       // With combat on, an ability's damage resolves like a hit (Lethal-aware,
       // life loss to avatars/sites, death); otherwise it just marks counters.
       if (t && combatActive()) resolveHit(cardId, t, amount, entry)
-      else if (t) adjustDamage(t, amount)
+      else if (t) {
+        // Only a card on the mat (or an Avatar kept off it as a life stat)
+        // announces the damage -- a dead card must not keep triggering.
+        adjustDamage(t, amount)
+        if (inPlay(t) || isAvatar(t)) fireDamage(entry, [{ sourceId: cardId, targetId: t, amount }])
+      }
     } else if (eff.op === 'strike') {
       // The source strikes the target: its power plus any Lance bonus (the
       // lances break), resolved like a manual strike. Without combat it just
@@ -4065,6 +4302,8 @@ function matchesLoseWhen(cond, carrierId, entry) {
   if (!cond || cond === 'never') return false
   if (cond === 'damaged')
     return entry.type === 'damage' && entry.cardId === carrierId && (entry.amount || 0) > 0
+  // A damage event is done *to* the carrier, not an action it took.
+  if (entry.type === 'damage') return false
   if (entry.cardId !== carrierId) return false
   if (cond === 'dies') return zoneCategory(entry.to) === 'cemetery'
   if (cond === 'leaves-realm')
@@ -4080,7 +4319,7 @@ function checkGrantLoss(entry) {
     const g = Object.values(state.grants).find((x) => x.carrierId === carrierId)
     const ability = state.cards[carrierId]?.abilities?.find((a) => a.id === g.abilityId)
     if (matchesLoseWhen(ability?.loseWhen, carrierId, entry)) {
-      releaseGrant(carrierId, entry)
+      releaseGrant(carrierId, entry.root || entry)
     }
   }
 }
@@ -4413,7 +4652,7 @@ function performCast(cardId, abilityId, targetId, gridSquare, destZone, extra = 
     name: 'Spell resolves',
     text: `${cardName(cardId)} resolves and goes to ${permit ? 'banishment' : 'the cemetery'}.`,
   })
-  fireTriggers({ type: 'move', cardId, from, to, seq: entry.seq })
+  fireTriggers({ type: 'move', cardId, from, to, seq: entry.seq, root: entry })
 }
 
 // Whether a minion may be summoned onto this location (enforced casts). Surface
@@ -4495,7 +4734,7 @@ function performPermanentCast(cardId, zone) {
       : `${cardName(cardId)} enters the realm.`,
   })
   emitFx('genesis', { cardId })
-  fireTriggers({ type: 'move', cardId, from, to: landedZone, seq: entry.seq }) // genesis
+  fireTriggers({ type: 'move', cardId, from, to: landedZone, seq: entry.seq, root: entry }) // genesis
   checkSurvival(entry) // it may enter a region it can't survive
   return true
 }
@@ -4653,14 +4892,12 @@ export function beginActivate(cardId, abilityId) {
   if (ability.cost?.tap && tapBlockedBySickness(cardId)) return
   // Used up its activations for this turn.
   if (casting() && abilityUsesLeft(cardId, ability) <= 0) return
-  // Under enforcement the mana cost (with any cemetery tax) must be affordable.
-  if (enforcing() && (state.stats[sideOf(cardId)]?.mana || 0) < abilityManaCost(cardId, ability))
-    return
-  if (
-    ui.activating &&
-    ui.activating.cardId === cardId &&
-    ui.activating.abilityId === abilityId
-  ) {
+  const armed =
+    ui.activating && ui.activating.cardId === cardId && ui.activating.abilityId === abilityId
+  // Under enforcement the cost (mana with any cemetery tax, and the elemental
+  // threshold) must be affordable -- but an armed ability can still be cancelled.
+  if (!armed && abilityCostBlocked(cardId, ability)) return
+  if (armed) {
     ui.activating = null
     return
   }
