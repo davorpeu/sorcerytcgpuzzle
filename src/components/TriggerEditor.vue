@@ -1,5 +1,6 @@
 <script setup>
 import { computed } from 'vue'
+import EffectSelector from './EffectSelector.vue'
 import {
   state,
   cardName,
@@ -40,13 +41,13 @@ import {
   addEffect,
   removeEffect,
   retypeEffect,
+  setAmountRef,
 } from '../store.js'
 
 // Options for the effect params. `self`/`enemy` resolve relative to the
 // activating card's side; `player`/`opponent` are absolute.
 const STAT_SIDES = ['self', 'enemy', 'player', 'opponent']
 const STAT_KEYS = ['mana', 'life', 'air', 'earth', 'fire', 'water']
-const WHO = ['self', 'target']
 // Readable labels for a trigger's role / auto-target reference.
 const ROLE_LABELS = { actor: 'does it', target: 'has it done to them' }
 const REF_LABELS = { subject: 'the subject', other: 'the other party' }
@@ -60,6 +61,8 @@ const amountRefLabel = (r) =>
     ? 'carried count'
     : r === 'waterBodySize'
     ? 'water-body size'
+    : r === 'count'
+    ? 'count of…'
     : 'a number'
 const locationLabel = (l) =>
   l === 'targetLocation'
@@ -657,34 +660,40 @@ function onRemove(ability) {
             <input v-model.number="eff.delta" type="number" class="text-input num" />
           </template>
           <template v-else-if="eff.op === 'tap'">
-            <select v-model="eff.who" class="text-input">
-              <option v-for="w in WHO" :key="w" :value="w">{{ w }}</option>
-            </select>
+            <EffectSelector :sel="eff" :grid="ability.target.mode === 'grid'" :triggered="ability.kind === 'triggered'" />
           </template>
           <template v-else-if="eff.op === 'dealDamage'">
             <span class="hint effect-note">to</span>
-            <select v-model="eff.who" class="text-input">
-              <option v-for="w in WHO" :key="w" :value="w">{{ w }}</option>
-            </select>
+            <EffectSelector :sel="eff" :grid="ability.target.mode === 'grid'" :triggered="ability.kind === 'triggered'" />
             <span class="hint effect-note">amount</span>
-            <select v-model="eff.amountRef" class="text-input">
+            <select :value="eff.amountRef || 'literal'" class="text-input" @change="setAmountRef(eff, $event.target.value)">
               <option v-for="r in AMOUNT_REFS" :key="r" :value="r">{{ amountRefLabel(r) }}</option>
             </select>
             <input v-if="!eff.amountRef || eff.amountRef === 'literal'" v-model.number="eff.amount" type="number" class="text-input num" />
+            <EffectSelector
+              v-else-if="eff.amountRef === 'count' && eff.countOf"
+              :sel="eff.countOf"
+              :grid="ability.target.mode === 'grid'"
+              :triggered="ability.kind === 'triggered'"
+            />
           </template>
           <template v-else-if="eff.op === 'strike'">
             <span class="hint effect-note">this unit strikes</span>
-            <select v-model="eff.who" class="text-input">
-              <option v-for="w in WHO" :key="w" :value="w">{{ w }}</option>
-            </select>
+            <EffectSelector :sel="eff" :grid="ability.target.mode === 'grid'" :triggered="ability.kind === 'triggered'" />
             <span class="hint effect-note">for its power (+Lance)</span>
           </template>
           <template v-else-if="eff.op === 'gridDamage'">
             <span class="hint effect-note">to grid area, amount</span>
-            <select v-model="eff.amountRef" class="text-input">
+            <select :value="eff.amountRef || 'literal'" class="text-input" @change="setAmountRef(eff, $event.target.value)">
               <option v-for="r in AMOUNT_REFS" :key="r" :value="r">{{ amountRefLabel(r) }}</option>
             </select>
             <input v-if="!eff.amountRef || eff.amountRef === 'literal'" v-model.number="eff.amount" type="number" class="text-input num" />
+            <EffectSelector
+              v-else-if="eff.amountRef === 'count' && eff.countOf"
+              :sel="eff.countOf"
+              :grid="ability.target.mode === 'grid'"
+              :triggered="ability.kind === 'triggered'"
+            />
           </template>
           <template v-else-if="eff.op === 'move'">
             <select
@@ -697,9 +706,7 @@ function onRemove(ability) {
                 {{ k === 'teleport' ? 'teleport' : 'forced (push/pull/drag)' }}
               </option>
             </select>
-            <select v-model="eff.who" class="text-input">
-              <option v-for="w in WHO" :key="w" :value="w">{{ w }}</option>
-            </select>
+            <EffectSelector :sel="eff" :grid="ability.target.mode === 'grid'" :triggered="ability.kind === 'triggered'" />
             <span class="hint effect-note">to</span>
             <select v-model="eff.to" class="text-input">
               <option v-for="l in LOCATION_REFS" :key="l" :value="l">{{ locationLabel(l) }}</option>
@@ -747,9 +754,7 @@ function onRemove(ability) {
             </select>
           </template>
           <template v-else-if="['destroy','banish','bounce','heal'].includes(eff.op)">
-            <select v-model="eff.who" class="text-input">
-              <option v-for="w in WHO" :key="w" :value="w">{{ w }}</option>
-            </select>
+            <EffectSelector :sel="eff" :grid="ability.target.mode === 'grid'" :triggered="ability.kind === 'triggered'" />
           </template>
           <template v-else-if="eff.op === 'banishAndCast'">
             <span class="hint effect-note">banish the picked cards; the one you choose may be cast</span>
@@ -759,9 +764,7 @@ function onRemove(ability) {
             </label>
           </template>
           <template v-else-if="eff.op === 'animate'">
-            <select v-model="eff.who" class="text-input">
-              <option v-for="w in WHO" :key="w" :value="w">{{ w }}</option>
-            </select>
+            <EffectSelector :sel="eff" :grid="ability.target.mode === 'grid'" :triggered="ability.kind === 'triggered'" />
             <span class="hint effect-note">becomes a minion, power =</span>
             <select v-model="eff.powerRef" class="text-input">
               <option v-for="r in ANIMATE_POWER_REFS" :key="r" :value="r">{{ POWER_REF_LABELS[r] }}</option>
@@ -777,26 +780,40 @@ function onRemove(ability) {
 
           </template>
           <template v-else-if="eff.op === 'modifyStrength'">
-            <select v-model="eff.who" class="text-input">
-              <option v-for="w in WHO" :key="w" :value="w">{{ w }}</option>
+            <EffectSelector :sel="eff" :grid="ability.target.mode === 'grid'" :triggered="ability.kind === 'triggered'" />
+            <span class="hint effect-note">by</span>
+            <select :value="eff.amountRef || 'literal'" class="text-input" @change="setAmountRef(eff, $event.target.value)">
+              <option v-for="r in AMOUNT_REFS" :key="r" :value="r">{{ amountRefLabel(r) }}</option>
             </select>
-            <input v-model.number="eff.amount" type="number" class="text-input num" />
+            <input v-if="!eff.amountRef || eff.amountRef === 'literal'" v-model.number="eff.amount" type="number" class="text-input num" />
+            <EffectSelector
+              v-else-if="eff.amountRef === 'count' && eff.countOf"
+              :sel="eff.countOf"
+              :grid="ability.target.mode === 'grid'"
+              :triggered="ability.kind === 'triggered'"
+            />
           </template>
           <template v-else-if="eff.op === 'grantKeyword'">
-            <select v-model="eff.who" class="text-input">
-              <option v-for="w in WHO" :key="w" :value="w">{{ w }}</option>
-            </select>
+            <EffectSelector :sel="eff" :grid="ability.target.mode === 'grid'" :triggered="ability.kind === 'triggered'" />
             <select v-model="eff.keyword" class="text-input">
               <option v-for="k in KEYWORDS" :key="k" :value="k">{{ k }}</option>
             </select>
           </template>
           <template v-else-if="eff.op === 'flood' || eff.op === 'unflood'">
-            <select v-if="ability.target.mode !== 'grid'" v-model="eff.who" class="text-input">
-              <option v-for="w in WHO" :key="w" :value="w">{{ w }}'s site</option>
-            </select>
-            <span v-else class="hint effect-note">every site the target covers</span>
+            <EffectSelector
+              :sel="eff"
+              :grid="ability.target.mode === 'grid'"
+              :triggered="ability.kind === 'triggered'"
+              suffix="'s site"
+            />
+            <span v-if="ability.target.mode === 'grid' && (eff.who === 'self' || eff.who === 'target')" class="hint effect-note">
+              — every site the target covers
+            </span>
+            <span v-else-if="!['self', 'target'].includes(eff.who)" class="hint effect-note">
+              {{ eff.who === 'area' && eff.area?.filter === 'site' ? '— those sites' : '— the site under each' }}
+            </span>
             <label
-              v-if="eff.op === 'unflood' && ability.target.mode !== 'grid'"
+              v-if="eff.op === 'unflood' && !(ability.target.mode === 'grid' && (eff.who === 'self' || eff.who === 'target'))"
               class="hint effect-note"
               style="display: flex; align-items: center; gap: 0.25rem"
               title="Drain the whole orthogonally connected body of water, not just this site"
@@ -827,6 +844,15 @@ function onRemove(ability) {
         </template>
       </div>
 
+      <p class="hint">
+        An <em>area</em> around the card stays in its own region:
+        <em>adjacent</em>/<em>nearby</em> are the ring around its square and
+        leave out its own location (add a second effect <em>at its location</em>
+        to include it), and <em>units</em>/<em>cards</em> include avatars. A spell
+        measures from the square it was dropped on, else from its caster.
+        <em>avatar</em> hits that side's Avatar card, on the board or kept off it
+        as a life stat. A Ward protects each card an effect would hit.
+      </p>
       <p class="hint">
         Effects run automatically and reverse on undo. The mana cost is deducted
         on activation — don't also add an <em>adjustStat mana</em> effect for it.

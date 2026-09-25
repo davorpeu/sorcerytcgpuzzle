@@ -1877,7 +1877,45 @@ export function tokenLocationsFor(kind) {
 const PICKED_TOKEN_LOCATIONS = ['adjacent', 'nearby', 'anySite']
 // How a damage/strength amount is computed.
 // 'power' is the source unit's current combat power (what it would strike for).
-export const AMOUNT_REFS = ['literal', 'power', 'carriedCount', 'waterBodySize']
+// 'count' counts the cards a nested selector (`eff.countOf`) picks -- e.g. the
+// friendly minions nearby.
+export const AMOUNT_REFS = ['literal', 'power', 'carriedCount', 'waterBodySize', 'count']
+
+// Who an effect hits (its selector):
+//   self       -- the card whose ability it is
+//   target     -- the ability's chosen card target
+//   triggering -- the card whose action set a triggered ability off (which may
+//                 differ from a picked target)
+//   avatar     -- a side's avatar (`avatarSide`: 'self' | 'enemy', relative to
+//                 the source)
+//   carrier    -- whatever is carrying the source
+//   area       -- a set of cards (`area`): the ability's grid target ('grid'),
+//                 or a region-aware area around the source, filtered by card
+//                 kind (TARGET_FILTERS) and side (TARGET_SIDES)
+export const EFFECT_WHO = ['self', 'target', 'triggering', 'avatar', 'carrier', 'area']
+export const AVATAR_SIDES = ['self', 'enemy']
+// A relative area's reach: the source's own location, or the ring of squares
+// adjacent (4 cardinal) or nearby (8 around) it -- the same shapes as passive
+// scopes, so the ring excludes the source's own square.
+export const AREA_SHAPES = ['grid', 'location', 'adjacent', 'nearby']
+// Ops whose subject is a selector.
+const WHO_OPS = new Set([
+  'tap',
+  'dealDamage',
+  'strike',
+  'modifyStrength',
+  'grantKeyword',
+  'move',
+  'destroy',
+  'banish',
+  'bounce',
+  'heal',
+  'animate',
+  'flood',
+  'unflood',
+])
+// Ops whose number is an amount (and so take an amountRef).
+const AMOUNT_OPS = new Set(['dealDamage', 'gridDamage', 'modifyStrength'])
 
 // Whose action fires a trigger: the card's own move, anyone's, or one side's.
 export const TRIGGER_SUBJECTS = ['self', 'any', 'enemy', 'friendly']
@@ -2114,7 +2152,7 @@ function newEffect(op = 'adjustStat') {
   if (op === 'dealDamage') Object.assign(e, { who: 'target', amount: 1, amountRef: 'literal' })
   if (op === 'gridDamage') Object.assign(e, { amount: 1, amountRef: 'literal' })
   if (op === 'strike') e.who = 'target'
-  if (op === 'modifyStrength') Object.assign(e, { who: 'target', amount: 1 })
+  if (op === 'modifyStrength') Object.assign(e, { who: 'target', amount: 1, amountRef: 'literal' })
   if (op === 'grantKeyword') Object.assign(e, { who: 'target', keyword: 'airborne' })
   if (op === 'move')
     Object.assign(e, {
@@ -2140,7 +2178,7 @@ function newEffect(op = 'adjustStat') {
   // Flood/unflood a site: whose square, and whether the whole connected body of
   // water is drained (unflood) rather than the single targeted site.
   if (op === 'flood' || op === 'unflood') Object.assign(e, { who: 'target', scope: 'site' })
-  return e
+  return normalizeEffect(e)
 }
 
 export function addEffect(ability, op = 'adjustStat') {
@@ -2152,11 +2190,60 @@ export function removeEffect(ability, i) {
   ability.effects.splice(i, 1)
 }
 
+// An area selector's shape, with defaults.
+function normalizeArea(a = {}) {
+  return {
+    shape: AREA_SHAPES.includes(a.shape) ? a.shape : 'nearby',
+    filter: TARGET_FILTERS.includes(a.filter) ? a.filter : 'unit',
+    side: TARGET_SIDES.includes(a.side) ? a.side : 'enemy',
+  }
+}
+
+// A selector's shape: `who`, plus `avatarSide` / `area` only when that `who`
+// reads them (so saved effects stay small).
+function normalizeSelector(s = {}, fallbackWho = 'self') {
+  const who = EFFECT_WHO.includes(s.who) ? s.who : fallbackWho
+  const out = { who }
+  if (who === 'avatar') out.avatarSide = s.avatarSide === 'enemy' ? 'enemy' : 'self'
+  if (who === 'area') out.area = normalizeArea(s.area)
+  return out
+}
+
+// Point a selector (an effect, or its countOf) at another `who` in the editor,
+// filling in the params that `who` reads.
+export function setSelectorWho(sel, who) {
+  const next = normalizeSelector({ ...sel, who }, sel.who)
+  delete sel.avatarSide
+  delete sel.area
+  Object.assign(sel, next)
+}
+
+// Switch an effect's amount source in the editor; a count needs its selector.
+export function setAmountRef(eff, ref) {
+  eff.amountRef = AMOUNT_REFS.includes(ref) ? ref : 'literal'
+  if (eff.amountRef === 'count' && !eff.countOf)
+    eff.countOf = normalizeSelector({ who: 'area', area: { side: 'friendly', filter: 'minion' } }, 'area')
+}
+
 // Back-fill params added to an op after puzzles were saved with it, so older
 // files load with sensible defaults. A move saved before kinds existed keeps its
 // old behavior: a teleport that goes anywhere.
 function normalizeEffect(eff) {
   const e = clone(eff)
+  // A missing `who` has always resolved to the activator (effectSubject treated
+  // anything but 'target' as self), so that is what an old file keeps.
+  if (WHO_OPS.has(e.op)) {
+    const sel = normalizeSelector(e, 'self')
+    delete e.avatarSide
+    delete e.area
+    Object.assign(e, sel)
+  }
+  if (AMOUNT_OPS.has(e.op)) {
+    if (!AMOUNT_REFS.includes(e.amountRef)) e.amountRef = 'literal'
+    if (e.amountRef === 'count')
+      e.countOf = normalizeSelector(e.countOf || { who: 'area', area: { side: 'friendly', filter: 'minion' } }, 'area')
+    else delete e.countOf
+  }
   if (e.op === 'animate') {
     if (!ANIMATE_POWER_REFS.includes(e.powerRef)) e.powerRef = 'literal'
     e.powerBonus = Number(e.powerBonus) || 0
@@ -3219,7 +3306,10 @@ function resolveStory() {
     logStoryEvent(ev, ignored)
     // Effects resolve against the card that set it off. New triggers unshift onto
     // storyStack and so resolve next (interrupt).
-    if (!ignored) runEffects(ev.ability, ev.ownerId, autoTarget(ev), ev.entry)
+    if (!ignored)
+      runEffects(ev.ability, ev.ownerId, autoTarget(ev), ev.entry, null, null, {
+        triggeringId: ev.triggeringId,
+      })
   }
   storyStack = null
 }
@@ -3251,7 +3341,10 @@ function finishStoryChoice(c, targetId, gridSquare, destZone) {
   }
   const ignored = sourceGone(ev)
   logStoryEvent(ev, ignored)
-  if (!ignored) runEffects(c.ability, c.ownerId, targetId, c.entry, gridSquare, destZone)
+  if (!ignored)
+    runEffects(c.ability, c.ownerId, targetId, c.entry, gridSquare, destZone, {
+      triggeringId: c.triggeringId,
+    })
   resolveStory() // resume the rest of the storyline
 }
 
@@ -3555,7 +3648,9 @@ const anyDestLegal = (spec, sourceId, targetId) =>
 // settled: ask for a destination if an effect needs one, else resolve now. A
 // spec with no legal destination resolves without one (those effects skip),
 // rather than leaving the player stuck on an impossible pick.
-function continueActivate(cardId, abilityId, cast, targetId, extra = null) {
+// `dropSquare` is where a drag-cast spell landed (kept on its entry so an area
+// can be measured from there).
+function continueActivate(cardId, abilityId, cast, targetId, extra = null, dropSquare = null) {
   const spec = destSpec(findAbility(cardId, abilityId))
   if (
     !extra &&
@@ -3563,11 +3658,11 @@ function continueActivate(cardId, abilityId, cast, targetId, extra = null) {
     !(spec.anchor === 'target' && !targetId) &&
     anyDestLegal(spec, cardId, targetId)
   ) {
-    ui.activating = { cardId, abilityId, cast: !!cast, targetId: targetId || null, dest: true }
+    ui.activating = { cardId, abilityId, cast: !!cast, targetId: targetId || null, dest: true, dropSquare }
     return
   }
   ui.activating = null
-  if (cast) performCast(cardId, abilityId, targetId || null, null, null, extra)
+  if (cast) performCast(cardId, abilityId, targetId || null, null, null, extra, dropSquare)
   else performAbility(cardId, abilityId, targetId || null, null, null, extra)
 }
 
@@ -3600,9 +3695,9 @@ export function canPickDest(zone) {
 
 export function pickDest(zone) {
   if (!canPickDest(zone)) return
-  const { cardId, abilityId, cast, targetId } = ui.activating
+  const { cardId, abilityId, cast, targetId, dropSquare } = ui.activating
   ui.activating = null
-  if (cast) performCast(cardId, abilityId, targetId, null, zone)
+  if (cast) performCast(cardId, abilityId, targetId, null, zone, null, dropSquare)
   else performAbility(cardId, abilityId, targetId, null, zone)
 }
 
@@ -3711,9 +3806,84 @@ const STRUCTURAL_OPS = new Set(['grantFrom', 'release'])
 
 const otherSide = (side) => (side === 'player' ? 'opponent' : 'player')
 
-// Which card an effect acts on: the activator by default, or the chosen target.
-const effectSubject = (who, cardId, targetId) =>
-  who === 'target' ? targetId : cardId
+// The cards a selector picks (see EFFECT_WHO). `ctx` is the resolving
+// ability's { ability, sourceId, targetId, triggeringId, pickSquare,
+// castSquare }. Only existing cards are returned; Ward is applied by the caller,
+// per recipient.
+function selectCards(sel, ctx) {
+  const src = ctx.sourceId
+  const one = (id) => (id && state.cards[id] ? [id] : [])
+  switch (sel?.who) {
+    case 'target':
+      return one(ctx.targetId)
+    case 'triggering':
+      return one(ctx.triggeringId)
+    case 'carrier':
+      return one(carrierOf(src))
+    case 'avatar': {
+      const wantEnemy =
+        sel.avatarSide === 'enemy' ? !state.cards[src]?.enemy : !!state.cards[src]?.enemy
+      const all = Object.keys(state.cards).filter(
+        (id) => isAvatar(id) && !!state.cards[id].enemy === wantEnemy
+      )
+      // The one on the board; else one kept off it as a life stat.
+      const onMat = all.filter(inPlay)
+      return onMat.length ? onMat : all.slice(0, 1)
+    }
+    case 'area':
+      return selectArea(sel.area || {}, ctx)
+    default:
+      return one(src)
+  }
+}
+
+// Where a relative area is measured from: the source's own position, or -- for
+// a spell resolving from hand, which has none -- the square it was dropped on,
+// else its caster (the side's avatar).
+function areaOrigin(ctx) {
+  const own = nodeOf(ctx.sourceId)
+  if (own) return own
+  if (ctx.castSquare != null) return { sq: ctx.castSquare, layer: 'top' }
+  const caster = selectCards({ who: 'avatar', avatarSide: 'self' }, ctx)[0]
+  return caster ? nodeOf(caster) : null
+}
+
+// An area selector's cards. 'grid' reuses the ability's own grid target (and so
+// its origin/shape/layers and target filter); the relative shapes look around
+// the source within its own region, like passive scopes, and leave the source
+// out. Sites are only picked up by a 'site' filter -- an area of "any" cards
+// means what stands in it, not the ground.
+function selectArea(area, ctx) {
+  const src = ctx.sourceId
+  let ids = []
+  if (area.shape === 'grid') {
+    const t = ctx.ability?.target
+    if (t?.mode === 'grid') ids = resolveGridArea(src, ctx.pickSquare, t)
+  } else {
+    const s = areaOrigin(ctx)
+    if (!s) return []
+    const region = regionOf(s.sq, s.layer)
+    const squares =
+      area.shape === 'location'
+        ? [s.sq]
+        : squaresInShape(s.sq, area.shape).filter((sq) => sq !== s.sq)
+    for (const sq of squares) {
+      for (const layer of ['top', 'bot']) {
+        if (regionOf(sq, layer) !== region) continue
+        ids.push(...(state.zones[`cell:${sq}:${layer}`] || []))
+      }
+      if (area.filter === 'site') ids.push(...(state.zones[`site:${sq}`] || []))
+    }
+    // Oversized minions standing over any of those squares (surface).
+    if (region === 'surface' || region === 'void') {
+      for (const sq of squares) for (const id of oversizedOnSquare(sq)) if (!ids.includes(id)) ids.push(id)
+    }
+    ids = ids.filter((id) => id !== src)
+  }
+  return ids.filter(
+    (id) => matchesFilter(state.cards[id], area.filter) && matchesTargetSide(src, id, area.side)
+  )
+}
 
 // King-move distance between two squares -- how "grid targeting" measures range.
 const kingDistance = (a, b) =>
@@ -3903,8 +4073,11 @@ function animateCard(id, spec, entry, sourceId) {
 
 // The numeric amount an effect uses: a literal, or a computed value like the
 // number of cards the source is carrying (a projectile's picked-up payload).
-function effectAmount(eff, sourceId) {
+function effectAmount(eff, sourceId, ctx) {
   if (eff.amountRef === 'carriedCount') return carriedBy(sourceId).length
+  // How many cards a nested selector picks (counting doesn't touch them, so
+  // Ward is not involved).
+  if (eff.amountRef === 'count') return ctx ? selectCards(eff.countOf, ctx).length : 0
   if (eff.amountRef === 'power') return combatPower(sourceId)
   // Scale off the body of water the source stands on (or the site it is).
   if (eff.amountRef === 'waterBodySize') {
@@ -4180,13 +4353,22 @@ function breakWard(id, entry) {
   })
 }
 
-function runEffects(ability, cardId, targetId, entry, gridSquare, destZone) {
+function runEffects(ability, cardId, targetId, entry, gridSquare, destZone, extra = {}) {
   const card = state.cards[cardId]
   const side = card?.enemy ? 'opponent' : 'player'
-  // Ward: an opponent's ability that would target the warded object is prevented,
-  // and the Ward breaks instead of the effect landing.
-  const wardedTarget = targetId && wardBlocks(cardId, targetId)
-  if (wardedTarget) breakWard(targetId, entry)
+  // Ward: an opponent's ability that would target or affect a warded object is
+  // prevented for it, and the Ward breaks instead. Checked per recipient; once a
+  // Ward has absorbed this ability, that card is spared the rest of its effects.
+  // The chosen target's Ward breaks up front, on being targeted.
+  const shielded = new Set()
+  const wardStops = (id) => {
+    if (shielded.has(id)) return true
+    if (!id || !wardBlocks(cardId, id)) return false
+    breakWard(id, entry)
+    shielded.add(id)
+    return true
+  }
+  const wardedTarget = !!targetId && wardStops(targetId)
   // For a grid ability, the affected cards are resolved once from its area. A
   // trigger that picked a square passes it here; otherwise the entry carries it.
   const pickSquare = gridSquare == null ? entry?.gridSquare : gridSquare
@@ -4197,15 +4379,30 @@ function runEffects(ability, cardId, targetId, entry, gridSquare, destZone) {
     ability.target?.mode === 'grid'
       ? resolveGridArea(cardId, pickSquare, ability.target)
       : null
+  // A cast spell's drop square (a grid spell's is its picked square), for areas
+  // measured around a spell that has no board position of its own.
+  const castSquare = entry?.type === 'cast' ? entry.dropSquare ?? entry.gridSquare ?? null : null
+  const ctx = {
+    ability,
+    sourceId: cardId,
+    targetId,
+    triggeringId: extra.triggeringId ?? null,
+    pickSquare,
+    castSquare,
+  }
+  // The cards an effect lands on, resolved when that effect runs (an earlier
+  // effect may have changed the board) and minus any a Ward protects.
+  const recipients = (sel) => selectCards(sel, ctx).filter((id) => !wardStops(id))
   for (const eff of ability.effects || []) {
     if (wardedTarget && (eff.who === 'target' || eff.op === 'grantFrom')) continue
     if (eff.op === 'gridDamage') {
-      const amt = effectAmount(eff, cardId)
+      // Damage to the minions in the ability's grid area (as resolved when the
+      // ability began). Area damage never causes life loss to an avatar or a
+      // site's controller (unlike an attack); a Ward spares its card.
+      const amt = effectAmount(eff, cardId, ctx)
       const hits = newHits()
       for (const id of gridArea || []) {
-        // Area damage hits minions on the square; it never causes life loss to
-        // an avatar or a site's controller (unlike an attack).
-        if (isUnit(id) && !state.cards[id].avatar) applyHit(cardId, id, amt, hits)
+        if (isUnit(id) && !state.cards[id].avatar && !wardStops(id)) applyHit(cardId, id, amt, hits)
       }
       settleHits(entry, hits)
       continue
@@ -4220,75 +4417,96 @@ function runEffects(ability, cardId, targetId, entry, gridSquare, destZone) {
           : eff.side
       adjustStat(s, eff.key || 'mana', Number(eff.delta) || 0)
     } else if (eff.op === 'tap') {
-      const t = effectSubject(eff.who, cardId, targetId)
-      if (t) state.tapped[t] = true
+      for (const t of recipients(eff)) state.tapped[t] = true
     } else if (eff.op === 'dealDamage') {
-      const t = effectSubject(eff.who, cardId, targetId)
-      const amount = effectAmount(eff, cardId)
+      const ts = recipients(eff)
+      const amount = effectAmount(eff, cardId, ctx)
       // With combat on, an ability's damage resolves like a hit (Lethal-aware,
-      // life loss to avatars/sites, death); otherwise it just marks counters.
-      if (t && combatActive()) resolveHit(cardId, t, amount, entry)
-      else if (t) {
-        // Only a card on the mat (or an Avatar kept off it as a life stat)
-        // announces the damage -- a dead card must not keep triggering.
-        adjustDamage(t, amount)
-        if (inPlay(t) || isAvatar(t)) fireDamage(entry, [{ sourceId: cardId, targetId: t, amount }])
+      // life loss to avatars/sites, death) -- every recipient is hit, then
+      // deaths and damage events settle together; otherwise it just marks
+      // counters. Only a card on the mat (or an Avatar kept off it as a life
+      // stat) announces the damage -- a dead card must not keep triggering.
+      if (ts.length && combatActive()) {
+        const hits = newHits()
+        for (const t of ts) applyHit(cardId, t, amount, hits)
+        settleHits(entry, hits)
+      } else if (ts.length) {
+        for (const t of ts) adjustDamage(t, amount)
+        const dealt = ts
+          .filter((t) => inPlay(t) || isAvatar(t))
+          .map((t) => ({ sourceId: cardId, targetId: t, amount }))
+        if (dealt.length) fireDamage(entry, dealt)
       }
     } else if (eff.op === 'strike') {
-      // The source strikes the target: its power plus any Lance bonus (the
+      // The source strikes each recipient: its power plus any Lance bonus (the
       // lances break), resolved like a manual strike. Without combat it just
       // marks the power as damage counters.
-      const t = effectSubject(eff.who, cardId, targetId)
-      if (t && combatActive()) strikeWithLance(cardId, t, entry)
-      else if (t) adjustDamage(t, combatPower(cardId))
+      for (const t of recipients(eff)) {
+        if (combatActive()) strikeWithLance(cardId, t, entry)
+        else adjustDamage(t, combatPower(cardId))
+      }
     } else if (eff.op === 'modifyStrength') {
-      const t = effectSubject(eff.who, cardId, targetId)
-      if (t) state.strengthMod[t] = (state.strengthMod[t] || 0) + (Number(eff.amount) || 0)
+      const amount = effectAmount(eff, cardId, ctx)
+      for (const t of recipients(eff)) state.strengthMod[t] = (state.strengthMod[t] || 0) + amount
     } else if (eff.op === 'grantKeyword') {
-      const t = effectSubject(eff.who, cardId, targetId)
-      if (t && eff.keyword) {
+      if (!eff.keyword) continue
+      for (const t of recipients(eff)) {
         const list = state.grantedKeywords[t] || (state.grantedKeywords[t] = [])
         if (!list.includes(eff.keyword)) list.push(eff.keyword)
       }
     } else if (eff.op === 'move') {
-      const who = effectSubject(eff.who, cardId, targetId)
       const to = resolveLocation(eff.to, cardId, targetId, dest, pickSquare)
-      forceMove(who, to, eff, entry)
+      for (const who of recipients(eff)) forceMove(who, to, eff, entry)
     } else if (eff.op === 'summonToken') {
       summonTokens(eff, cardId, targetId, entry, dest, pickSquare)
     } else if (eff.op === 'destroy' || eff.op === 'banish' || eff.op === 'bounce') {
-      const who = effectSubject(eff.who, cardId, targetId)
-      if (who) effectRemove(who, eff.op, entry)
+      // Resolved up front; skip one an earlier removal's Deathrite already took
+      // out of play. (A card picked where it lies off the mat -- a cemetery
+      // target to bounce, say -- is still removed from there.)
+      const ids = recipients(eff)
+      const wasInPlay = new Set(ids.filter(inPlay))
+      for (const who of ids) {
+        if (wasInPlay.has(who) && !inPlay(who)) continue
+        effectRemove(who, eff.op, entry)
+      }
     } else if (eff.op === 'heal') {
-      const who = effectSubject(eff.who, cardId, targetId)
-      if (who) adjustDamage(who, -damageOf(who))
+      for (const who of recipients(eff)) adjustDamage(who, -damageOf(who))
     } else if (eff.op === 'banishAndCast') {
       banishAndCast(eff, cardId, targetId, entry)
     } else if (eff.op === 'animate') {
-      const who = effectSubject(eff.who, cardId, targetId)
-      if (who) animateCard(who, eff, entry, cardId)
+      for (const who of recipients(eff)) animateCard(who, eff, entry, cardId)
     } else if (eff.op === 'grantFrom') {
       grantFrom(cardId, targetId, ability, entry)
     } else if (eff.op === 'release') {
       releaseGrant(cardId, entry)
     } else if (eff.op === 'flood' || eff.op === 'unflood') {
       const flooding = eff.op === 'flood'
-      // How many sites a flood/unflood reaches follows the ability's own target:
-      //  - a grid ability floods every site its shape covers (the picked site,
-      //    its adjacent ring, or a wider nearby area -- from self or a chosen
-      //    square), so "flood the sites you target / adjacent sites" is authored
-      //    entirely through the existing grid target;
-      //  - a card ability floods the single targeted (or own) site, or, when its
-      //    scope is 'body', drains the whole orthogonally connected water body.
+      // How many sites a flood/unflood reaches:
+      //  - self/target on a grid ability: every site its shape covers (the
+      //    picked site, its adjacent ring, or a wider nearby area -- from self or
+      //    a chosen square), so "flood the sites you target / adjacent sites" is
+      //    authored entirely through the existing grid target;
+      //  - self/target on a card ability: the single targeted (or own) site, or,
+      //    when its scope is 'body', the whole orthogonally connected water body;
+      //  - any other selector: the site under each card it picks (or the site
+      //    itself), with the same 'body' option for unflood.
+      const legacy = eff.who === 'self' || eff.who === 'target'
       let squares
-      if (ability.target?.mode === 'grid') {
+      if (legacy && ability.target?.mode === 'grid') {
         squares = resolveGridSquares(cardId, pickSquare, ability.target)
       } else {
-        const who = effectSubject(eff.who, cardId, targetId)
-        const sq = squareOfSite(who) ?? (typeof pickSquare === 'number' ? pickSquare : null)
-        if (sq == null) squares = []
-        else if (!flooding && eff.scope === 'body') squares = waterBodyAt(sq)?.squares || [sq]
-        else squares = [sq]
+        const picked = typeof pickSquare === 'number' ? pickSquare : null
+        const bases = recipients(eff).map((w) =>
+          legacy ? squareOfSite(w) ?? picked : squareOfSite(w) ?? nodeOf(w)?.sq ?? null
+        )
+        if (legacy && !bases.length && picked != null) bases.push(picked)
+        const set = new Set()
+        for (const sq of bases) {
+          if (sq == null) continue
+          const covered = !flooding && eff.scope === 'body' ? waterBodyAt(sq)?.squares || [sq] : [sq]
+          for (const c of covered) set.add(c)
+        }
+        squares = [...set]
       }
       for (const s of squares) setFloodedSite(s, flooding, entry)
     }
@@ -4598,7 +4816,7 @@ export function canCast(cardId) {
 // card to the cemetery (a magic is not a permanent). Mirrors performAbility's
 // snapshot-before-pay so undo refunds mana; the cast is a gradeable `cast` entry
 // and fires "when cast" triggers before it resolves.
-function performCast(cardId, abilityId, targetId, gridSquare, destZone, extra = null) {
+function performCast(cardId, abilityId, targetId, gridSquare, destZone, extra = null, dropSquare = null) {
   const card = state.cards[cardId]
   if (!card) return
   const ability = abilityId ? findAbility(cardId, abilityId) : null
@@ -4623,6 +4841,9 @@ function performCast(cardId, abilityId, targetId, gridSquare, destZone, extra = 
     prevStrengthMod: clone(state.strengthMod),
     prevGrantedKeywords: clone(state.grantedKeywords),
   }
+  // Where a dropped spell landed -- only kept when there is one, so entries of
+  // spells cast from the bar are unchanged. Not compared by sameEntry.
+  if (dropSquare != null) entry.dropSquare = dropSquare
   if (mana) adjustStat(side, 'mana', -mana)
   delete state.castPermits[cardId]
   // Cast by the other side (out of a swapped cemetery / by permit): the caster
@@ -4757,11 +4978,11 @@ export function castByDrop(cardId, zone) {
   if (t?.mode === 'card' && t.required) {
     const targetId = findDropTarget(cardId, ability, zone, sq)
     if (!targetId) return false
-    continueActivate(cardId, ability.id, true, targetId)
+    continueActivate(cardId, ability.id, true, targetId, null, sq)
     return true
   }
-  if (ability) continueActivate(cardId, ability.id, true, null)
-  else performCast(cardId, null, null, null)
+  if (ability) continueActivate(cardId, ability.id, true, null, null, sq)
+  else performCast(cardId, null, null, null, null, null, sq)
   return true
 }
 
