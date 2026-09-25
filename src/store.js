@@ -2819,8 +2819,8 @@ function normalizeEffect(eff) {
   // anything but 'target' as self), so that is what an old file keeps.
   if (WHO_OPS.has(e.op)) {
     const sel = normalizeSelector(e, 'self')
-    delete e.avatarSide
-    delete e.area
+    if (!('avatarSide' in sel)) delete e.avatarSide
+    if (!('area' in sel)) delete e.area
     Object.assign(e, sel)
   }
   if (AMOUNT_OPS.has(e.op)) {
@@ -3880,8 +3880,15 @@ function needsDestChoice(ev, targetId) {
 
 function logStoryEvent(ev, ignored) {
   const a = ev.ability
-  // Why it was ignored: its source left, or its intervening "if" failed.
-  const reason = ignored && !sourceGone(ev) ? 'its condition no longer holds' : null
+  // Why it was ignored: its source left or was silenced, or its intervening
+  // "if" failed.
+  const reason = !ignored
+    ? null
+    : !sourceGone(ev)
+    ? 'its condition no longer holds'
+    : inPlay(ev.ownerId)
+    ? 'its source was silenced'
+    : 'its source left the realm'
   state.events.push({
     ...(reason ? { reason } : {}),
     id: uid(),
@@ -3943,6 +3950,7 @@ function resolveStory() {
         name: 'Storyline halted',
         text: `Too many chained abilities (over ${STORY_LIMIT}); the rest are ignored.`,
         status: 'ignored',
+        reason: 'the storyline was halted',
       })
       storyStack = null
       return

@@ -154,7 +154,7 @@ function entryClass(i) {
         <ul v-if="eventsFor(m).length" class="entry-events">
           <li v-for="ev in eventsFor(m)" :key="ev.id" :class="{ ignored: ev.status === 'ignored' }">
             ✧ <strong>{{ cardName(ev.cardId) }}</strong> — {{ ev.name }}
-            <em v-if="ev.status === 'ignored'"> (ignored — source left the realm)</em>
+            <em v-if="ev.status === 'ignored'"> (ignored — {{ ev.reason || 'source left the realm' }})</em>
           </li>
         </ul>
       </li>

@@ -58,7 +58,7 @@ watch(
       <div v-if="open === ev.id" class="chip-body">
         <div v-if="ev.text" class="chip-text">{{ ev.text }}</div>
         <div v-if="ev.status === 'ignored'" class="chip-src">
-          ignored — its source left the realm
+          ignored — {{ ev.reason || 'its source left the realm' }}
         </div>
         <div v-if="ev.triggeringId && ev.triggeringId !== ev.cardId" class="chip-src">
           set off by {{ state.cards[ev.triggeringId]?.name }}
