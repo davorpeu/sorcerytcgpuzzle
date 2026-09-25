@@ -167,8 +167,12 @@ Every field below is back-filled on load, so older puzzle files load unchanged a
 
 **Effect selectors.** Every effect that acts on cards picks them with `who`: `self`, `target`, `triggering` (the card that set a triggered ability off), `avatar` (with `avatarSide`: `self`/`enemy`; an Avatar kept off the board as a life stat still counts), `carrier`, or `area` with `area: { shape, filter, side }` — `shape` is `grid` (the ability's grid target), `location`, `adjacent` or `nearby` (around the source, in its own region; a spell cast from hand measures from the square it was dropped on, recorded as `dropSquare` on its `cast` entry). Amounts (`dealDamage`, `gridDamage`, `modifyStrength`) may use `amountRef: "count"` with a nested `countOf` selector. `avatarSide`, `area` and `countOf` are only saved when used.
 
+**Passives.** Besides the existing scopes, a passive may reach `bearer` (whoever carries the card) and board-wide `all`/`all-friendly`/`all-enemy` (every card of the kinds in `affects`) or `avatar-friendly`/`avatar-enemy`. `passive` also takes `costMod` with `costOn` (`own` — the affected card's own cast cost — or `spells`, every spell the affected side casts, narrowed by `costFilter`), `affinity` (extra elemental threshold for the affected side) and the restrictions `cantAttack`, `cantMove` and `cantBeTargeted` (by opponents). Silence and Disable switch these off like any other passive trait, and a passive's `condition` applies to them too.
+
 *Changed:*
-- A Ward is now checked for every card an effect hits, not only the chosen target, so `gridDamage` over an enemy with an intact Ward spares it (and breaks the Ward) instead of damaging through it, as the rules require.
+- `nearby`/`adjacent` passives on a site now reach the units around the site (they used to reach only sites and artifacts there, never units). An older puzzle that put such a passive on a site will see it apply.
+- A Ward is now checked
+ for every card an effect hits, not only the chosen target, so `gridDamage` over an enemy with an intact Ward spares it (and breaks the Ward) instead of damaging through it, as the rules require.
 - Every hit (combat, strike, shoot, damage effects, `gridDamage`) is now a damage event, so an older `damage` trigger — which keyed off manual damage marks only — also fires on combat and effect damage, and so does a `loseWhen: "damaged"` grant. Older damage triggers load with `role: "target"` (the damaged card), which is what they meant.
 - Removing a damage counter by hand (a −1 mark) no longer fires `damage` triggers: only damage actually dealt does.
 - A card that has already left the mat can no longer be hit by combat damage (it could not be damaged there anyway); an Avatar kept off the board as a life stat still loses life.

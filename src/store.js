@@ -922,10 +922,11 @@ function oversizedOnSquare(idx) {
 
 // The units a passive on `sourceId` reaches. Area scopes are region-aware (same
 // region as the source) and drop the source itself; side suffixes filter by
-// controller.
+// controller. A site projects from its square's surface.
 function unitsInScope(sourceId, scope) {
   if (scope === 'self') return [sourceId]
-  const src = unitCell(sourceId)
+  const siteSq = squareOfSite(sourceId)
+  const src = unitCell(sourceId) || (siteSq == null ? null : { square: siteSq, region: 'surface' })
   const srcCard = state.cards[sourceId]
   if (!src || !srcCard) return []
   const near = scope.startsWith('nearby')
@@ -984,6 +985,33 @@ function passiveTargets(sourceId, a) {
     const same = !!state.cards[id]?.enemy === !!srcCard.enemy
     return !(wantFriendly && !same) && !(wantEnemy && same)
   }
+  // Whoever carries the source (a carried artifact's wielder).
+  if (scope === 'bearer') {
+    const c = inPlay(sourceId) ? carrierOf(sourceId) : null
+    return c ? [c] : []
+  }
+  // Board-wide scopes: everything of the affected kinds, or a side's Avatar.
+  if (scope.startsWith('all') || scope.startsWith('avatar')) {
+    if (!inPlay(sourceId)) return []
+    const out = new Set()
+    if (scope.startsWith('avatar')) {
+      for (const u of boardUnits()) if (u.card.avatar && u.id !== sourceId && sideOk(u.id)) out.add(u.id)
+      return [...out]
+    }
+    if (affects.includes('units'))
+      for (const u of boardUnits()) if (u.id !== sourceId && sideOk(u.id)) out.add(u.id)
+    if (affects.includes('sites'))
+      for (let sq = 0; sq < GRID_SIZE; sq++) {
+        const id = state.zones[`site:${sq}`]?.[0]
+        if (id && id !== sourceId && sideOk(id)) out.add(id)
+      }
+    if (affects.includes('artifacts'))
+      for (const c of Object.values(state.cards)) {
+        if (!c.artifact || c.id === sourceId || isUnit(c) || !sideOk(c.id)) continue
+        if (cardSquare(c.id) != null) out.add(c.id)
+      }
+    return [...out]
+  }
   const area = scope.startsWith('aura-area')
   const srcSquares = areaSquares(sourceId)
   if (!srcSquares.length) return []
@@ -1038,6 +1066,32 @@ function accumPassive(p, acc) {
   acc.strength += Number(p.strength) || 0
   acc.ranged += Number(p.ranged) || 0
   if (p.summonOnEnemySites) acc.summonOnEnemySites = true
+  if (p.costOn === 'own') acc.costMod += Number(p.costMod) || 0
+  if (p.cantAttack) acc.cantAttack = true
+  if (p.cantBeTargeted) acc.cantBeTargeted = true
+  if (p.cantMove) acc.cantMove = true
+}
+
+// spellCost is a list of { amount, filter }: each passive discount/tax and the
+// kind of spell it applies to (see PASSIVE_COST_FILTERS).
+const emptySideMods = () => ({ spellCost: [], affinity: { air: 0, earth: 0, fire: 0, water: 0 } })
+
+// The side(s) a passive's side-wide modifiers (spell cost, affinity) land on.
+// Keyed off the scope and the source's own side -- never off which cards the
+// scope happens to reach -- so "your spells cost 1 less" doesn't blink on and
+// off as units move in and out of range. self -> the source's side; bearer ->
+// the carrier's side; -friendly / -enemy -> that side; unsuffixed area and
+// board-wide scopes -> both sides.
+function scopeSides(sourceId, scope) {
+  const own = sideOf(sourceId)
+  if (scope === 'self') return [own]
+  if (scope === 'bearer') {
+    const c = carrierOf(sourceId)
+    return c ? [sideOf(c)] : []
+  }
+  if (scope.endsWith('friendly')) return [own]
+  if (scope.endsWith('enemy')) return [otherSide(own)]
+  return ['player', 'opponent']
 }
 
 // Every unit's continuous traits, derived from passive abilities (self and
@@ -1048,7 +1102,7 @@ function accumPassive(p, acc) {
 // change, not an ability, so it survives. Disable is silence that also strips
 // the basics, so the unit can't act at all. Auras from a silenced/disabled
 // source stop applying (resolved in one pass; mutual silence isn't chased).
-export const effective = computed(() => {
+const passiveState = computed(() => {
   const cards = state.cards
   const silenced = new Set()
   const disabled = new Set()
@@ -1064,12 +1118,24 @@ export const effective = computed(() => {
   }
 
   // Area passives from sources that still work, resolved once: id -> [passive].
+  // Side-wide modifiers (spell cost, affinity) land once per side the scope
+  // names (scopeSides), and only from a source in play -- a card in hand doesn't
+  // lend its side affinity or discounts.
   const lent = {}
+  const sides = { player: emptySideMods(), opponent: emptySideMods() }
   for (const src of Object.values(cards)) {
     if (silenced.has(src.id) || disabled.has(src.id)) continue
     for (const a of passivesOf(src)) {
-      if (a.scope === 'self') continue
-      for (const tid of passiveTargets(src.id, a)) (lent[tid] || (lent[tid] = [])).push(a)
+      if (a.scope !== 'self')
+        for (const tid of passiveTargets(src.id, a)) (lent[tid] || (lent[tid] = [])).push(a)
+      const p = a.passive
+      const spells = p.costOn === 'spells' ? Number(p.costMod) || 0 : 0
+      const hasAff = ELEMENTS.some((el) => Number(p.affinity?.[el]))
+      if ((!spells && !hasAff) || !inPlay(src.id)) continue
+      for (const side of scopeSides(src.id, a.scope)) {
+        if (spells) sides[side].spellCost.push({ amount: spells, filter: p.costFilter || 'any' })
+        for (const el of ELEMENTS) sides[side].affinity[el] += Number(p.affinity?.[el]) || 0
+      }
     }
   }
 
@@ -1083,6 +1149,10 @@ export const effective = computed(() => {
       strength: 0,
       ranged: 0,
       summonOnEnemySites: false,
+      costMod: 0,
+      cantAttack: false,
+      cantBeTargeted: false,
+      cantMove: false,
     }
     if (!silencedHere) {
       for (const a of passivesOf(cards[id])) {
@@ -1100,10 +1170,21 @@ export const effective = computed(() => {
       silenced: silencedHere,
       disabled: disabledHere,
       summonOnEnemySites: acc.summonOnEnemySites,
+      costMod: acc.costMod,
+      cantAttack: acc.cantAttack,
+      cantBeTargeted: acc.cantBeTargeted,
+      cantMove: acc.cantMove,
     }
   }
-  return map
+  return { map, sides }
 })
+
+export const effective = computed(() => passiveState.value.map)
+
+// Side-wide passive modifiers for 'player' / 'opponent': the mana deltas on the
+// spells that side casts (each with its spell-kind filter), and extra affinity
+// per element.
+export const sidePassiveMods = (side) => passiveState.value.sides[side] || emptySideMods()
 
 const traits = (id) => effective.value[id] || null
 
@@ -1169,16 +1250,21 @@ export function effectiveLife(id) {
   return base + effectiveStrengthMod(id)
 }
 export const isDisabled = (id) => !!traits(id)?.disabled
+// Passive restrictions (lifted by silence/disable like any other passive trait).
+export const cantAttack = (id) => !!traits(id)?.cantAttack
+export const cantBeTargeted = (id) => !!traits(id)?.cantBeTargeted
+export const cantMove = (id) => !!traits(id)?.cantMove
 
 // Keywords added during play (not the base ones on the card art), for badging.
 export const grantedKeywordsOf = (id) => state.grantedKeywords[id] || []
 
 // Steps a unit may take: base 1, plus passive/granted movement, zeroed by
-// Immobile or Disable. Non-units never move.
+// Immobile, Disable or a passive "can't move". Non-units never move. (With no
+// steps a unit still reaches its own square, so it may attack there.)
 export function effectiveMovement(id) {
   const e = traits(id)
   if (!e || !isUnit(id)) return 0
-  if (e.disabled || e.keywords.has('immobile')) return 0
+  if (e.disabled || e.cantMove || e.keywords.has('immobile')) return 0
   return 1 + e.movement
 }
 
@@ -1302,6 +1388,11 @@ export function hasSummoningSickness(cardId) {
 // unaffected, mirroring how `enforcing()`/`combat` already scope the checks.
 export const tapBlockedBySickness = (cardId) => enforcing() && hasSummoningSickness(cardId)
 
+// Passive "can't move" / "can't attack", for the action bar: like the other
+// rule gates they only bite while enforcing (canMoveUnit/canAttack refuse them).
+export const moveBlockedByPassive = (cardId) => enforcing() && cantMove(cardId)
+export const attackBlockedByPassive = (cardId) => enforcing() && cantAttack(cardId)
+
 // May this unit legally move to a board zone? Non-cell destinations aren't
 // movement-gated (summoning from hand, etc.). A summon-sick unit can't move at
 // all: the Move action taps it (Move & Attack), so it is barred while enforcing.
@@ -1323,7 +1414,7 @@ export function canMoveUnit(unitId, toZone) {
 // May attacker legally attack target: within reach, and past the targeting
 // keywords -- Airborne can only be hit by Airborne, Stealth not by opponents.
 export function canAttack(attackerId, targetId) {
-  if (!isUnit(attackerId) || isDisabled(attackerId)) return false
+  if (!isUnit(attackerId) || isDisabled(attackerId) || cantAttack(attackerId)) return false
   if (tapBlockedBySickness(attackerId)) return false // Move & Attack taps
   const target = state.cards[targetId]
   // You may only attack the opposing side, and only its units or sites --
@@ -1971,9 +2062,39 @@ export const PASSIVE_SCOPES = [
   'aura-area',
   'aura-area-friendly',
   'aura-area-enemy',
+  // Whoever carries the source (a carried artifact's wielder).
+  'bearer',
+  // Everything on the board (of the kinds it affects), and a side's Avatar.
+  'all',
+  'all-friendly',
+  'all-enemy',
+  'avatar-friendly',
+  'avatar-enemy',
 ]
 // What kinds of card a non-self passive reaches.
 export const PASSIVE_AFFECTS = ['units', 'sites', 'artifacts']
+
+// What a passive cost modifier applies to: the affected card's own cast cost,
+// or every spell the affected side casts.
+export const PASSIVE_COST_ON = ['own', 'spells']
+
+// Which spells a side-wide cost modifier applies to: the target filters that
+// make sense for a cast card, plus magic and "permanent" (any non-magic spell).
+export const PASSIVE_COST_FILTERS = [
+  'any',
+  'magic',
+  'permanent',
+  'minion',
+  'aura',
+  'artifact',
+  'monument',
+]
+
+function matchesCostFilter(card, filter) {
+  if (filter === 'magic') return !!card?.magic
+  if (filter === 'permanent') return !!card && !card.magic
+  return matchesFilter(card, filter)
+}
 // Which layer's units an aura-area passive reaches: the surface, below the
 // site (underground / underwater), or both.
 export const UNIT_LAYERS = ['surface', 'below', 'both']
@@ -2041,7 +2162,27 @@ export function normalizeAbility(a = {}) {
       cemeteryTaxOn: CEMETERY_TAX_ON.includes(a.passive?.cemeteryTaxOn)
         ? a.passive.cemeteryTaxOn
         : 'everyone',
+      // Mana delta on a cast (negative = cheaper) and what it applies to.
+      costMod: Number(a.passive?.costMod) || 0,
+      costOn: PASSIVE_COST_ON.includes(a.passive?.costOn) ? a.passive.costOn : 'own',
+      // Spell kind a costOn 'spells' modifier applies to.
+      costFilter: PASSIVE_COST_FILTERS.includes(a.passive?.costFilter)
+        ? a.passive.costFilter
+        : 'any',
+      // Extra elemental affinity for the affected side's threshold. Grants
+      // only -- clamped so hand-edited JSON can't dip below the base stat.
+      affinity: {
+        air: Math.max(0, Number(a.passive?.affinity?.air) || 0),
+        earth: Math.max(0, Number(a.passive?.affinity?.earth) || 0),
+        fire: Math.max(0, Number(a.passive?.affinity?.fire) || 0),
+        water: Math.max(0, Number(a.passive?.affinity?.water) || 0),
+      },
+      // Restrictions on the affected cards.
+      cantAttack: !!a.passive?.cantAttack,
+      cantBeTargeted: !!a.passive?.cantBeTargeted,
+      cantMove: !!a.passive?.cantMove,
     },
+
     // Passive-only: the passive applies only while this holds.
     condition: {
       type: PASSIVE_CONDITIONS.includes(a.condition?.type) ? a.condition.type : 'always',
@@ -2853,7 +2994,8 @@ function canReachAvatar(unitId, avatarUnit) {
 
 function defenderValue(id, avatarUnit) {
   const pLife = state.stats.player?.life || 0
-  const threat = effectivePower(id) >= pLife && pLife > 0 ? DEF_THREAT : 0
+  // A unit that can't attack threatens nothing, however strong.
+  const threat = !cantAttack(id) && effectivePower(id) >= pLife && pLife > 0 ? DEF_THREAT : 0
   const blocker = canReachAvatar(id, avatarUnit) ? DEF_BLOCKER : 0
   return threat + blocker + effectivePower(id) * 10 + effectiveLife(id)
 }
@@ -2866,6 +3008,7 @@ function avatarUnderThreat(avatarUnit) {
   const life = state.stats.opponent.life
   for (const u of boardUnits()) {
     if (u.card.enemy) continue // player-side attackers only
+    if (cantAttack(u.id)) continue // a passive forbids it to attack at all
     if (effectivePower(u.id) >= life && reachableNodes(u.id).has(nodeKey(a.sq, a.layer)))
       return true
   }
@@ -3766,6 +3909,8 @@ function satisfiesTarget(sourceId, targetId, t) {
   if (!matchesTargetSide(sourceId, targetId, t.side, swappedGrave)) return false
   if (!withinTargetRange(sourceId, targetId, t.within, t.range)) return false
   if (blockedByStealth(sourceId, targetId)) return false
+  // A passive "can't be targeted" only shields against the opponent.
+  if (cantBeTargeted(targetId) && oppositeSides(sourceId, targetId)) return false
   return true
 }
 
@@ -4652,8 +4797,13 @@ export function providedAffinity(side, el) {
 
 // A side's effective threshold: an authored base on the stat, plus affinity from
 // its board. This is what casting compares a spell's threshold requirement to.
+// Passives may grant a side extra affinity too (sidePassiveMods).
 export function effectiveThreshold(side, el) {
-  return (state.stats[side]?.[el] || 0) + providedAffinity(side, el)
+  return (
+    (state.stats[side]?.[el] || 0) +
+    providedAffinity(side, el) +
+    (sidePassiveMods(side).affinity[el] || 0)
+  )
 }
 
 // Mana a side's sites (and other providers) would yield when collected.
@@ -4709,10 +4859,20 @@ export function cardTypeLabel(cardId) {
 
 // A spell's cast cost lives on the card: mana is spent, the elemental amounts
 // are threshold requirements (compared, not spent).
+// Passive cost modifiers adjust the mana (never below 0): the card's own
+// costMod, plus the side-wide spell cost modifiers of whoever casts it that match
+// this kind of spell.
 export function castCostOf(cardId) {
-  const c = state.cards[cardId]?.spellCost
+  const card = state.cards[cardId]
+  const c = card?.spellCost
+  let mod = traits(cardId)?.costMod || 0
+  if (isSpell(cardId)) {
+    for (const m of sidePassiveMods(castSide(cardId)).spellCost) {
+      if (matchesCostFilter(card, m.filter)) mod += m.amount
+    }
+  }
   return {
-    mana: Number(c?.mana) || 0,
+    mana: Math.max(0, (Number(c?.mana) || 0) + mod),
     air: Number(c?.air) || 0,
     earth: Number(c?.earth) || 0,
     fire: Number(c?.fire) || 0,

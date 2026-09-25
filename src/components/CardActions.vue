@@ -57,6 +57,8 @@ import {
   carrierOf,
   isTapped,
   tapBlockedBySickness,
+  moveBlockedByPassive,
+  attackBlockedByPassive,
 } from '../store.js'
 
 // Everything a card can do lives here rather than on postage-stamp buttons
@@ -112,8 +114,12 @@ const enemyLocked = computed(() => state.mode === 'play' && !!card.value?.enemy)
 // costs (no Move & Attack, Shoot, or tap-cost abilities) unless it has Charge.
 // Only while rules are enforced -- mirrors the store's own gates.
 const sick = computed(() => !!ui.selected && tapBlockedBySickness(ui.selected))
-const canFight = computed(() => onBoard.value && isUnit(ui.selected) && !tapped.value && !sick.value && !enemyLocked.value)
-const canMove = computed(() => onBoard.value && isUnit(ui.selected) && !tapped.value && !sick.value && !enemyLocked.value)
+// A passive "can't attack" / "can't move" hides the matching action while
+// enforcing (the store would refuse it anyway). A unit that can't move may still
+// attack on its own square, so Attack stays.
+const canFight = computed(() => onBoard.value && isUnit(ui.selected) && !tapped.value && !sick.value && !enemyLocked.value && !attackBlockedByPassive(ui.selected))
+const canMove = computed(() => onBoard.value && isUnit(ui.selected) && !tapped.value && !sick.value && !enemyLocked.value && !moveBlockedByPassive(ui.selected))
+
 const moving = computed(() => ui.moving && ui.moving === ui.selected)
 const attacking = computed(() => ui.attacker && ui.attacker === ui.selected)
 const shooting = computed(() => ui.shooting && ui.shooting === ui.selected)

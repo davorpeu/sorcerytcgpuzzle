@@ -29,6 +29,8 @@ import {
   KEYWORDS,
   PASSIVE_SCOPES,
   PASSIVE_AFFECTS,
+  PASSIVE_COST_ON,
+  PASSIVE_COST_FILTERS,
   UNIT_LAYERS,
   PASSIVE_CONDITIONS,
   ANIMATE_POWER_REFS,
@@ -114,6 +116,31 @@ const CONDITIONS_WITH_AMOUNT = [
   'manaAtLeast',
   'thresholdAtLeast',
 ]
+// Passive scopes: a readable label, plus a note on the ones with a catch.
+const SCOPE_LABELS = {
+  self: 'this card',
+  bearer: 'the unit carrying this card',
+  all: 'everything in play',
+  'all-friendly': 'everything of yours in play',
+  'all-enemy': "everything of the opponent's in play",
+  'avatar-friendly': 'your Avatar',
+  'avatar-enemy': 'the enemy Avatar',
+}
+const scopeLabel = (s) => SCOPE_LABELS[s] || s
+const scopeHint = (s) => {
+  if (s === 'bearer') return 'For an artifact: applies to whoever is carrying it.'
+  if (s.startsWith('all')) return 'Every card of the ticked kinds on the board, any region; not this card itself.'
+  if (s.startsWith('nearby') || s.startsWith('adjacent'))
+    return 'Around this card, in its own region -- from a site, around its surface.'
+  return ''
+}
+// Scopes that pick a card directly, so "Reaches" (units/sites/artifacts) is moot.
+const directScope = (s) => s === 'self' || s === 'bearer' || s.startsWith('avatar')
+const costFilterLabel = (f) =>
+  f === 'any' ? 'all spells' : f === 'permanent' ? 'permanents (non-magic)' : `${f} spells`
+const costOnLabel = (o) =>
+  o === 'spells' ? 'spells the affected side casts' : "the affected card's own cost"
+
 const TOKEN_LABELS = {
   soldier: 'Foot Soldier',
   skeleton: 'Skeleton',
@@ -334,10 +361,11 @@ function onRemove(ability) {
           <label class="field-label">
             Affects
             <select v-model="ability.scope" class="text-input">
-              <option v-for="s in PASSIVE_SCOPES" :key="s" :value="s">{{ s }}</option>
+              <option v-for="s in PASSIVE_SCOPES" :key="s" :value="s">{{ scopeLabel(s) }}</option>
             </select>
           </label>
-          <template v-if="ability.scope !== 'self'">
+          <p v-if="scopeHint(ability.scope)" class="hint">{{ scopeHint(ability.scope) }}</p>
+          <template v-if="!directScope(ability.scope)">
             <div class="field-label">Reaches</div>
             <div class="chk-row">
               <label v-for="k in PASSIVE_AFFECTS" :key="k" class="chk">
@@ -490,6 +518,66 @@ function onRemove(ability) {
             <input v-model="ability.passive.disable" type="checkbox" />
             Disable (scope loses all abilities and can't act)
           </label>
+
+          <div class="field-label section-head">Casting cost</div>
+          <div class="grid2">
+            <label class="field-label">
+              Mana +/−
+              <input v-model.number="ability.passive.costMod" type="number" class="text-input" />
+            </label>
+            <label class="field-label">
+              Applies to
+              <select v-model="ability.passive.costOn" class="text-input">
+                <option v-for="o in PASSIVE_COST_ON" :key="o" :value="o">{{ costOnLabel(o) }}</option>
+              </select>
+            </label>
+            <label v-if="ability.passive.costOn === 'spells'" class="field-label span2">
+              Which spells
+              <select v-model="ability.passive.costFilter" class="text-input">
+                <option v-for="f in PASSIVE_COST_FILTERS" :key="f" :value="f">{{ costFilterLabel(f) }}</option>
+              </select>
+            </label>
+          </div>
+          <p
+            v-if="ability.passive.costOn === 'own' && ability.passive.costMod && ability.scope !== 'self'"
+            class="hint"
+          >
+            A card's own cost only matters in hand, but this scope only reaches
+            cards on the board — so this does nothing. Use scope <em>this card</em>,
+            or "spells the affected side casts" with a spell filter (e.g. minions).
+          </p>
+
+          <div class="field-label section-head">Grants affinity</div>
+          <div class="effect-row">
+            <label v-for="el in ELEMENTS" :key="el" class="chk">
+              {{ el }}
+              <input v-model.number="ability.passive.affinity[el]" type="number" min="0" class="text-input num" />
+            </label>
+          </div>
+          <p
+            v-if="(ability.passive.costOn === 'spells' && ability.passive.costMod) || ELEMENTS.some((el) => ability.passive.affinity[el])"
+            class="hint"
+          >
+            Spell-cost and affinity modifiers apply to a side, not to units: this
+            card's side for <em>this card</em> or a -friendly scope, the other side
+            for -enemy, both sides otherwise. Only while this card is in play.
+          </p>
+
+          <div class="field-label section-head">Restrictions</div>
+          <div class="chk-row">
+            <label class="chk">
+              <input v-model="ability.passive.cantAttack" type="checkbox" />
+              Can't attack
+            </label>
+            <label class="chk">
+              <input v-model="ability.passive.cantMove" type="checkbox" />
+              Can't move
+            </label>
+            <label class="chk">
+              <input v-model="ability.passive.cantBeTargeted" type="checkbox" />
+              Can't be targeted by opponents
+            </label>
+          </div>
         </template>
 
         <!-- Activated: cost, optional target, and how a granted state is lost. -->
@@ -963,8 +1051,13 @@ function onRemove(ability) {
 .grid2 .span2 {
   grid-column: 1 / -1;
 }
+.section-head {
+  margin-top: 0.6rem;
+  font-weight: 600;
+}
 .field-label {
   display: flex;
+
   flex-direction: column;
   gap: 0.2rem;
   font-size: 0.85rem;

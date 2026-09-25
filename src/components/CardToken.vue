@@ -29,6 +29,9 @@ import {
   damageOf,
   isSilenced,
   isDisabled,
+  cantAttack,
+  cantMove,
+  cantBeTargeted,
   effectiveStrengthMod,
   grantedKeywordsOf,
   cardTypeLabel,
@@ -72,6 +75,14 @@ const dmg = computed(() => damageOf(props.cardId))
 // Silence / Disable are gameplay states (from a passive aura), worth showing.
 const silenced = computed(() => isSilenced(props.cardId))
 const disabled = computed(() => isDisabled(props.cardId))
+// Passive restrictions, badged like silence: no attack / no move / untargetable.
+const restrictions = computed(() => {
+  const out = []
+  if (cantAttack(props.cardId)) out.push({ tag: 'NA', title: "Can't attack" })
+  if (cantMove(props.cardId)) out.push({ tag: 'NM', title: "Can't move" })
+  if (cantBeTargeted(props.cardId)) out.push({ tag: 'NT', title: "Can't be targeted by opponents" })
+  return out
+})
 // Only gameplay changes are shown: a net strength modifier and any keywords
 // granted in play (base strength/keywords are already on the card art).
 const strengthMod = computed(() => effectiveStrengthMod(props.cardId))
@@ -125,6 +136,7 @@ const label = computed(() => {
   if (tapped.value) bits.push('tapped')
   if (disabled.value) bits.push('disabled')
   else if (silenced.value) bits.push('silenced')
+  for (const r of restrictions.value) bits.push(r.title.toLowerCase())
   if (strengthMod.value) bits.push(`strength ${signedStr.value}`)
   if (grantedKw.value.length) bits.push(`gained ${grantedKw.value.join(', ')}`)
   if (dmg.value) bits.push(`${dmg.value} damage`)
@@ -276,6 +288,14 @@ function onClick() {
     >
       {{ disabled ? 'DIS' : 'SIL' }}
     </span>
+    <span
+      v-else-if="restrictions.length"
+      class="state-badge restrict-badge"
+      :title="restrictions.map((r) => r.title).join(', ')"
+      aria-hidden="true"
+    >
+      {{ restrictions.map((r) => r.tag).join(' ') }}
+    </span>
     <!-- Gameplay strength change (base strength stays on the art). -->
     <span
       v-if="strengthMod"
@@ -397,6 +417,10 @@ function onClick() {
 .disabled-badge {
   background: #555b66;
 }
+.restrict-badge {
+  background: #a0522d;
+}
+
 .str-badge {
   position: absolute;
   bottom: 2px;

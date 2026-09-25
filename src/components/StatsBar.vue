@@ -105,7 +105,7 @@ const step = (what, delta) =>
         </button>
         <span
           class="stat-value"
-          :title="`${effectiveThreshold(side, el)} ${el} affinity (base ${state.stats[side][el]} + sites ${effectiveThreshold(side, el) - state.stats[side][el]})`"
+          :title="`${effectiveThreshold(side, el)} ${el} affinity (base ${state.stats[side][el]} + board and passives ${effectiveThreshold(side, el) - state.stats[side][el]})`"
         >
           {{ effectiveThreshold(side, el) }}
         </span>
