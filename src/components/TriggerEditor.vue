@@ -1,6 +1,8 @@
 <script setup>
 import { computed } from 'vue'
 import EffectSelector from './EffectSelector.vue'
+import ConditionEditor from './ConditionEditor.vue'
+import TargetEditor from './TargetEditor.vue'
 import {
   state,
   cardName,
@@ -32,7 +34,6 @@ import {
   PASSIVE_COST_ON,
   PASSIVE_COST_FILTERS,
   UNIT_LAYERS,
-  PASSIVE_CONDITIONS,
   ANIMATE_POWER_REFS,
   ANIMATE_DURATIONS,
   CEMETERY_TAX_ON,
@@ -44,6 +45,9 @@ import {
   removeEffect,
   retypeEffect,
   setAmountRef,
+  setEffectCondition,
+  addMode,
+  removeMode,
 } from '../store.js'
 
 // Options for the effect params. `self`/`enemy` resolve relative to the
@@ -96,26 +100,6 @@ const DURATION_LABELS = {
   damaged: 'until it takes damage',
   sourceLeaves: 'while this card stays in the realm',
 }
-const CONDITION_LABELS = {
-  always: 'always',
-  onWater: 'it stands on a water site',
-  onLand: 'it stands on a land site',
-  unitsNearby: 'at least N units are here or nearby',
-  lifeAtMost: 'your life is N or less',
-  lifeAtLeast: 'your life is N or more',
-  manaAtLeast: 'you have N or more mana',
-  thresholdAtLeast: 'you have N or more of an element',
-  untapped: 'it is untapped',
-  tapped: 'it is tapped',
-  damaged: 'it is damaged',
-}
-const CONDITIONS_WITH_AMOUNT = [
-  'unitsNearby',
-  'lifeAtMost',
-  'lifeAtLeast',
-  'manaAtLeast',
-  'thresholdAtLeast',
-]
 // Passive scopes: a readable label, plus a note on the ones with a catch.
 const SCOPE_LABELS = {
   self: 'this card',
@@ -185,6 +169,33 @@ function toggleAffects(ability, kind) {
   const i = list.indexOf(kind)
   if (i === -1) list.push(kind)
   else list.splice(i, 1)
+}
+
+// The effect lists an ability's editor shows, flattened in order: each mode's
+// effects, the ability's own, and after each list the "otherwise" list of every
+// conditional effect in it. A group's `view` stands in for `ability` in the
+// shared effect-row template: the ability's fields, the target those effects
+// resolve against, and the group's own list as `effects` -- so add / retype /
+// remove splice the right array.
+function effectGroups(ability) {
+  const out = []
+  const walk = (list, label, target, key, depth) => {
+    out.push({ key, label, depth, view: { ...ability, target, effects: list } })
+    list.forEach((eff, i) => {
+      if (eff.condition && Array.isArray(eff.else))
+        walk(eff.else, `${label} › #${i + 1} otherwise`, target, `${key}.${i}`, depth + 1)
+    })
+  }
+  const modes = ability.modes || []
+  modes.forEach((m, i) => walk(m.effects, `Mode “${m.name}” effects`, m.target, `m${i}`, 0))
+  walk(
+    ability.effects,
+    modes.length ? 'Then, whichever mode' : 'Effects',
+    modes.length ? modes[0].target : ability.target,
+    'base',
+    0
+  )
+  return out
 }
 
 function onRemove(ability) {
@@ -311,6 +322,18 @@ function onRemove(ability) {
             damage mark.
           </p>
 
+          <!-- An intervening "if": the trigger only fires (and resolves) while
+               this holds. -->
+          <div class="field-label section-head">Only if</div>
+          <div class="effect-row">
+            <ConditionEditor :cond="ability.condition" :triggered="true" />
+          </div>
+          <p v-if="ability.condition.type !== 'always'" class="hint">
+            Tested when it triggers (else it doesn't) and again as it resolves
+            (else it is ignored). <em>the target</em> is the card its effects
+            auto-target.
+          </p>
+
           <!-- By default a trigger's effects auto-hit the triggering card / its
                grid area. Optionally let the player pick a target when it fires. -->
           <label class="chk">
@@ -357,8 +380,16 @@ function onRemove(ability) {
               </label>
               <p class="hint span2">{{ PROJECTILE_HINT }}</p>
             </template>
+            <label class="field-label">
+              How many
+              <input v-model.number="ability.target.count" type="number" min="1" class="text-input" title="Different cards the player picks (all there are, if fewer)" />
+            </label>
+            <label v-if="ability.target.count > 1" class="chk">
+              <input v-model="ability.target.upTo" type="checkbox" />
+              Up to that many
+            </label>
             <p class="hint span2">
-              Effects with <em>who: target</em> then act on the picked card
+              Effects with <em>who: target</em> then act on the picked card(s)
               (measured from this card's location).
             </p>
           </div>
@@ -403,30 +434,16 @@ function onRemove(ability) {
             </p>
           </template>
           <!-- "Only while": the whole passive switches on and off with this. -->
-          <div class="grid2">
-            <label class="field-label" :class="{ span2: !CONDITIONS_WITH_AMOUNT.includes(ability.condition.type) }">
-              Only while
-              <select v-model="ability.condition.type" class="text-input">
-                <option v-for="c in PASSIVE_CONDITIONS" :key="c" :value="c">{{ CONDITION_LABELS[c] }}</option>
-              </select>
-            </label>
-            <label v-if="CONDITIONS_WITH_AMOUNT.includes(ability.condition.type)" class="field-label">
-              N
-              <input v-model.number="ability.condition.amount" type="number" min="0" class="text-input" />
-            </label>
-            <label v-if="ability.condition.type === 'thresholdAtLeast'" class="field-label">
-              Element
-              <select v-model="ability.condition.element" class="text-input">
-                <option v-for="el in ELEMENTS" :key="el" :value="el">{{ el }}</option>
-              </select>
-            </label>
-            <label v-if="ability.condition.type === 'unitsNearby'" class="field-label">
-              Whose units
-              <select v-model="ability.condition.side" class="text-input">
-                <option v-for="s in TARGET_SIDES" :key="s" :value="s">{{ s }}</option>
-              </select>
-            </label>
+          <div class="field-label section-head">Only while</div>
+          <div class="effect-row">
+            <ConditionEditor :cond="ability.condition" :passive="true" />
           </div>
+          <p v-if="['hasKeyword', 'affinityAtLeast', 'controlsCard', 'all', 'any'].includes(ability.condition.type)" class="hint">
+            Read from the raw board so passives can't switch each other on: a
+            keyword counts only if this card has it itself (its own passives or
+            gained in play), and affinity is the stats plus what cards in play
+            provide.
+          </p>
           <template v-if="ability.scope === 'self'">
             <label class="chk">
               <input v-model="ability.passive.animate" type="checkbox" />
@@ -686,6 +703,10 @@ function onRemove(ability) {
                 How many
                 <input v-model.number="ability.target.count" type="number" min="1" class="text-input" title="Different cards the player picks" />
               </label>
+              <label v-if="ability.target.count > 1" class="chk">
+                <input v-model="ability.target.upTo" type="checkbox" />
+                Up to that many (the player may stop early)
+              </label>
               <label class="field-label span2">
                 Prompt
                 <input v-model="ability.target.prompt" class="text-input" placeholder="Choose an Avatar to become" />
@@ -741,7 +762,40 @@ function onRemove(ability) {
              they can't express stays in the rules text above. Passives have no
              activation, so no effects list. -->
         <template v-if="ability.kind !== 'passive'">
-        <div class="field-label">Effects</div>
+        <div class="field-label section-head">Modes (&ldquo;choose one&hellip;&rdquo;)</div>
+        <p v-if="!ability.modes?.length" class="hint">
+          None — the ability just does its effects. Add modes to make the player
+          choose between them before targeting.
+        </p>
+        <template v-else>
+          <label class="field-label">
+            Player chooses
+            <input
+              v-model.number="ability.chooseCount"
+              type="number"
+              min="1"
+              :max="ability.modes.length"
+              class="text-input"
+            />
+          </label>
+          <p class="hint">
+            Each mode aims with its own target; with several chosen, the first
+            one that needs a pick is used for all. Chosen modes' effects run in
+            mode order, then the shared effects below.
+          </p>
+        </template>
+        <div v-for="(m, mi) in ability.modes || []" :key="mi" class="mode-block">
+          <div class="ability-row">
+            <input v-model="m.name" class="text-input" placeholder="Mode name (shown to the player)" />
+            <button class="btn small danger" title="Remove mode" @click="removeMode(ability, mi)">🗑</button>
+          </div>
+          <TargetEditor :t="m.target" />
+        </div>
+        <button class="btn small" @click="addMode(ability)">+ Mode</button>
+
+        <template v-for="grp in effectGroups(ability)" :key="grp.key">
+        <div class="field-label" :class="grp.depth ? 'else-head' : 'section-head'">{{ grp.label }}</div>
+        <template v-for="ability in [grp.view]" :key="grp.key">
         <div v-for="(eff, i) in ability.effects" :key="i" class="effect-row">
           <select
             :value="eff.op"
@@ -933,14 +987,30 @@ function onRemove(ability) {
             {{ eff.op === 'grantFrom' ? 'carries the target — gains its abilities' : 'releases granted cards' }}
           </span>
           <button
+            v-if="!eff.condition"
+            class="btn small"
+            title="Only resolve this effect if a condition holds (else run other effects)"
+            @click="setEffectCondition(eff, 'damaged')"
+          >
+            if…
+          </button>
+          <button
             class="btn small danger"
             title="Remove effect"
             @click="removeEffect(ability, i)"
           >
             🗑
           </button>
+          <!-- Only if: skipped (running its "otherwise" effects) when false. -->
+          <div v-if="eff.condition" class="effect-if">
+            <span class="hint effect-note-fixed">only if</span>
+            <ConditionEditor :cond="eff.condition" :triggered="ability.kind === 'triggered'" />
+            <button class="btn small" title="Drop the condition" @click="setEffectCondition(eff, 'always')">✕</button>
+          </div>
         </div>
         <button class="btn small" @click="addEffect(ability)">+ Effect</button>
+        </template>
+        </template>
         </template>
       </div>
 
@@ -1098,4 +1168,26 @@ function onRemove(ability) {
 .effect-note {
   flex: 1 1 auto;
 }
+.effect-if {
+  flex: 1 1 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  padding-left: 0.8rem;
+}
+.effect-note-fixed {
+  flex: 0 0 auto;
+}
+.else-head {
+  margin-top: 0.4rem;
+  font-style: italic;
+  opacity: 0.85;
+}
+.mode-block {
+  border-left: 2px solid rgba(255, 180, 80, 0.4);
+  padding-left: 0.6rem;
+  margin: 0.4rem 0;
+}
+
 </style>

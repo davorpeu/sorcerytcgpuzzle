@@ -21,6 +21,7 @@ import {
   canPickGridSquare,
   pickGridSquare,
   isStoryChoiceTarget,
+  isPickedTarget,
   resolveStoryChoice,
   destPickArmed,
   canPickAnyDest,
@@ -239,6 +240,8 @@ function onClick() {
       striker: ui.striker === cardId,
       selected: ui.selected === cardId,
       targetable: targetable || activatingTarget,
+      'picked-target': isPickedTarget(cardId),
+
       liftable,
       carrying: carried.length > 0,
     }"

@@ -30,6 +30,8 @@ import {
   declineStoryChoice,
   destPrompt,
   activeAbility,
+  storyPickState,
+  finishStoryPicks,
 } from './store.js'
 import Board from './components/Board.vue'
 import Hand from './components/Hand.vue'
@@ -41,6 +43,7 @@ import ThresholdIcon from './components/ThresholdIcon.vue'
 import CardActions from './components/CardActions.vue'
 import TriggerFeed from './components/TriggerFeed.vue'
 import FxOverlay from './components/FxOverlay.vue'
+import ChoicePopup from './components/ChoicePopup.vue'
 import StatsBar from './components/StatsBar.vue'
 import ArchiveCalendar from './components/ArchiveCalendar.vue'
 import { enableDragScroll } from './dragScroll.js'
@@ -717,7 +720,7 @@ watch(
 
             <!-- A triggered ability is waiting for the player to pick its target.
                  An optional ("may") one can also be declined. -->
-            <div v-if="ui.storyChoice" class="story-prompt trigger-prompt">
+            <div v-if="ui.storyChoice && !ui.storyChoice.pickModes" class="story-prompt trigger-prompt">
               <span>
                 <strong>{{ state.cards[ui.storyChoice.ownerId]?.name }}</strong>
                 — {{ ui.storyChoice.ability.name || 'triggered ability' }}:
@@ -726,7 +729,17 @@ watch(
                     ? destPrompt(ui.storyChoice.ability)
                     : ui.storyChoice.ability.target.prompt || 'click a highlighted target.'
                 }}
+                <template v-if="storyPickState()">
+                  ({{ storyPickState().picked }}/{{ storyPickState().upTo ? 'up to ' : '' }}{{ storyPickState().needed }})
+                </template>
               </span>
+              <button
+                v-if="storyPickState()?.upTo && storyPickState().picked"
+                class="btn small primary"
+                @click="finishStoryPicks"
+              >
+                Done
+              </button>
               <button
                 v-if="ui.storyChoice.ability.target.optional && !ui.storyChoice.dest"
                 class="btn small"
@@ -743,8 +756,10 @@ watch(
     </div>
 
     <FxOverlay />
+    <ChoicePopup />
 
     <div v-if="previewCard" class="card-preview-overlay">
+
       <img
         v-if="previewCard.img"
         :src="previewCard.img"

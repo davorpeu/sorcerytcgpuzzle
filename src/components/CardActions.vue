@@ -28,6 +28,9 @@ import {
   abilityCostBlocked,
   abilityUsesLeft,
   activatePickState,
+  activeAbility,
+  canFinishPicks,
+  finishPicks,
   beginCast,
   isSpell,
   cardTypeLabel,
@@ -179,7 +182,9 @@ const isArming = (abilityId) =>
 const armingAbility = computed(
   () =>
     (ui.activating &&
-      liveAbilities.value.find((a) => a.id === ui.activating.abilityId)) ||
+      liveAbilities.value.some((a) => a.id === ui.activating.abilityId) &&
+      // As it resolves for any chosen modes; null while they are being chosen.
+      activeAbility()) ||
     null
 )
 function abilityLabel(a) {
@@ -538,11 +543,21 @@ function onRemove() {
           : pickState?.choosing
             ? 'Now click the picked card you want to be able to cast.'
             : pickState
-              ? `${armingAbility.target.prompt || 'Pick the cards for this ability'} (${pickState.picked}/${pickState.needed}).`
+              ? `${armingAbility.target.prompt || 'Pick the cards for this ability'} (${pickState.picked}/${pickState.upTo ? 'up to ' : ''}${pickState.needed}).`
               : armingAbility.target.prompt || 'Now click the target for this ability.'
       }}
     </p>
+    <!-- "Up to N": stop picking and resolve with the cards picked so far. -->
+    <button
+      v-if="canFinishPicks()"
+      class="btn small primary"
+      title="Resolve with the cards picked so far"
+      @click="finishPicks"
+    >
+      Done picking
+    </button>
     <!-- An optional ("may") target can be resolved with nothing chosen: the
+
          target effects are skipped, the rest of the ability still runs. -->
     <button
       v-if="canDeclineActivate()"

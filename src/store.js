@@ -583,37 +583,81 @@ const passivesOf = (card) =>
 
 // Is a passive's "only while" condition true for its source right now? Reads
 // only the raw board and stats -- never `effective` or a passive animation --
-// so evaluating it can't feed back into the traits it switches on.
+// so evaluating it can't feed back into the traits it switches on (see
+// conditionHolds, `raw`).
 function passiveConditionMet(sourceId, cond) {
+  return conditionHolds(cond, { sourceId, raw: true })
+}
+
+// The card a condition's `subject` names in this context: the ability's own
+// card (default), its first chosen target, or the card that set a trigger off.
+function conditionSubject(cond, ctx) {
+  if (cond.subject === 'target') return ctx.targetId ?? null
+  if (cond.subject === 'triggering') return ctx.triggeringId ?? null
+  return ctx.sourceId ?? null
+}
+
+// Does a condition hold? `ctx` is { sourceId, targetId, triggeringId, ... } --
+// the same shape selectors read. With `raw` (a passive's condition, evaluated
+// while the passive traits themselves are being derived) it reads only the raw
+// board and stats: a keyword counts only if the card has it itself (its own
+// unconditional passives, or gained in play), affinity is the stats plus what
+// cards in play provide, and card kinds ignore passive animation.
+export function conditionHolds(cond, ctx) {
   const type = cond?.type || 'always'
   if (type === 'always') return true
+  const v = testCondition(cond, ctx)
+  return cond.not ? !v : v
+}
+
+function testCondition(cond, ctx) {
+  const type = cond.type
+  if (type === 'all') return (cond.of || []).every((c) => conditionHolds(c, ctx))
+  if (type === 'any') return (cond.of || []).some((c) => conditionHolds(c, ctx))
+  const sourceId = ctx.sourceId
   const card = state.cards[sourceId]
   if (!card) return false
   const n = Number(cond.amount) || 0
-  const stats = state.stats[sideOf(sourceId)] || {}
+  const own = sideOf(sourceId)
+  const side = cond.whose === 'enemy' ? otherSide(own) : own
+  const stats = state.stats[side] || {}
   if (type === 'lifeAtMost') return (stats.life || 0) <= n
   if (type === 'lifeAtLeast') return (stats.life || 0) >= n
   if (type === 'manaAtLeast') return (stats.mana || 0) >= n
   if (type === 'thresholdAtLeast') return (stats[cond.element || 'fire'] || 0) >= n
-  if (type === 'untapped') return !state.tapped[sourceId]
-  if (type === 'tapped') return !!state.tapped[sourceId]
-  if (type === 'damaged') return damageOf(sourceId) > 0
-  // The rest look at where the source stands on the board.
-  if (state.carry[sourceId]) return false
-  const node = nodeOf(sourceId)
+  if (type === 'affinityAtLeast') {
+    const el = cond.element || 'fire'
+    return (ctx.raw ? rawThreshold(side, el) : effectiveThreshold(side, el)) >= n
+  }
+  if (type === 'controlsCard') {
+    const sel = cond.selector || { who: 'area', area: normalizeArea({ shape: 'realm', side: 'friendly', filter: 'minion' }) }
+    return selectCards(sel, ctx).length >= Math.max(1, n)
+  }
+  const id = conditionSubject(cond, ctx)
+  if (!id || !state.cards[id]) return false
+  if (type === 'untapped') return !state.tapped[id]
+  if (type === 'tapped') return !!state.tapped[id]
+  if (type === 'damaged') return damageOf(id) > 0
+  if (type === 'hasKeyword')
+    return ctx.raw ? ownKeywords(id).has(cond.keyword) : hasKeyword(id, cond.keyword)
+  if (type === 'region') return regionOfCard(id) === cond.region
+  // The rest look at where the card stands on the board.
+  if (state.carry[id]) return false
+  const node = nodeOf(id)
   if (!node) return false
   if (type === 'onWater') return isWaterSite(node.sq)
   if (type === 'onLand') return isLandSite(node.sq)
+  if (type === 'onFlooded') return isFloodedSite(node.sq)
   if (type === 'unitsNearby') {
     // At least N units (by side) on this square or the 8 around it.
     let count = 0
     for (let i = 0; i < GRID_SIZE; i++) {
       if (i !== node.sq && !areNearby(node.sq, i)) continue
       for (const layer of ['top', 'bot']) {
-        for (const id of state.zones[`cell:${i}:${layer}`] || []) {
-          if (id === sourceId) continue
-          const c = state.cards[id]
-          if (!c || !(c.unit || c.avatar || state.animated[id])) continue
+        for (const uid of state.zones[`cell:${i}:${layer}`] || []) {
+          if (uid === sourceId) continue
+          const c = state.cards[uid]
+          if (!c || !(c.unit || c.avatar || state.animated[uid])) continue
           const same = !!c.enemy === !!card.enemy
           if (cond.side === 'friendly' && !same) continue
           if (cond.side === 'enemy' && same) continue
@@ -624,6 +668,47 @@ function passiveConditionMet(sourceId, cond) {
     return count >= Math.max(1, n)
   }
   return true
+}
+
+// Keywords a card has of itself, read raw: its own unconditional self
+// passives and keywords gained in play (not those lent by other cards).
+function ownKeywords(id) {
+  const out = new Set(state.grantedKeywords[id] || [])
+  for (const a of state.cards[id]?.abilities || []) {
+    if (a.kind !== 'passive' || a.scope !== 'self' || (a.condition?.type || 'always') !== 'always') continue
+    for (const k of a.passive?.keywords || []) out.add(k)
+  }
+  return out
+}
+
+// A side's threshold read raw: its stat plus what its cards in play provide
+// (a site animated into a minion provides nothing).
+function rawThreshold(side, el) {
+  let sum = state.stats[side]?.[el] || 0
+  for (const id of inPlayCards(side)) {
+    if (state.cards[id].site && state.animated[id]) continue
+    sum += Number(state.cards[id].affinity?.[el]) || 0
+  }
+  return sum
+}
+
+// A card's region: a unit's cell region, a site's (or an oversized minion's)
+// surface; a carried card its bearer's (zoneOf resolves carry).
+function regionOfCard(id) {
+  const z = zoneOf(id) || ''
+  if (/^(site|aura):\d+$/.test(z)) return 'surface'
+  return zoneRegion(z)
+}
+
+// A card-kind filter read raw (a unit is printed as one or animated by an
+// effect), for conditions evaluated inside the passive computation.
+function rawMatchesFilter(id, filter) {
+  const c = state.cards[id]
+  if (!c) return false
+  const unit = !!(c.unit || c.avatar || state.animated[id])
+  if (filter === 'unit') return unit
+  if (filter === 'minion') return unit && !c.avatar
+  return matchesFilter(c, filter)
 }
 
 // Non-units a self-scoped "animate" passive currently makes into minions:
@@ -2001,7 +2086,9 @@ export const AVATAR_SIDES = ['self', 'enemy']
 // A relative area's reach: the source's own location, or the ring of squares
 // adjacent (4 cardinal) or nearby (8 around) it -- the same shapes as passive
 // scopes, so the ring excludes the source's own square.
-export const AREA_SHAPES = ['grid', 'location', 'adjacent', 'nearby']
+// 'realm' is every card in play, any region (still minus the source) -- "if you
+// control a Knight".
+export const AREA_SHAPES = ['grid', 'location', 'adjacent', 'nearby', 'realm']
 // Ops whose subject is a selector.
 const WHO_OPS = new Set([
   'tap',
@@ -2117,21 +2204,117 @@ export const UNIT_LAYERS = ['surface', 'below', 'both']
 // Whom a passive's cemetery tax applies to, relative to its controller.
 export const CEMETERY_TAX_ON = ['everyone', 'opponent', 'you']
 
-// "Only while" conditions a passive can carry. Amount-based ones read the
-// controller's stats; board ones read where the card stands.
+// Conditions (see conditionHolds). A passive applies only while its condition
+// holds; a triggered ability's is an intervening "if" (tested as it triggers
+// and again as it resolves); an effect's skips it -- running its `else` effects
+// instead -- when false. Amount-based ones read a side's stats (`whose`: the
+// card's side or the enemy's); card ones read the `subject` (the ability's card,
+// its target, or the triggering card); `not` negates; all/any combine `of`.
 export const PASSIVE_CONDITIONS = [
   'always',
   'onWater',
   'onLand',
+  'onFlooded',
   'unitsNearby',
   'lifeAtMost',
   'lifeAtLeast',
   'manaAtLeast',
   'thresholdAtLeast',
+  'affinityAtLeast',
   'untapped',
   'tapped',
   'damaged',
+  'hasKeyword',
+  'region',
+  'controlsCard',
+  'all',
+  'any',
 ]
+export const CONDITION_TYPES = PASSIVE_CONDITIONS
+export const CONDITION_SUBJECTS = ['self', 'target', 'triggering']
+// Types that test a card (`subject`), and types that read a side's stats (`whose`).
+export const SUBJECT_CONDITIONS = [
+  'onWater',
+  'onLand',
+  'onFlooded',
+  'untapped',
+  'tapped',
+  'damaged',
+  'hasKeyword',
+  'region',
+]
+export const STAT_CONDITIONS = [
+  'lifeAtMost',
+  'lifeAtLeast',
+  'manaAtLeast',
+  'thresholdAtLeast',
+  'affinityAtLeast',
+]
+
+// A condition's full shape. The four fields every older file has are always
+// present; the newer ones only when set, so saved puzzles stay small.
+export function normalizeCondition(c) {
+  const type = PASSIVE_CONDITIONS.includes(c?.type) ? c.type : 'always'
+  const out = {
+    type,
+    amount: Number(c?.amount) || 0,
+    element: ELEMENTS.includes(c?.element) ? c.element : 'fire',
+    side: TARGET_SIDES.includes(c?.side) ? c.side : 'any',
+  }
+  if (type === 'always') return out
+  if (c.not) out.not = true
+  if (SUBJECT_CONDITIONS.includes(type) && ['target', 'triggering'].includes(c.subject))
+    out.subject = c.subject
+  if (STAT_CONDITIONS.includes(type) && c.whose === 'enemy') out.whose = 'enemy'
+  if (type === 'hasKeyword') out.keyword = KEYWORDS.includes(c.keyword) ? c.keyword : KEYWORDS[0]
+  if (type === 'region') out.region = REGIONS.includes(c.region) ? c.region : 'surface'
+  if (type === 'controlsCard')
+    out.selector = normalizeSelector(
+      c.selector || { who: 'area', area: { shape: 'realm', side: 'friendly', filter: 'minion' } },
+      'area'
+    )
+  if (type === 'all' || type === 'any')
+    out.of = Array.isArray(c.of) ? c.of.map(normalizeCondition) : []
+  return out
+}
+
+// Change a condition's type in place (the editor binds to the object), keeping
+// `not`/subject/whose and re-defaulting the rest.
+export function setConditionType(cond, type) {
+  const next = normalizeCondition({
+    type,
+    not: cond.not,
+    subject: cond.subject,
+    whose: cond.whose,
+    side: cond.side,
+    element: cond.element,
+    amount: cond.amount,
+  })
+  for (const k of Object.keys(cond)) delete cond[k]
+  Object.assign(cond, next)
+}
+
+// An effect's condition is only saved while it has one: 'always' drops it and
+// its `else` list.
+export function setEffectCondition(eff, type) {
+  if (type === 'always') {
+    delete eff.condition
+    delete eff.else
+    return
+  }
+  if (!eff.condition) eff.condition = normalizeCondition({ type })
+  else setConditionType(eff.condition, type)
+  if (!Array.isArray(eff.else)) eff.else = []
+}
+
+export function addSubCondition(cond) {
+  if (!Array.isArray(cond.of)) cond.of = []
+  cond.of.push(normalizeCondition({ type: 'tapped' }))
+}
+
+export function removeSubCondition(cond, i) {
+  cond.of.splice(i, 1)
+}
 
 // Coerce any stored/partial ability into the full shape the editor and runtime
 // expect, so older files and hand-edited JSON never surface an undefined nested
@@ -2199,12 +2382,9 @@ export function normalizeAbility(a = {}) {
     },
 
     // Passive-only: the passive applies only while this holds.
-    condition: {
-      type: PASSIVE_CONDITIONS.includes(a.condition?.type) ? a.condition.type : 'always',
-      amount: Number(a.condition?.amount) || 0,
-      element: ELEMENTS.includes(a.condition?.element) ? a.condition.element : 'fire',
-      side: TARGET_SIDES.includes(a.condition?.side) ? a.condition.side : 'any',
-    },
+    // Passive: the passive applies only while this holds. Triggered: an
+    // intervening "if", tested as it triggers and again as it resolves.
+    condition: normalizeCondition(a.condition),
     trigger: {
       action: a.trigger?.action || 'move',
       from: a.trigger?.from || 'any',
@@ -2263,10 +2443,84 @@ export function normalizeAbility(a = {}) {
       // Card mode, activated: how many different cards to pick (e.g. "banish
       // three spells from your cemetery").
       count: Math.max(1, Number(a.target?.count) || 1),
+      // With `count` > 1: "up to" that many -- the player may stop early.
+      upTo: !!a.target?.upTo,
     },
     effects: Array.isArray(a.effects) ? a.effects.map(normalizeEffect) : [],
     loseWhen: a.loseWhen || 'never',
+    // Modal ("choose one..."): only saved when the ability has modes.
+    ...(Array.isArray(a.modes) && a.modes.length
+      ? {
+          modes: a.modes.map(normalizeMode),
+          chooseCount: Math.min(Math.max(1, Number(a.chooseCount) || 1), a.modes.length),
+        }
+      : {}),
   }
+}
+
+// ---------- modes ----------
+
+// A modal ability ("choose one: ...") carries `modes: [{ name, target, effects }]`
+// and `chooseCount`. The player picks that many modes before targeting; the
+// ability then resolves as its *view* for those modes -- the chosen modes'
+// effects (in mode order) followed by the ability's own effects, targeting with
+// the first chosen mode that needs a pick (else the first chosen mode's target).
+// Several chosen modes therefore share one target pick. When chooseCount covers
+// every mode there is nothing to choose and all of them resolve.
+export const hasModes = (a) => Array.isArray(a?.modes) && a.modes.length > 0
+export const modeChoiceCount = (a) =>
+  hasModes(a) ? Math.min(Math.max(1, Number(a.chooseCount) || 1), a.modes.length) : 0
+export const needsModeChoice = (a) => hasModes(a) && modeChoiceCount(a) < a.modes.length
+
+const targetNeedsPick = (t) =>
+  !!t && ((t.mode === 'grid' && t.origin === 'pick') || (t.mode === 'card' && t.required))
+
+// Canonical mode list: valid indices, deduped, sorted.
+function cleanModes(ability, modes) {
+  const n = ability.modes.length
+  return [...new Set((modes || []).map(Number))]
+    .filter((i) => i >= 0 && i < n)
+    .sort((a, b) => a - b)
+}
+
+// The ability as it resolves for a set of chosen modes (see above). An ability
+// without modes is returned unchanged. With `modes` omitted, an ability whose
+// modes need no choice resolves all of them.
+export function abilityView(ability, modes) {
+  if (!hasModes(ability)) return ability
+  const all = ability.modes.map((_, i) => i)
+  const picked = cleanModes(ability, modes ?? (needsModeChoice(ability) ? [] : all))
+  const chosen = picked.map((i) => ability.modes[i])
+  const aim = chosen.find((m) => targetNeedsPick(m.target)) || chosen[0]
+  return {
+    ...ability,
+    target: aim ? aim.target : ability.target,
+    effects: [...chosen.flatMap((m) => m.effects || []), ...(ability.effects || [])],
+    modes: [],
+    chosenModes: picked,
+  }
+}
+
+function normalizeMode(m = {}, i = 0) {
+  return {
+    name: m.name || `Mode ${i + 1}`,
+    target: normalizeAbility({ kind: 'activated', target: m.target }).target,
+    effects: Array.isArray(m.effects) ? m.effects.map(normalizeEffect) : [],
+  }
+}
+
+export function addMode(ability) {
+  if (!Array.isArray(ability.modes)) ability.modes = []
+  ability.modes.push(normalizeMode({}, ability.modes.length))
+  if (!ability.chooseCount) ability.chooseCount = 1
+}
+
+export function removeMode(ability, i) {
+  ability.modes.splice(i, 1)
+  if (!ability.modes.length) {
+    delete ability.modes
+    delete ability.chooseCount
+  } else ability.chooseCount = Math.min(ability.chooseCount || 1, ability.modes.length)
 }
 
 export function addAbility(cardId, kind = 'activated') {
@@ -2386,6 +2640,15 @@ export function setAmountRef(eff, ref) {
 // old behavior: a teleport that goes anywhere.
 function normalizeEffect(eff) {
   const e = clone(eff)
+  // Resolve only if `condition` holds, else run the `else` effects instead.
+  // Only saved while the effect has a condition.
+  if (e.condition && (e.condition.type || 'always') !== 'always') {
+    e.condition = normalizeCondition(e.condition)
+    e.else = Array.isArray(e.else) ? e.else.map(normalizeEffect) : []
+  } else {
+    delete e.condition
+    delete e.else
+  }
   // A missing `who` has always resolved to the activator (effectSubject treated
   // anything but 'target' as self), so that is what an old file keeps.
   if (WHO_OPS.has(e.op)) {
@@ -3329,6 +3592,14 @@ function collectTriggers(entry) {
       // silence no longer reaches.
       if (isSilenced(owner.id) && !(departureTrigger(a, owner.id, party.subject) && !inPlay(owner.id)))
         continue
+      // Intervening "if": a trigger whose condition is false doesn't trigger at
+      // all (and is tested again as it resolves -- see storyIgnored).
+      const cctx = {
+        sourceId: owner.id,
+        targetId: (a.trigger?.targets === 'other' ? party.other : party.subject) || null,
+        triggeringId: party.subject,
+      }
+      if (!conditionHolds(a.condition, cctx)) continue
       // A consequence event (damage, a death's replayed move) snapshots onto the
       // logged entry that caused it.
       out.push({
@@ -3426,7 +3697,10 @@ function needsDestChoice(ev, targetId) {
 
 function logStoryEvent(ev, ignored) {
   const a = ev.ability
+  // Why it was ignored: its source left, or its intervening "if" failed.
+  const reason = ignored && !sourceGone(ev) ? 'its condition no longer holds' : null
   state.events.push({
+    ...(reason ? { reason } : {}),
     id: uid(),
     seq: ev.entry.seq,
     cardId: ev.ownerId,
@@ -3490,24 +3764,18 @@ function resolveStory() {
       storyStack = null
       return
     }
-    if (!sourceGone(ev) && needsChoice(ev)) {
-      // Suspend for the player to choose. The rest of the storyline waits. With
-      // no card to pick it goes straight to the destination pick.
-      const pickCard = needsCardChoice(ev)
-      ui.storyChoice = {
-        ownerId: ev.ownerId,
-        ability: ev.ability,
-        entry: ev.entry,
-        triggeringId: ev.triggeringId,
-        otherId: ev.otherId,
-        killed: ev.killed,
-        ownerAt: ev.ownerAt,
-        dest: !pickCard,
-        targetId: pickCard ? null : autoTarget(ev),
-      }
+    // Modes that need no choice all resolve.
+    if (hasModes(ev.ability) && !needsModeChoice(ev.ability)) ev.ability = abilityView(ev.ability)
+    const ignored = storyIgnored(ev)
+    if (!ignored && needsModeChoice(ev.ability)) {
+      // Choose the modes first (ChoicePopup); targeting follows.
+      ui.storyChoice = { ...storyFields(ev), pickModes: true, dest: false, targetId: null }
       return
     }
-    const ignored = sourceGone(ev)
+    if (!ignored && needsChoice(ev)) {
+      pauseForChoice(ev)
+      return
+    }
     logStoryEvent(ev, ignored)
     // Effects resolve against the card that set it off. New triggers unshift onto
     // storyStack and so resolve next (interrupt).
@@ -3520,11 +3788,74 @@ function resolveStory() {
   storyStack = null
 }
 
+// A queued trigger is ignored when its source has left, or when its intervening
+// "if" no longer holds as it resolves.
+function storyIgnored(ev) {
+  if (sourceGone(ev)) return true
+  const ctx = { sourceId: ev.ownerId, targetId: triggerRef(ev), triggeringId: ev.triggeringId }
+  return !conditionHolds(ev.ability.condition, ctx)
+}
+
+const storyFields = (ev) => ({
+  ownerId: ev.ownerId,
+  ability: ev.ability,
+  entry: ev.entry,
+  triggeringId: ev.triggeringId,
+  otherId: ev.otherId,
+  killed: ev.killed,
+  ownerAt: ev.ownerAt,
+})
+
+// Suspend for the player to choose. The rest of the storyline waits. With no
+// card to pick it goes straight to the destination pick.
+function pauseForChoice(ev) {
+  const pickCard = needsCardChoice(ev)
+  ui.storyChoice = {
+    ...storyFields(ev),
+    dest: !pickCard,
+    targetId: pickCard ? null : autoTarget(ev),
+    picked: [],
+  }
+}
+
+// The paused trigger's modes are chosen: resolve it as that mode view -- asking
+// for a target/destination if it now needs one -- then resume the storyline.
+function chooseStoryModes(picked) {
+  const c = ui.storyChoice
+  const ev = { ...storyFields(c), ability: abilityView(c.ability, picked) }
+  ui.storyChoice = null
+  if (needsChoice(ev)) {
+    pauseForChoice(ev)
+    return
+  }
+  finishStoryChoice(ev, autoTarget(ev), null, null)
+}
+
+// Any card still pickable for the paused trigger besides those picked.
+function storyTargetsLeft(c, picks) {
+  return Object.keys(state.cards).some(
+    (id) => id !== c.ownerId && !picks.includes(id) && satisfiesTarget(c.ownerId, id, c.ability.target)
+  )
+}
+
 // The player picked a target (or square) for the paused triggered ability;
 // resolve it, then continue the storyline.
 export function resolveStoryChoice(targetId, gridSquare) {
   const c = ui.storyChoice
-  if (!c || c.dest) return
+  if (!c || c.dest || c.pickModes) return
+  // A multi-target trigger collects `count` distinct targets -- or all there
+  // are (a trigger has to resolve, so it never waits on an impossible pick).
+  const needed = pickCount(c.ability)
+  if (targetId != null && needed > 1) {
+    const picks = [...(c.picked || []), targetId]
+    if (picks.length < needed && storyTargetsLeft(c, picks)) {
+      ui.storyChoice = { ...c, picked: picks }
+      return
+    }
+    ui.storyChoice = null
+    finishStoryChoice(c, picks[0], null, null, picks)
+    return
+  }
   const t = targetId ?? fallbackTarget(c)
   // A destination still to pick: stay paused, now asking for the square.
   if (gridSquare == null && needsDestChoice(c, t)) {
@@ -3536,7 +3867,8 @@ export function resolveStoryChoice(targetId, gridSquare) {
 }
 
 // Resolve a paused trigger with everything chosen, then resume the storyline.
-function finishStoryChoice(c, targetId, gridSquare, destZone) {
+// `ids` are a multi-target trigger's picks.
+function finishStoryChoice(c, targetId, gridSquare, destZone, ids = null) {
   const ev = {
     ability: c.ability,
     ownerId: c.ownerId,
@@ -3546,14 +3878,22 @@ function finishStoryChoice(c, targetId, gridSquare, destZone) {
     killed: c.killed,
     ownerAt: c.ownerAt,
   }
-  const ignored = sourceGone(ev)
+  const ignored = storyIgnored(ev)
   logStoryEvent(ev, ignored)
   if (!ignored)
-    runEffects(c.ability, c.ownerId, targetId, c.entry, gridSquare, destZone, {
+    runAbilityEffects(c.ability, c.ownerId, targetId, c.entry, ids, gridSquare, destZone, {
       triggeringId: c.triggeringId,
       ownerAt: c.ownerAt,
     })
   resolveStory() // resume the rest of the storyline
+}
+
+// "Up to N" on a paused trigger: stop picking and resolve with what is picked.
+export function finishStoryPicks() {
+  const c = ui.storyChoice
+  if (!c || c.dest || c.pickModes || !c.ability.target.upTo || !c.picked?.length) return
+  ui.storyChoice = null
+  finishStoryChoice(c, c.picked[0], null, null, c.picked)
 }
 
 // Decline the paused trigger's optional ("may") target: resolve it with no
@@ -3561,7 +3901,7 @@ function finishStoryChoice(c, targetId, gridSquare, destZone) {
 // continue the storyline. Only offered while an optional choice is pending.
 export function declineStoryChoice() {
   const c = ui.storyChoice
-  if (!c || c.dest || !c.ability.target.optional) return
+  if (!c || c.dest || c.pickModes || c.picked?.length || !c.ability.target.optional) return
   if (needsDestChoice(c, null)) {
     ui.storyChoice = { ...c, dest: true, targetId: null }
     return
@@ -3573,14 +3913,15 @@ export function declineStoryChoice() {
 // Whether a click on this card resolves the paused trigger's card target.
 export function isStoryChoiceTarget(id) {
   const c = ui.storyChoice
-  if (!c || c.dest || c.ability.target.mode !== 'card') return false
+  if (!c || c.dest || c.pickModes || c.ability.target.mode !== 'card') return false
+  if (c.picked?.includes(id)) return false
   return id !== c.ownerId && satisfiesTarget(c.ownerId, id, c.ability.target)
 }
 
 // The paused trigger's grid pick, if it wants a square.
 export function activeStoryGridPick() {
   const c = ui.storyChoice
-  return c && c.ability.target.mode === 'grid' && c.ability.target.origin === 'pick'
+  return c && !c.pickModes && c.ability.target.mode === 'grid' && c.ability.target.origin === 'pick'
     ? c.ability.target
     : null
 }
@@ -3739,10 +4080,16 @@ export function activatedAbilities(cardId) {
 }
 
 // The ability currently waiting for a target, if any.
+// As it resolves for the chosen modes (abilityView); null while the player is
+// still choosing modes.
 export function activeAbility() {
-  if (!ui.activating) return null
-  return findAbility(ui.activating.cardId, ui.activating.abilityId)
+  if (!ui.activating || ui.activating.pickModes) return null
+  return abilityView(findAbility(ui.activating.cardId, ui.activating.abilityId), ui.activating.modes)
 }
+
+// The chosen modes riding along an activation (for the `extra` of
+// continueActivate/performAbility/performCast), or null.
+const modesExtra = (a) => (a?.modes ? { modes: a.modes } : null)
 
 // The grid target waiting for a square to be picked, if any.
 export function activeGridPick() {
@@ -3763,9 +4110,10 @@ export function canPickGridSquare(sq) {
 export function pickGridSquare(sq) {
   if (!canPickGridSquare(sq)) return
   const { cardId, abilityId, cast } = ui.activating
+  const extra = modesExtra(ui.activating)
   ui.activating = null
-  if (cast) performCast(cardId, abilityId, null, sq)
-  else performAbility(cardId, abilityId, null, sq)
+  if (cast) performCast(cardId, abilityId, null, sq, null, extra)
+  else performAbility(cardId, abilityId, null, sq, null, extra)
 }
 
 // ---------- destination picks (teleport / token placement) ----------
@@ -3858,15 +4206,25 @@ const anyDestLegal = (spec, sourceId, targetId) =>
 // rather than leaving the player stuck on an impossible pick.
 // `dropSquare` is where a drag-cast spell landed (kept on its entry so an area
 // can be measured from there).
+// `extra` carries a multi-pick's targetIds/castId and a modal ability's chosen
+// modes; a multi-pick takes no destination.
 function continueActivate(cardId, abilityId, cast, targetId, extra = null, dropSquare = null) {
-  const spec = destSpec(findAbility(cardId, abilityId))
+  const spec = destSpec(abilityView(findAbility(cardId, abilityId), extra?.modes))
   if (
-    !extra &&
+    !extra?.targetIds &&
     spec &&
     !(spec.anchor === 'target' && !targetId) &&
     anyDestLegal(spec, cardId, targetId)
   ) {
-    ui.activating = { cardId, abilityId, cast: !!cast, targetId: targetId || null, dest: true, dropSquare }
+    ui.activating = {
+      cardId,
+      abilityId,
+      cast: !!cast,
+      targetId: targetId || null,
+      dest: true,
+      dropSquare,
+      ...(extra?.modes ? { modes: extra.modes } : {}),
+    }
     return
   }
   ui.activating = null
@@ -3874,21 +4232,21 @@ function continueActivate(cardId, abilityId, cast, targetId, extra = null, dropS
   else performAbility(cardId, abilityId, targetId || null, null, null, extra)
 }
 
-// Run an ability's effects. With several picked targets, each `who: target`
-// effect runs once per target; everything else (and banishAndCast, which takes
-// the whole pick) runs once.
-function runAbilityEffects(ability, cardId, targetId, entry) {
-  const ids = entry.targetIds
+// Run an ability's effects. With several picked targets (`ids`, by default the
+// entry's own), each `who: target` effect runs once per target; everything else
+// (and banishAndCast, which takes the whole pick) runs once.
+function runAbilityEffects(ability, cardId, targetId, entry, ids = entry.targetIds, gridSquare, destZone, extra = {}) {
   if (!ids || ids.length < 2) {
-    runEffects(ability, cardId, targetId, entry)
+    runEffects(ability, cardId, targetId, entry, gridSquare, destZone, extra)
     return
   }
   const perTarget = (ability.effects || []).filter(
     (e) => e.who === 'target' && e.op !== 'banishAndCast'
   )
   const once = (ability.effects || []).filter((e) => !perTarget.includes(e))
-  runEffects({ ...ability, effects: once }, cardId, ids[0], entry)
-  for (const t of ids) runEffects({ ...ability, effects: perTarget }, cardId, t, entry)
+  runEffects({ ...ability, effects: once }, cardId, ids[0], entry, gridSquare, destZone, extra)
+  for (const t of ids)
+    runEffects({ ...ability, effects: perTarget }, cardId, t, entry, gridSquare, destZone, extra)
 }
 
 // The armed activation's destination pick, if it is waiting for one.
@@ -3904,9 +4262,10 @@ export function canPickDest(zone) {
 export function pickDest(zone) {
   if (!canPickDest(zone)) return
   const { cardId, abilityId, cast, targetId, dropSquare } = ui.activating
+  const extra = modesExtra(ui.activating)
   ui.activating = null
-  if (cast) performCast(cardId, abilityId, targetId, null, zone, null, dropSquare)
-  else performAbility(cardId, abilityId, targetId, null, zone)
+  if (cast) performCast(cardId, abilityId, targetId, null, zone, extra, dropSquare)
+  else performAbility(cardId, abilityId, targetId, null, zone, extra)
 }
 
 // The paused trigger's destination pick, if it is waiting for one.
@@ -3997,9 +4356,9 @@ const pickCount = (ability) =>
 const choosesCast = (ability) =>
   (ability?.effects || []).some((e) => e.op === 'banishAndCast')
 
-// The picker's progress, for the prompt: { picked, needed, choosing }.
+// The picker's progress, for the prompt: { picked, needed, choosing, upTo }.
 export function activatePickState() {
-  if (!ui.activating || ui.activating.dest) return null
+  if (!ui.activating || ui.activating.dest || ui.activating.pickModes) return null
   const ability = activeAbility()
   const needed = pickCount(ability)
   if (needed <= 1 && !choosesCast(ability)) return null
@@ -4007,7 +4366,22 @@ export function activatePickState() {
     picked: (ui.activating.picked || []).length,
     needed,
     choosing: !!ui.activating.choosing,
+    upTo: !!ability?.target?.upTo && needed > 1,
   }
+}
+
+// A paused trigger's multi-target progress: { picked, needed, upTo }, or null.
+export function storyPickState() {
+  const c = ui.storyChoice
+  if (!c || c.dest || c.pickModes) return null
+  const needed = pickCount(c.ability)
+  if (needed <= 1) return null
+  return { picked: (c.picked || []).length, needed, upTo: !!c.ability.target.upTo }
+}
+
+// Whether a card is already picked by a multi-target pick in progress.
+export function isPickedTarget(id) {
+  return !!(ui.activating?.picked?.includes(id) || ui.storyChoice?.picked?.includes(id))
 }
 
 // ---------- effect ops ----------
@@ -4073,6 +4447,11 @@ function selectArea(area, ctx) {
   if (area.shape === 'grid') {
     const t = ctx.ability?.target
     if (t?.mode === 'grid') ids = resolveGridArea(src, ctx.pickSquare, t)
+  } else if (area.shape === 'realm') {
+    // Everything in play, any region. Sites only for a 'site' filter, as below.
+    ids = Object.keys(state.cards).filter(
+      (id) => id !== src && inPlay(id) && (area.filter === 'site' || !state.cards[id].site)
+    )
   } else {
     const s = areaOrigin(ctx)
     if (!s) return []
@@ -4089,14 +4468,16 @@ function selectArea(area, ctx) {
       if (area.filter === 'site') ids.push(...(state.zones[`site:${sq}`] || []))
     }
     // Oversized minions standing over any of those squares (surface).
-    if (region === 'surface' || region === 'void') {
+    if (!ctx.raw && (region === 'surface' || region === 'void')) {
       for (const sq of squares) for (const id of oversizedOnSquare(sq)) if (!ids.includes(id)) ids.push(id)
     }
     ids = ids.filter((id) => id !== src)
   }
-  return ids.filter(
-    (id) => matchesFilter(state.cards[id], area.filter) && matchesTargetSide(src, id, area.side)
-  )
+  // Read raw inside the passive computation (see conditionHolds).
+  const kindOk = ctx.raw
+    ? (id) => rawMatchesFilter(id, area.filter)
+    : (id) => matchesFilter(state.cards[id], area.filter)
+  return ids.filter((id) => kindOk(id) && matchesTargetSide(src, id, area.side))
 }
 
 // King-move distance between two squares -- how "grid targeting" measures range.
@@ -4567,7 +4948,18 @@ function breakWard(id, entry) {
   })
 }
 
+// An effect list as it resolves: each effect whose condition holds, else its
+// `else` effects (recursively). Lazy, so each condition is tested only when its
+// effect is reached -- after the effects before it have changed the board.
+function* conditionalEffects(list, ctx) {
+  for (const eff of list || []) {
+    if (conditionHolds(eff.condition, ctx)) yield eff
+    else yield* conditionalEffects(eff.else, ctx)
+  }
+}
+
 function runEffects(ability, cardId, targetId, entry, gridSquare, destZone, extra = {}) {
+
   const card = state.cards[cardId]
   const side = card?.enemy ? 'opponent' : 'player'
   // Ward: an opponent's ability that would target or affect a warded object is
@@ -4611,7 +5003,7 @@ function runEffects(ability, cardId, targetId, entry, gridSquare, destZone, extr
   // The cards an effect lands on, resolved when that effect runs (an earlier
   // effect may have changed the board) and minus any a Ward protects.
   const recipients = (sel) => selectCards(sel, ctx).filter((id) => !wardStops(id))
-  for (const eff of ability.effects || []) {
+  for (const eff of conditionalEffects(ability.effects, ctx)) {
     if (wardedTarget && (eff.who === 'target' || eff.op === 'grantFrom')) continue
     if (eff.op === 'gridDamage') {
       // Damage to the minions in the ability's grid area (as resolved when the
@@ -4806,7 +5198,8 @@ function checkSurvival(entry) {
 // moves count toward the solution, and an ability activation is one -- it logs
 // like an attack or strike, and check() compares it by cardId+abilityId+target.
 function performAbility(cardId, abilityId, targetId, gridSquare, destZone, extra = null) {
-  const ability = findAbility(cardId, abilityId)
+  const base = findAbility(cardId, abilityId)
+  const ability = abilityView(base, extra?.modes)
   const card = state.cards[cardId]
   if (!ability || !card) return
   const entry = {
@@ -4824,6 +5217,8 @@ function performAbility(cardId, abilityId, targetId, gridSquare, destZone, extra
     prevStrengthMod: clone(state.strengthMod),
     prevGrantedKeywords: clone(state.grantedKeywords),
   }
+  // A modal ability's chosen modes are part of the move (compared as a set).
+  if (hasModes(base)) entry.modes = ability.chosenModes
   const side = card.enemy ? 'opponent' : 'player'
   const mana = abilityManaCost(cardId, ability)
   if (mana) adjustStat(side, 'mana', -mana)
@@ -5057,7 +5452,8 @@ export function canCast(cardId) {
 function performCast(cardId, abilityId, targetId, gridSquare, destZone, extra = null, dropSquare = null) {
   const card = state.cards[cardId]
   if (!card) return
-  const ability = abilityId ? findAbility(cardId, abilityId) : null
+  const base = abilityId ? findAbility(cardId, abilityId) : null
+  const ability = base ? abilityView(base, extra?.modes) : null
   const owner = sideOf(cardId)
   const side = castSide(cardId)
   const mana = castManaCost(cardId)
@@ -5082,6 +5478,7 @@ function performCast(cardId, abilityId, targetId, gridSquare, destZone, extra = 
   // Where a dropped spell landed -- only kept when there is one, so entries of
   // spells cast from the bar are unchanged. Not compared by sameEntry.
   if (dropSquare != null) entry.dropSquare = dropSquare
+  if (hasModes(base)) entry.modes = ability.chosenModes
   if (mana) adjustStat(side, 'mana', -mana)
   delete state.castPermits[cardId]
   // Cast by the other side (out of a swapped cemetery / by permit): the caster
@@ -5205,16 +5602,22 @@ export function castByDrop(cardId, zone) {
   if (!canCast(cardId)) return false
   if (!state.cards[cardId].magic) return performPermanentCast(cardId, zone)
   const ability = spellAbility(cardId)
-  const t = ability?.target
   const m = /^(?:cell|site):(\d+)/.exec(zone || '')
   const sq = m ? Number(m[1]) : null
+  // A modal spell asks for its modes first; the drop is kept to aim with after.
+  if (needsModeChoice(ability)) {
+    disarmOthers()
+    ui.activating = { cardId, abilityId: ability.id, cast: true, pickModes: true, dropZone: zone, dropSquare: sq }
+    return true
+  }
+  const t = abilityView(ability)?.target
   if (t?.mode === 'grid') {
     if (sq == null) return false // grid spells must land on a square
     performCast(cardId, ability.id, null, sq)
     return true
   }
   if (t?.mode === 'card' && t.required) {
-    const targetId = findDropTarget(cardId, ability, zone, sq)
+    const targetId = findDropTarget(cardId, abilityView(ability), zone, sq)
     if (!targetId) return false
     continueActivate(cardId, ability.id, true, targetId, null, sq)
     return true
@@ -5250,14 +5653,13 @@ export function beginCast(cardId) {
     ui.activating = null
     return
   }
-  ui.attacker = null
-  ui.striker = null
-  ui.moving = null
-  ui.carrier = null
-  ui.shooting = null
-  ui.intercepting = null
-  const t = ability?.target
+  disarmOthers()
   const abilityId = ability?.id || null
+  if (needsModeChoice(ability)) {
+    ui.activating = { cardId, abilityId, cast: true, pickModes: true }
+    return
+  }
+  const t = abilityView(ability)?.target
   if (t?.mode === 'grid' && t.origin === 'pick') {
     ui.activating = { cardId, abilityId, cast: true }
   } else if (t?.mode === 'card' && t.required) {
@@ -5360,13 +5762,13 @@ export function beginActivate(cardId, abilityId) {
     ui.activating = null
     return
   }
-  ui.attacker = null
-  ui.striker = null
-  ui.moving = null
-  ui.carrier = null
-  ui.shooting = null
-  ui.intercepting = null
-  const t = ability.target
+  disarmOthers()
+  // A modal ability asks for its modes first (ChoicePopup); targeting follows.
+  if (needsModeChoice(ability)) {
+    ui.activating = { cardId, abilityId, pickModes: true }
+    return
+  }
+  const t = abilityView(ability).target
   if (t.mode === 'grid') {
     // Self-origin fires straight away; a picked origin waits for a square click.
     if (t.origin === 'pick') ui.activating = { cardId, abilityId }
@@ -5384,16 +5786,17 @@ export function beginActivate(cardId, abilityId) {
 export function targetActivate(targetId) {
   if (!ui.activating || !canActivateTarget(targetId)) return
   const { cardId, abilityId, cast } = ui.activating
-  const ability = findAbility(cardId, abilityId)
+  const ability = activeAbility()
+  const modes = modesExtra(ui.activating)
   const needed = pickCount(ability)
   if (needed <= 1 && !choosesCast(ability)) {
-    continueActivate(cardId, abilityId, cast, targetId)
+    continueActivate(cardId, abilityId, cast, targetId, modes, ui.activating.dropSquare ?? null)
     return
   }
   // The final click names which picked card may be cast.
   if (ui.activating.choosing) {
     const picked = ui.activating.picked
-    continueActivate(cardId, abilityId, cast, picked[0], { targetIds: picked, castId: targetId })
+    continueActivate(cardId, abilityId, cast, picked[0], { ...modes, targetIds: picked, castId: targetId })
     return
   }
   const picked = [...(ui.activating.picked || []), targetId]
@@ -5401,11 +5804,89 @@ export function targetActivate(targetId) {
     ui.activating = { ...ui.activating, picked }
     return
   }
-  if (choosesCast(ability)) {
+  settlePicks(picked)
+}
+
+// The armed multi-pick is complete (or stopped early): ask which picked card to
+// cast, or resolve.
+function settlePicks(picked) {
+  const { cardId, abilityId, cast } = ui.activating
+  if (choosesCast(activeAbility())) {
     ui.activating = { ...ui.activating, picked, choosing: true }
     return
   }
-  continueActivate(cardId, abilityId, cast, picked[0], { targetIds: picked })
+  continueActivate(cardId, abilityId, cast, picked[0], { ...modesExtra(ui.activating), targetIds: picked })
+}
+
+// "Up to N": stop picking and go on with the cards picked so far (one or more).
+export function canFinishPicks() {
+  const p = activatePickState()
+  return !!p && p.upTo && !p.choosing && p.picked > 0
+}
+
+export function finishPicks() {
+  if (canFinishPicks()) settlePicks(ui.activating.picked)
+}
+
+// ---------- mode choice (activation, cast or storyline) ----------
+
+// Only one action is ever armed: clear the others before arming an ability.
+function disarmOthers() {
+  ui.attacker = null
+  ui.striker = null
+  ui.moving = null
+  ui.carrier = null
+  ui.shooting = null
+  ui.intercepting = null
+}
+
+// The mode choice waiting on the player, if any: { cardId, ability, count, story }.
+export function pendingModeChoice() {
+  const a = ui.activating
+  if (a?.pickModes) {
+    const ability = findAbility(a.cardId, a.abilityId)
+    return ability ? { cardId: a.cardId, ability, count: modeChoiceCount(ability), story: false } : null
+  }
+  const c = ui.storyChoice
+  if (c?.pickModes)
+    return { cardId: c.ownerId, ability: c.ability, count: modeChoiceCount(c.ability), story: true }
+  return null
+}
+
+// Commit the chosen modes (exactly the ability's chooseCount of them), then go
+// on to targeting -- aiming with the drop, for a drag-cast spell.
+export function chooseModes(modes) {
+  const p = pendingModeChoice()
+  if (!p) return
+  const picked = cleanModes(p.ability, modes)
+  if (picked.length !== p.count) return
+  if (p.story) return chooseStoryModes(picked)
+  const { cardId, abilityId, cast, dropZone, dropSquare } = ui.activating
+  ui.activating = null
+  const view = abilityView(findAbility(cardId, abilityId), picked)
+  const t = view.target
+  const extra = { modes: picked }
+  const dropped = dropZone != null || dropSquare != null
+  if (t?.mode === 'grid') {
+    if (cast && dropSquare != null) performCast(cardId, abilityId, null, dropSquare, null, extra)
+    else if (t.origin === 'pick') ui.activating = { cardId, abilityId, cast: !!cast, modes: picked }
+    else continueActivate(cardId, abilityId, cast, null, extra, dropSquare ?? null)
+    return
+  }
+  if (t?.mode === 'card' && t.required) {
+    // A drop that lands on a legal target aims there; otherwise pick by click.
+    const hit = dropped && pickCount(view) <= 1 ? findDropTarget(cardId, view, dropZone, dropSquare) : null
+    if (hit) continueActivate(cardId, abilityId, cast, hit, extra, dropSquare ?? null)
+    else ui.activating = { cardId, abilityId, cast: !!cast, modes: picked, dropSquare: dropSquare ?? null }
+    return
+  }
+  continueActivate(cardId, abilityId, cast, null, extra, dropSquare ?? null)
+}
+
+// An activation can be called off at the mode choice; a triggered ability
+// can't (it has to resolve), so there is no cancel for the storyline.
+export function cancelModeChoice() {
+  if (ui.activating?.pickModes) ui.activating = null
 }
 
 // Whether the armed ability/cast has an optional ("may") card target that the
@@ -5426,7 +5907,7 @@ export function canDeclineActivate() {
 export function declineActivate() {
   if (!canDeclineActivate()) return
   const { cardId, abilityId, cast } = ui.activating
-  continueActivate(cardId, abilityId, cast, null)
+  continueActivate(cardId, abilityId, cast, null, modesExtra(ui.activating), ui.activating.dropSquare ?? null)
 }
 
 // Reverse a pickup: give the item back to its previous holder, or return it to
@@ -5598,6 +6079,9 @@ const sameEntry = (a, b) => {
   if (a.cardId !== b.cardId) return false
   if ((a.targetIds || []).join() !== (b.targetIds || []).join()) return false
   if ((a.castId ?? null) !== (b.castId ?? null)) return false
+  // A modal ability's chosen modes, as a set. No `modes` (every older entry, and
+  // every non-modal ability) is the empty set, so those compare as before.
+  if (modesKey(a) !== modesKey(b)) return false
   if (type === 'ability')
     return (
       a.abilityId === b.abilityId &&
@@ -5622,7 +6106,12 @@ const sameEntry = (a, b) => {
   return a.from === b.from && a.to === b.to
 }
 
+function modesKey(e) {
+  return [...(e.modes || [])].sort((x, y) => x - y).join(',')
+}
+
 const sameLine = (a, b) =>
+
   a.length === b.length && a.every((m, i) => sameEntry(m, b[i]))
 
 // The cards a logged entry acts on: the actor and, where present, the thing it

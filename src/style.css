@@ -1397,6 +1397,13 @@ details[open] > .panel-summary {
   cursor: crosshair;
 }
 
+/* Already chosen by a multi-target pick still in progress. */
+.card-token.picked-target {
+  outline: 2px solid var(--bad);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
 .card-token.targetable:hover {
   outline: 2px dashed var(--bad);
   outline-offset: 2px;

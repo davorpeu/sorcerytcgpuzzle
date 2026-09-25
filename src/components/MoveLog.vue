@@ -11,6 +11,17 @@ function abilityName(m) {
   return a?.name || 'ability'
 }
 
+// A modal ability's chosen modes, by name ("Bolt + Growth"), or ''.
+function modeNames(m) {
+  if (!m.modes?.length) return ''
+  const a = state.cards[m.cardId]?.abilities?.find((x) => x.id === m.abilityId)
+  return m.modes.map((i) => a?.modes?.[i]?.name || `mode ${i + 1}`).join(' + ')
+}
+
+// Every target of an entry (a multi-target ability logs several).
+const targetNames = (m) =>
+  (m.targetIds?.length ? m.targetIds : [m.targetId]).map(cardName).join(', ')
+
 // Triggered events set off by this entry, matched on the seq stamped when it
 // was logged. Empty while browsing a recorded solution (events aren't stored).
 function eventsFor(m) {
@@ -114,16 +125,19 @@ function entryClass(i) {
         <template v-else-if="m.type === 'ability'">
           <strong>{{ cardName(m.cardId) }}</strong>
           ✧ activates <strong>{{ abilityName(m) }}</strong>
+          <template v-if="m.modes?.length">({{ modeNames(m) }})</template>
           <template v-if="m.targetId">
-            → <strong>{{ cardName(m.targetId) }}</strong>
+            → <strong>{{ targetNames(m) }}</strong>
           </template>
         </template>
         <template v-else-if="m.type === 'cast'">
           ✦ casts <strong>{{ cardName(m.cardId) }}</strong>
+          <template v-if="m.modes?.length">({{ modeNames(m) }})</template>
           <template v-if="m.targetId">
-            → <strong>{{ cardName(m.targetId) }}</strong>
+            → <strong>{{ targetNames(m) }}</strong>
           </template>
         </template>
+
         <template v-else-if="m.type === 'damage'">
           <strong>{{ cardName(m.cardId) }}</strong>
           {{ m.amount >= 0 ? '✷ takes' : '♥ heals' }}
