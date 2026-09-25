@@ -134,7 +134,7 @@ When the app runs standalone (`npm run dev`, or any page without `data-api`), al
 
 ```json
 {
-  "version": 1,
+  "version": 0.2.2,
   "id": "abc123",
   "name": "Puzzle title",
   "desc": "Lethal: put the opponent at Death's Door this turn.",
@@ -154,5 +154,7 @@ When the app runs standalone (`npm run dev`, or any page without `data-api`), al
 Zones per grid square `N` (0–19, row-major, 5 per row): `site:N` (the site card, max 1), `cell:N:top` (surface), `cell:N:bot` (below). Other zones: `hand:player`, `hand:opponent`, `grave:player`, `grave:opponent`, `collection:player`, `collection:opponent`, `storyline` (shared), `pool` (editor-only staging area). Legacy `cell:N` zones load as `cell:N:top`.
 
 The puzzle's `stats` object stores each player's starting life, mana and thresholds: `{ "player": { "life": 20, "mana": 3, "air": 0, "earth": 0, "fire": 1, "water": 1 }, "opponent": { ... } }`. Missing `life` defaults to 20, so older puzzle files load unchanged. Counters are adjustable during play and reset with the board, but they are informational — only card moves are part of the checked solution sequence.
+
+`hideAtlas` / `hideSpellbook` (optional booleans, default `false`) hide both players' Atlas or Spellbook zones for puzzles that don't use the draw decks. A hidden deck still shows while it holds cards.
 
 `desc` is the player-facing brief. It is optional; puzzles saved before it existed simply show no brief.

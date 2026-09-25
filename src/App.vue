@@ -28,6 +28,8 @@ import {
   endDrag,
   declineDefender,
   declineStoryChoice,
+  destPrompt,
+  activeAbility,
 } from './store.js'
 import Board from './components/Board.vue'
 import Hand from './components/Hand.vue'
@@ -37,7 +39,7 @@ import DropZone from './components/DropZone.vue'
 import CardToken from './components/CardToken.vue'
 import ThresholdIcon from './components/ThresholdIcon.vue'
 import CardActions from './components/CardActions.vue'
-import EventPopup from './components/EventPopup.vue'
+import TriggerFeed from './components/TriggerFeed.vue'
 import FxOverlay from './components/FxOverlay.vue'
 import StatsBar from './components/StatsBar.vue'
 import ArchiveCalendar from './components/ArchiveCalendar.vue'
@@ -400,6 +402,22 @@ watch(
               combat = attack/strike/shoot deal Power damage and kill by Life or
               Lethal. Both are independent; leave off for free-form puzzles.
             </p>
+            <label
+              style="display: flex; align-items: center; gap: 0.4rem; margin: 0.4rem 0"
+            >
+              <input type="checkbox" v-model="state.hideAtlas" />
+              Hide Atlas
+            </label>
+            <label
+              style="display: flex; align-items: center; gap: 0.4rem; margin: 0.4rem 0"
+            >
+              <input type="checkbox" v-model="state.hideSpellbook" />
+              Hide Spellbook
+            </label>
+            <p class="hint">
+              For puzzles that don't use the draw decks. A hidden deck still
+              shows while it has cards in it.
+            </p>
             <div class="btn-row">
               <button v-if="!state.recording" class="btn primary" @click="startRecording">
                 ● {{ state.solutions.length ? 'Record another solution' : 'Record solution' }}
@@ -672,6 +690,10 @@ watch(
               />
             </DropZone>
 
+            <!-- What the last move triggered: compact chips, replaced by the
+                 next move. Click one for its rules text. -->
+            <TriggerFeed />
+
             <!-- An attack paused for a defender. Highlighted units on the mat
                  can take the hit; or press to let the attack through. -->
             <div
@@ -683,16 +705,30 @@ watch(
               <button class="btn small" @click="ui.awaitingDefender = null">Cancel</button>
             </div>
 
+            <!-- A spell (possibly drag-cast, so not selected) waits for its
+                 destination: where to teleport / where its token appears. -->
+            <div v-if="ui.activating?.dest && ui.activating.cast" class="story-prompt trigger-prompt">
+              <span>
+                <strong>{{ state.cards[ui.activating.cardId]?.name }}</strong>
+                — {{ destPrompt(activeAbility()) }}
+              </span>
+              <button class="btn small" @click="ui.activating = null">Cancel</button>
+            </div>
+
             <!-- A triggered ability is waiting for the player to pick its target.
                  An optional ("may") one can also be declined. -->
             <div v-if="ui.storyChoice" class="story-prompt trigger-prompt">
               <span>
                 <strong>{{ state.cards[ui.storyChoice.ownerId]?.name }}</strong>
                 — {{ ui.storyChoice.ability.name || 'triggered ability' }}:
-                {{ ui.storyChoice.ability.target.prompt || 'click a highlighted target.' }}
+                {{
+                  ui.storyChoice.dest
+                    ? destPrompt(ui.storyChoice.ability)
+                    : ui.storyChoice.ability.target.prompt || 'click a highlighted target.'
+                }}
               </span>
               <button
-                v-if="ui.storyChoice.ability.target.optional"
+                v-if="ui.storyChoice.ability.target.optional && !ui.storyChoice.dest"
                 class="btn small"
                 @click="declineStoryChoice"
               >
@@ -706,7 +742,6 @@ watch(
       </main>
     </div>
 
-    <EventPopup />
     <FxOverlay />
 
     <div v-if="previewCard" class="card-preview-overlay">

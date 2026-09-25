@@ -23,6 +23,10 @@ const life = computed(() => state.stats[props.side].life)
 // names the state on a caption line beneath it.
 const atDoor = computed(() => life.value <= 0)
 
+// Life, mana and thresholds are set up in the editor. In play the engine
+// moves them (casting pays mana, damage costs life), so the rail is read-only.
+const editing = computed(() => state.mode === 'editor')
+
 // Twenty-four steppers on screen, every one of them labelled "+" or "-".
 // Spoken in order that is two dozen identical buttons, so each one says which
 // number it moves and for whom.
@@ -39,6 +43,7 @@ const step = (what, delta) =>
     <div class="stat-row life-row" :class="{ 'at-door': atDoor }">
       <span class="stat-label">Life</span>
       <button
+        v-if="editing"
         class="stat-btn"
         :aria-label="step('life', -1)"
         @click="adjustStat(side, 'life', -1)"
@@ -49,6 +54,7 @@ const step = (what, delta) =>
         <span v-if="atDoor" class="door-icon">☠</span>{{ life }}
       </span>
       <button
+        v-if="editing"
         class="stat-btn"
         :aria-label="step('life', 1)"
         @click="adjustStat(side, 'life', 1)"
@@ -60,6 +66,7 @@ const step = (what, delta) =>
     <div class="stat-row mana-row">
       <span class="stat-label">Mana</span>
       <button
+        v-if="editing"
         class="stat-btn"
         :aria-label="step('mana', -1)"
         @click="adjustStat(side, 'mana', -1)"
@@ -68,6 +75,7 @@ const step = (what, delta) =>
       </button>
       <span class="stat-value">{{ state.stats[side].mana }}</span>
       <button
+        v-if="editing"
         class="stat-btn"
         :aria-label="step('mana', 1)"
         @click="adjustStat(side, 'mana', 1)"
@@ -75,7 +83,7 @@ const step = (what, delta) =>
         +
       </button>
       <button
-        v-if="siteMana"
+        v-if="editing && siteMana"
         class="stat-btn site-mana"
         :title="`Gain ${siteMana} mana from ${who} sites`"
         :aria-label="`Gain ${siteMana} mana from ${who} sites`"
@@ -88,6 +96,7 @@ const step = (what, delta) =>
       <div v-for="el in ELEMENTS" :key="el" class="stat-row" :title="el">
         <span class="stat-label th-cell"><ThresholdIcon :element="el" /></span>
         <button
+          v-if="editing"
           class="stat-btn"
           :aria-label="step(`${el} threshold`, -1)"
           @click="adjustStat(side, el, -1)"
@@ -101,6 +110,7 @@ const step = (what, delta) =>
           {{ effectiveThreshold(side, el) }}
         </span>
         <button
+          v-if="editing"
           class="stat-btn"
           :aria-label="step(`${el} threshold`, 1)"
           @click="adjustStat(side, el, 1)"

@@ -697,7 +697,7 @@ details[open] > .panel-summary {
   position: absolute;
   bottom: 3%;
   left: 50%;
-  transform: translateX(-50%) rotate(90deg);
+  transform: translateX(-50%) rotate(0deg);
   max-width: 82%;
   max-height: 82%;
   border-radius: 8px;
@@ -713,7 +713,7 @@ details[open] > .panel-summary {
 .site-bg.flipped {
   bottom: auto;
   top: 3%;
-  transform: translateX(-50%) rotate(270deg);
+  transform: translateX(-50%) rotate(180deg);
 }
 
 .cell-half {
@@ -871,6 +871,44 @@ details[open] > .panel-summary {
 
 .aura-node.over {
   border-style: solid;
+}
+
+/* An animated aura is an oversized minion standing on all four squares around
+   its crossing, so it is drawn larger than a plain aura -- about one square
+   wide, straddling the crossing -- with a unit-style ring. */
+.aura-node.occupied.oversized {
+  width: 18%;
+  position: absolute;
+  overflow: visible;
+  box-shadow: 0 0 0 2px var(--accent), 0 4px 14px rgba(0, 0, 0, 0.7);
+}
+
+.oversized-tag {
+  position: absolute;
+  left: 2px;
+  bottom: 2px;
+  padding: 0 0.3em;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 700;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.7);
+  pointer-events: none;
+}
+
+.oversized-dmg {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 1.1em;
+  padding: 0 0.25em;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 700;
+  text-align: center;
+  color: #fff;
+  background: #b3261e;
+  pointer-events: none;
 }
 
 .aura-token {

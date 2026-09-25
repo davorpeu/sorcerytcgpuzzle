@@ -10,15 +10,23 @@ import {
   clearSelection,
   removeCard,
   toggleSite,
-  toggleOppSiteSummon,
   toggleCastFromCemetery,
   toggleAura,
   toggleArtifact,
   toggleMonument,
   toggleLanceToken,
+  setTokenTemplate,
+  TOKEN_TEMPLATE_KINDS,
+  TOKEN_NAMES,
   toggleMagic,
   canAffordCast,
   canCastFrom,
+  castSourceOk,
+  castControlled,
+  castManaCost,
+  abilityManaCost,
+  abilityUsesLeft,
+  activatePickState,
   beginCast,
   isSpell,
   cardTypeLabel,
@@ -36,6 +44,7 @@ import {
   beginActivate,
   canDeclineActivate,
   declineActivate,
+  destPrompt,
   activatedAbilities,
   effectiveRanged,
   canCharge,
@@ -61,9 +70,15 @@ const inHand = computed(() => zone.value?.startsWith('hand:'))
 const inGrave = computed(() => zone.value?.startsWith('grave:'))
 // Where a spell can be cast from: the hand, or the cemetery if the card grants
 // it. Drives the Cast button / drag hint so a graveyard-castable spell is playable.
-const castSource = computed(
-  () => inHand.value || (inGrave.value && !!card.value?.castFromCemetery)
+// A cast permit (banishAndCast) makes a spell castable from where it lies too.
+const castSource = computed(() => !!ui.selected && castSourceOk(ui.selected))
+// In play the solver casts only what they are the caster of -- which includes an
+// opponent's card out of a swapped cemetery or granted by a permit.
+const castLocked = computed(
+  () => state.mode === 'play' && !!ui.selected && !castControlled(ui.selected)
 )
+// The picker's progress for multi-card targets ("banish three spells").
+const pickState = computed(() => activatePickState())
 // What a card provides (mana / elemental affinity), for the header line.
 const providesText = computed(() => {
   const c = card.value
@@ -162,9 +177,20 @@ const armingAbility = computed(
 )
 function abilityLabel(a) {
   const bits = [a.name || 'Ability']
-  if (a.cost.mana) bits.push(`${a.cost.mana}◇`)
+  const mana = ui.selected ? abilityManaCost(ui.selected, a) : a.cost.mana
+  if (mana) bits.push(`${mana}◇`)
+  // A limited ability shows its uses left this turn while solving/recording.
+  const limit = Number(a.cost.perTurn) || 0
+  if (limit && ui.selected && (state.mode === 'play' || state.recording)) {
+    bits.push(`(${abilityUsesLeft(ui.selected, a)}/${limit})`)
+  }
   return bits.join(' ')
 }
+
+const usedUp = (a) =>
+  (state.mode === 'play' || state.recording) &&
+  !!ui.selected &&
+  abilityUsesLeft(ui.selected, a) <= 0
 
 // Removing a card takes it out of the puzzle for good -- Undo walks back
 // moves, not deletions -- and the button sits in a row of harmless toggles,
@@ -206,7 +232,7 @@ function onRemove() {
 
     <div class="ca-buttons">
       <button
-        v-if="castSource && card.magic && (state.mode === 'play' || state.recording) && !enemyLocked"
+        v-if="castSource && card.magic && (state.mode === 'play' || state.recording) && !castLocked"
         class="btn primary"
         :class="{ active: casting }"
         :disabled="(!canAffordCast(ui.selected) || !canCastFrom(ui.selected)) && !casting"
@@ -219,10 +245,10 @@ function onRemove() {
         "
         @click="beginCast(ui.selected)"
       >
-        {{ casting ? 'Cancel cast' : '✦ Cast' }}
+        {{ casting ? 'Cancel cast' : `✦ Cast${castManaCost(ui.selected) ? ` ${castManaCost(ui.selected)}◇` : ''}` }}
       </button>
       <p
-        v-if="castSource && !card.magic && isSpell(ui.selected) && (state.mode === 'play' || state.recording) && !enemyLocked"
+        v-if="castSource && !card.magic && isSpell(ui.selected) && (state.mode === 'play' || state.recording) && !castLocked"
         class="ca-hint"
       >
         Drag onto the board (or click a square) to cast.
@@ -232,7 +258,8 @@ function onRemove() {
         :key="a.id"
         class="btn"
         :class="{ active: isArming(a.id) }"
-        :title="a.text || a.name"
+        :title="usedUp(a) ? 'Already used as many times as allowed this turn' : a.text || a.name"
+        :disabled="usedUp(a) && !isArming(a.id)"
         @click="beginActivate(ui.selected, a.id)"
       >
         ✧ {{ isArming(a.id) ? `Cancel ${a.name || 'ability'}` : abilityLabel(a) }}
@@ -354,17 +381,6 @@ function onRemove() {
         ⛰ {{ card.site ? 'Not a site' : 'Mark as site' }}
       </button>
       <button
-        v-if="editing && card.unit && !card.avatar"
-        class="btn"
-        :class="{ active: card.allowOpponentSiteSummon }"
-        :title="card.allowOpponentSiteSummon
-          ? 'May be summoned onto an opponent-controlled site'
-          : 'Cannot be summoned onto an opponent-controlled site (default)'"
-        @click="toggleOppSiteSummon(ui.selected)"
-      >
-        ⚔ {{ card.allowOpponentSiteSummon ? 'Enemy-site summon' : 'No enemy-site summon' }}
-      </button>
-      <button
         v-if="editing && inPool"
         class="btn"
         :class="{ active: card.aura }"
@@ -418,6 +434,25 @@ function onRemove() {
       >
         ⌇ {{ card.lanceToken ? 'Not a lance' : 'Lance token' }}
       </button>
+      <!-- Designate this card as a token kind's template: generated tokens of
+           that kind then use its art, name and abilities. -->
+      <label
+        v-if="editing"
+        class="btn"
+        :class="{ active: card.tokenKind }"
+        title="Use this card as the art (and abilities) for generated tokens of this kind"
+        style="display: inline-flex; align-items: center; gap: 0.3em"
+      >
+        ◈ Token
+        <select
+          :value="card.tokenKind || ''"
+          style="font: inherit"
+          @change="setTokenTemplate(ui.selected, $event.target.value)"
+        >
+          <option value="">none</option>
+          <option v-for="k in TOKEN_TEMPLATE_KINDS" :key="k" :value="k">{{ TOKEN_NAMES[k] }}</option>
+        </select>
+      </label>
       <button v-if="editing" class="btn danger" @click="onRemove">
         × Remove card
       </button>
@@ -484,7 +519,15 @@ function onRemove() {
     </div>
 
     <p v-if="armingAbility" class="ca-hint">
-      {{ armingAbility.target.prompt || 'Now click the target for this ability.' }}
+      {{
+        ui.activating.dest
+          ? destPrompt(armingAbility)
+          : pickState?.choosing
+            ? 'Now click the picked card you want to be able to cast.'
+            : pickState
+              ? `${armingAbility.target.prompt || 'Pick the cards for this ability'} (${pickState.picked}/${pickState.needed}).`
+              : armingAbility.target.prompt || 'Now click the target for this ability.'
+      }}
     </p>
     <!-- An optional ("may") target can be resolved with nothing chosen: the
          target effects are skipped, the rest of the ability still runs. -->

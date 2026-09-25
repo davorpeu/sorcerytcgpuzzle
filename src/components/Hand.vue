@@ -56,7 +56,10 @@ defineProps({
         />
       </DropZone>
     </div>
-    <div class="zone-block grave-block">
+    <div
+      v-if="!state.hideAtlas || state.zones[`atlas:${side}`].length"
+      class="zone-block grave-block"
+    >
       <div class="zone-title">Atlas</div>
       <DropZone :zone="`atlas:${side}`" class="grave">
         <CardToken
@@ -67,7 +70,10 @@ defineProps({
         />
       </DropZone>
     </div>
-    <div class="zone-block grave-block">
+    <div
+      v-if="!state.hideSpellbook || state.zones[`spellbook:${side}`].length"
+      class="zone-block grave-block"
+    >
       <div class="zone-title">Spellbook</div>
       <DropZone :zone="`spellbook:${side}`" class="grave">
         <CardToken

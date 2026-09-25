@@ -7,6 +7,17 @@ import {
   targetPickup,
   targetStrike,
   armedAttackLegal,
+  armedShootLegal,
+  targetShoot,
+  armedDefendLegal,
+  chooseDefender,
+  isStoryChoiceTarget,
+  resolveStoryChoice,
+  canActivateTarget,
+  targetActivate,
+  isOversized,
+  damageOf,
+  effectivePower,
   selectCard,
   carriedBy,
   beginDrag,
@@ -14,6 +25,9 @@ import {
   zoneOf,
   zoneLabel,
   regionOf,
+  destPickArmed,
+  canPickAnyDest,
+  pickAnyDest,
   isWaterSite,
   isFloodedSite,
   GRID_SIZE,
@@ -72,20 +86,30 @@ function dragAura(e, idx) {
 // underneath arrives here instead, and is handed back down: the band actually
 // under the pointer decides surface or below, which keeps the 74/26 split in
 // the stylesheet rather than restating it here.
+// The band (surface / below) under the pointer on a square.
+function bandAt(idx, e) {
+  const band = document
+    .elementsFromPoint(e.clientX, e.clientY)
+    .find((el) => el.classList && el.classList.contains('cell-half'))
+  return band && band.classList.contains('bot') ? `cell:${idx}:bot` : `cell:${idx}:top`
+}
+
 function clickSite(idx, e) {
   const card = siteCard(idx)
+  // Picking a destination: the site art stands for its square's locations.
+  if (destPickArmed()) {
+    const zone = bandAt(idx, e)
+    if (canPickAnyDest(zone)) pickAnyDest(zone)
+    else if (canPickAnyDest(`cell:${idx}:top`)) pickAnyDest(`cell:${idx}:top`)
+    return
+  }
   // Only the formal Move action turns a click anywhere on the square -- bare
   // felt, the site art, or a unit standing here -- into a move; moveCard taps
   // the moving unit because ui.moving is set. A plain selection leaves the
   // site clickable to select (the else branch) so you can switch between
   // pieces without moving. The band under the pointer picks surface vs below.
   if (ui.moving && (!card || ui.moving !== card.id)) {
-    const band = document
-      .elementsFromPoint(e.clientX, e.clientY)
-      .find((el) => el.classList && el.classList.contains('cell-half'))
-    const to = band && band.classList.contains('bot')
-      ? `cell:${idx}:bot`
-      : `cell:${idx}:top`
+    const to = bandAt(idx, e)
     const from = zoneOf(ui.moving)
     if (from) moveCard(ui.moving, from, to)
     return
@@ -100,6 +124,34 @@ function clickSite(idx, e) {
 function clickAura(idx) {
   const card = auraCard(idx)
   if (!card) return
+  // An animated aura is an oversized minion, so it can be the target of the
+  // same armed actions a unit token answers to.
+  if (isOversized(card.id)) {
+    if (ui.storyChoice) {
+      if (isStoryChoiceTarget(card.id)) resolveStoryChoice(card.id)
+      return
+    }
+    if (ui.awaitingDefender) {
+      if (armedDefendLegal(card.id)) chooseDefender(card.id)
+      return
+    }
+    if (ui.shooting && ui.shooting !== card.id) {
+      if (armedShootLegal(card.id)) targetShoot(card.id)
+      return
+    }
+    if (ui.attacker && ui.attacker !== card.id) {
+      if (armedAttackLegal(card.id)) targetAttack(card.id)
+      return
+    }
+    if (ui.striker && ui.striker !== card.id) {
+      targetStrike(card.id)
+      return
+    }
+    if (canActivateTarget(card.id)) {
+      targetActivate(card.id)
+      return
+    }
+  }
   if (ui.carrier && ui.carrier !== card.id) targetPickup(card.id)
   else selectCard(card.id)
 }
@@ -257,7 +309,7 @@ function nodeStyle(idx) {
           :key="n"
           :zone="`aura:${n - 1}`"
           class="aura-node"
-          :class="{ occupied: auraCard(n - 1) }"
+          :class="{ occupied: auraCard(n - 1), oversized: auraCard(n - 1) && isOversized(auraCard(n - 1).id) }"
           :style="nodeStyle(n - 1)"
           :keyboard="auraSelected"
         >
@@ -288,6 +340,16 @@ function nodeStyle(idx) {
               draggable="false"
             />
             <span v-else class="aura-name">{{ auraCard(n - 1).name }}</span>
+            <!-- Animated: an oversized minion. Its power and wounds read here,
+                 since it is drawn as an aura rather than a card token. -->
+            <template v-if="isOversized(auraCard(n - 1).id)">
+              <span class="oversized-tag" aria-hidden="true">
+                ANIM {{ effectivePower(auraCard(n - 1).id) }}
+              </span>
+              <span v-if="damageOf(auraCard(n - 1).id)" class="oversized-dmg" aria-hidden="true">
+                {{ damageOf(auraCard(n - 1).id) }}
+              </span>
+            </template>
             <span
               v-if="carriedBy(auraCard(n - 1).id).length"
               class="site-badge carry-badge"

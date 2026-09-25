@@ -13,10 +13,14 @@ import {
   activeStoryGridPick,
   canStoryPickSquare,
   pickStorySquare,
+  destPickArmed,
+  canPickAnyDest,
+  pickAnyDest,
   spellCastable,
   canCast,
   castByDrop,
   playerControls,
+  castControlled,
 } from '../store.js'
 
 const props = defineProps({
@@ -48,7 +52,8 @@ const gridPickable = computed(
   () =>
     square.value != null &&
     ((!!activeGridPick() && canPickGridSquare(square.value)) ||
-      (!!activeStoryGridPick() && canStoryPickSquare(square.value)))
+      (!!activeStoryGridPick() && canStoryPickSquare(square.value)) ||
+      canPickAnyDest(props.zone))
 )
 
 // Only armed zones are reachable by keyboard. Twenty squares plus the hands
@@ -66,11 +71,13 @@ function castOrMove(cardId, from, zone) {
   // In play mode the solver drives only their own side: an opponent's cards
   // (a spell in their hand, a unit of theirs on the board) can't be cast or
   // moved by dragging/clicking. The puzzle moves the opponent automatically.
-  if (!playerControls(cardId)) return
+  // A spell is gated by who casts it, which can be the solver even for an
+  // opponent's card (out of a swapped cemetery, or by a cast permit).
   if (spellCastable(cardId)) {
-    if (canCast(cardId)) castByDrop(cardId, zone)
+    if (castControlled(cardId) && canCast(cardId)) castByDrop(cardId, zone)
     return
   }
+  if (!playerControls(cardId)) return
   moveCard(cardId, from, zone)
 }
 
@@ -85,6 +92,12 @@ function onDrop(e) {
 }
 
 function onClick() {
+  // A destination pick (teleport / token placement) takes the click. This zone
+  // is one exact location: the surface band or the below band of a square.
+  if (destPickArmed()) {
+    if (canPickAnyDest(props.zone)) pickAnyDest(props.zone)
+    return
+  }
   // A paused trigger picking a grid square takes the click.
   if (activeStoryGridPick()) {
     if (canStoryPickSquare(square.value)) pickStorySquare(square.value)

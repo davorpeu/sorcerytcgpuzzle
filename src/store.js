@@ -164,15 +164,23 @@ export const ui = reactive({
   selected: null,
   // Transient cosmetic effects queue (flashes, projectiles). Purely visual:
   // never serialized, never part of undo or solution checking. Entries are
-  // { id, kind, cardId?, sourceId?, targetId? } and auto-expire (see emitFx).
+  // { id, kind, cardId?, sourceId?, targetId?, style? } and auto-expire (see
+  // emitFx). A projectile's style is 'arrow' | 'fireball' | 'bolt'.
   fx: [],
 })
 
 // How long each effect kind stays in `ui.fx` before it self-removes (ms).
-const FX_DURATION = { cast: 800, genesis: 800, death: 700, impact: 500, projectile: 650 }
+const FX_DURATION = {
+  cast: 800,
+  genesis: 800,
+  death: 700,
+  impact: 500,
+  projectile: 800,
+  trigger: 1800,
+}
 
-// Fire a cosmetic effect. It only plays during solving (matches EventPopup's
-// player-facing gating, so authoring/recording is never interrupted) and is
+// Fire a cosmetic effect. It only plays during solving (player-facing, so
+// authoring/recording is never interrupted) and is
 // suppressed when the visitor asked for reduced motion. The entry removes
 // itself after its duration; a unique id means overlapping effects coexist.
 export function emitFx(kind, opts = {}) {
@@ -264,6 +272,19 @@ export const state = reactive({
   // grantedKeywords is a list of keywords added during play.
   strengthMod: {}, // cardId -> signed strength delta
   grantedKeywords: {}, // cardId -> [keyword, ...]
+  // Non-units turned into minions by an `animate` effect:
+  // cardId -> { power, powerRef, powerBonus } (see animatedPower).
+  // Lasts until the card leaves the realm. (A passive's conditional animation
+  // is derived, not stored -- see passiveAnimated.)
+  animated: {},
+  // One-shot permissions to cast a card from where it lies (e.g. a spell a
+  // banishAndCast effect let you cast from banishment):
+  // cardId -> { side, free }. Consumed by the cast.
+  castPermits: {},
+  // Cards whose control changed in play (a spell cast out of the opponent's
+  // cemetery): cardId -> true. card.enemy is flipped live; this remembers which
+  // flips to reverse on undo, reset and save.
+  controlFlips: {},
   // Units summoned this turn (entered the realm from hand during play) -- what
   // Charge keys off. Single-turn approximation: never cleared within a puzzle.
   summoned: {}, // cardId -> true
@@ -291,6 +312,10 @@ export const state = reactive({
   solved: false, // solved today (non-editors: persisted + locks input)
   failed: false, // hit the mistake cap today (non-editors: persisted + locks)
   solveQuality: '', // 'optimal' | 'partial' once solved, for the verdict banner
+  // Puzzle setting: draw-deck zones the author isn't using. A hidden zone is
+  // still drawn while it holds cards, so nothing on the table goes invisible.
+  hideAtlas: false,
+  hideSpellbook: false,
 })
 
 const FIXED_ZONE_LABELS = {
@@ -476,7 +501,8 @@ function siteControllerSide(square) {
 // Whether a minion may be cast onto a board location given site control. Only
 // minions are gated; avatars, artifacts, auras, and magic use their own paths.
 // An open square (no site) or one you control is always fine; an opponent's site
-// needs the card's `allowOpponentSiteSummon` capability.
+// needs the `summonOnEnemySites` trait, which comes from a passive ability (the
+// card's own, or one day an aura lending it to other cards) via `effective`.
 export function canCastMinionTo(cardId, zone) {
   const card = state.cards[cardId]
   if (!card || !card.unit || card.avatar) return true
@@ -486,7 +512,7 @@ export function canCastMinionTo(cardId, zone) {
   if (!owner) return true
   const casterSide = card.enemy ? 'opponent' : 'player'
   if (owner === casterSide) return true
-  return !!card.allowOpponentSiteSummon
+  return canSummonOnEnemySites(cardId)
 }
 
 // Region of a square's surface / below slot:
@@ -526,18 +552,354 @@ function boardUnits() {
       }
     }
   }
+  // Oversized units: anchored on their top-left square, with all four listed.
+  for (let i = 0; i < INTERSECTIONS; i++) {
+    for (const id of state.zones[`aura:${i}`] || []) {
+      if (!isOversized(id)) continue
+      const squares = intersectionSquares(i)
+      out.push({ id, card: state.cards[id], square: squares[0], squares, region: 'surface' })
+    }
+  }
   return out
 }
 
 // Where a card sits, resolved to a { square, region }, or null if not on a cell.
 function unitCell(cardId) {
+  const big = oversizedAt(cardId)
+  if (big != null) {
+    const squares = intersectionSquares(big)
+    return { square: squares[0], squares, region: 'surface' }
+  }
   const m = /^cell:(\d+):(top|bot)$/.exec(zoneOf(cardId) || '')
   if (!m) return null
   return { square: Number(m[1]), region: regionOf(Number(m[1]), m[2]) }
 }
 
+// A passive applies only while its condition holds (always, by default).
 const passivesOf = (card) =>
-  (card?.abilities || []).filter((a) => a.kind === 'passive')
+  (card?.abilities || []).filter(
+    (a) => a.kind === 'passive' && passiveConditionMet(card.id, a.condition)
+  )
+
+// Is a passive's "only while" condition true for its source right now? Reads
+// only the raw board and stats -- never `effective` or a passive animation --
+// so evaluating it can't feed back into the traits it switches on.
+function passiveConditionMet(sourceId, cond) {
+  const type = cond?.type || 'always'
+  if (type === 'always') return true
+  const card = state.cards[sourceId]
+  if (!card) return false
+  const n = Number(cond.amount) || 0
+  const stats = state.stats[sideOf(sourceId)] || {}
+  if (type === 'lifeAtMost') return (stats.life || 0) <= n
+  if (type === 'lifeAtLeast') return (stats.life || 0) >= n
+  if (type === 'manaAtLeast') return (stats.mana || 0) >= n
+  if (type === 'thresholdAtLeast') return (stats[cond.element || 'fire'] || 0) >= n
+  if (type === 'untapped') return !state.tapped[sourceId]
+  if (type === 'tapped') return !!state.tapped[sourceId]
+  if (type === 'damaged') return damageOf(sourceId) > 0
+  // The rest look at where the source stands on the board.
+  if (state.carry[sourceId]) return false
+  const node = nodeOf(sourceId)
+  if (!node) return false
+  if (type === 'onWater') return isWaterSite(node.sq)
+  if (type === 'onLand') return isLandSite(node.sq)
+  if (type === 'unitsNearby') {
+    // At least N units (by side) on this square or the 8 around it.
+    let count = 0
+    for (let i = 0; i < GRID_SIZE; i++) {
+      if (i !== node.sq && !areNearby(node.sq, i)) continue
+      for (const layer of ['top', 'bot']) {
+        for (const id of state.zones[`cell:${i}:${layer}`] || []) {
+          if (id === sourceId) continue
+          const c = state.cards[id]
+          if (!c || !(c.unit || c.avatar || state.animated[id])) continue
+          const same = !!c.enemy === !!card.enemy
+          if (cond.side === 'friendly' && !same) continue
+          if (cond.side === 'enemy' && same) continue
+          count++
+        }
+      }
+    }
+    return count >= Math.max(1, n)
+  }
+  return true
+}
+
+// Non-units a self-scoped "animate" passive currently makes into minions:
+// cardId -> { power }. Only a card standing on a realm square (not carried, not
+// a site) can be animated, and only while the passive's condition holds -- so a
+// conditional animation switches on and off with the board, like any passive.
+const passiveAnimated = computed(() => {
+  const out = {}
+  for (const c of Object.values(state.cards)) {
+    // Sites animate only through an effect: leaving Rubble behind is a one-way
+    // change a condition switching off couldn't undo.
+    if (c.unit || c.avatar || c.site || state.carry[c.id]) continue
+    const z = zoneOf(c.id) || ''
+    if (!/^cell:\d+:(top|bot)$/.test(z) && !(c.aura && /^aura:\d+$/.test(z))) continue
+    for (const a of c.abilities || []) {
+      if (a.kind !== 'passive' || a.scope !== 'self' || !a.passive?.animate) continue
+      if (!passiveConditionMet(c.id, a.condition)) continue
+      out[c.id] = {
+        power: Number(a.passive.animatePower) || 0,
+        powerRef: a.passive.animatePowerRef,
+        powerBonus: Number(a.passive.animatePowerBonus) || 0,
+      }
+      break
+    }
+  }
+  return out
+})
+
+// Where an animated object's power comes from: a fixed number, or one of the
+// card's own characteristics (plus a bonus), so "a minion with power equal to
+// its mana cost" is authored once and follows the card.
+export const ANIMATE_POWER_REFS = ['literal', 'manaCost', 'thresholdCost', 'totalCost']
+
+export function animatedPower(cardId, spec) {
+  const ref = spec?.powerRef || 'literal'
+  if (ref === 'literal') return Math.max(0, Number(spec?.power) || 0)
+  const cost = state.cards[cardId]?.spellCost || {}
+  const mana = Number(cost.mana) || 0
+  const threshold = ELEMENTS.reduce((n, el) => n + (Number(cost[el]) || 0), 0)
+  const base = ref === 'manaCost' ? mana : ref === 'thresholdCost' ? threshold : mana + threshold
+  return Math.max(0, base + (Number(spec?.powerBonus) || 0))
+}
+
+// A card's animation in force, from an effect or a passive, or null.
+export function animationOf(cardId) {
+  const a = state.animated?.[cardId]
+  if (a && !animationExpired(cardId, a, false)) return a
+  return passiveAnimated.value[cardId] || null
+}
+
+// How long an effect's animation lasts. Puzzles are a single turn, so there is
+// no "until end of turn": that is simply 'permanent' (until it leaves the realm).
+export const ANIMATE_DURATIONS = ['permanent', 'taps', 'damaged', 'sourceLeaves']
+
+// Has an effect's animation run out? Checked live (so undo simply restores it),
+// except 'damaged', which is settled only after deaths resolve: a hit big enough
+// to kill it must kill it as a minion rather than first turning it back into an
+// object that shrugs the damage off.
+function animationExpired(cardId, a, includeDamage) {
+  switch (a.duration) {
+    case 'taps':
+      return !a.tapped0 && !!state.tapped[cardId]
+    case 'damaged':
+      return includeDamage && (state.damage[cardId] || 0) > (a.damage0 || 0)
+    case 'sourceLeaves': {
+      if (!a.sourceId || a.sourceId === cardId) return false
+      return !['realm', 'aura'].includes(zoneCategory(zoneOf(a.sourceId)))
+    }
+    default:
+      return false
+  }
+}
+
+// Tidy up animations that have run out, as a consequence of `entry`: announce
+// it, and put an animated site back into a site slot -- its current square's if
+// that is empty or only Rubble (which it replaces), else it goes to its
+// cemetery, as a site can't stand on a square's surface. Undo rides the entry's
+// prevAnimated / structural snapshots.
+function settleAnimations(entry) {
+  for (const id of Object.keys(state.animated || {})) {
+    const a = state.animated[id]
+    if (!animationExpired(id, a, true)) continue
+    delete state.animated[id]
+    const c = state.cards[id]
+    if (!c) continue
+    let text = `${cardName(id)} is no longer animated.`
+    const m = /^cell:(\d+):(top|bot)$/.exec(zoneOf(id) || '')
+    if (c.site && m) {
+      snapshotStructural(entry)
+      removeFromZones(state.zones, id)
+      const slot = `site:${m[1]}`
+      const occupant = state.zones[slot][0]
+      if (occupant && state.cards[occupant]?.token === 'rubble') {
+        state.zones[slot].splice(0, 1)
+      }
+      if (!state.zones[slot].length) {
+        state.zones[slot].push(id)
+        text = `${cardName(id)} settles back into a site.`
+      } else {
+        const grave = `grave:${sideOf(id)}`
+        state.zones[grave].push(id)
+        shedInPlayState(id, grave, entry)
+        text = `${cardName(id)} has no site to return to and goes to the cemetery.`
+      }
+    }
+    state.events.push({ id: uid(), seq: entry?.seq, cardId: id, name: 'Animation ends', text })
+  }
+}
+export const isAnimated = (cardId) => !!animationOf(cardId)
+
+// ---------- global passives: swapped cemeteries, cemetery tax ----------
+
+// Passives that apply from where their card is in play (realm, site slots,
+// intersections), condition met and source not silenced: [{ card, a }].
+function passivesInPlay() {
+  const out = []
+  for (const card of Object.values(state.cards)) {
+    if (!['realm', 'aura'].includes(cardZoneCategory(card.id))) continue
+    if (isSilenced(card.id)) continue
+    for (const a of passivesOf(card)) out.push({ card, a })
+  }
+  return out
+}
+
+// "You consider your opponent's cemetery yours, and vice versa." A swap, not a
+// share: each player's cemetery is the opponent's, and their own is not theirs.
+export function cemeteriesSwapped() {
+  return passivesInPlay().some(({ a }) => a.passive.swapCemeteries)
+}
+
+// Extra mana `side` pays to interact with a cemetery card right now.
+export function cemeteryTaxFor(side) {
+  let tax = 0
+  for (const { card, a } of passivesInPlay()) {
+    const n = Number(a.passive.cemeteryTax) || 0
+    if (!n) continue
+    const mine = sideOf(card.id) === side
+    const on = a.passive.cemeteryTaxOn || 'everyone'
+    if (on === 'everyone' || (on === 'you' && mine) || (on === 'opponent' && !mine)) tax += n
+  }
+  return tax
+}
+
+// Who casts this card from where it lies: a permit names its caster; with
+// cemeteries swapped, a cemetery card belongs to the other side's "own"
+// cemetery (the solver casts the opponent's graveyard cards, not their own);
+// otherwise its controller.
+export function castSide(cardId) {
+  const permit = state.castPermits[cardId]
+  if (permit) return permit.side
+  if (cardZoneCategory(cardId) === 'cemetery' && cemeteriesSwapped())
+    return sideOf(cardId) === 'player' ? 'opponent' : 'player'
+  return sideOf(cardId)
+}
+
+// Hand a card to `side`, remembering the change so undo/reset can reverse it.
+function takeControl(cardId, side) {
+  const c = state.cards[cardId]
+  if (!c || sideOf(cardId) === side) return
+  c.enemy = side === 'opponent'
+  if (state.controlFlips[cardId]) delete state.controlFlips[cardId]
+  else state.controlFlips[cardId] = true
+}
+
+// Bring control back in line with a snapshot of the flips map (undo).
+function restoreControlFlips(prev) {
+  const ids = new Set([...Object.keys(state.controlFlips), ...Object.keys(prev || {})])
+  for (const id of ids) {
+    if (!!state.controlFlips[id] !== !!prev?.[id] && state.cards[id]) {
+      state.cards[id].enemy = !state.cards[id].enemy
+    }
+  }
+  state.controlFlips = clone(prev || {})
+}
+const revertControlFlips = () => restoreControlFlips({})
+
+// How many more times this card may activate this ability this turn (Infinity
+// when unlimited). Counted from the logged moves, so undo gives a use back and
+// a reset clears them all.
+export function abilityUsesLeft(cardId, ability) {
+  const limit = Number(ability?.cost?.perTurn) || 0
+  if (!limit) return Infinity
+  const list = state.recording ? state.draft : state.moves
+  const used = list.filter(
+    (m) => m.type === 'ability' && m.cardId === cardId && m.abilityId === ability.id
+  ).length
+  return Math.max(0, limit - used)
+}
+
+// An activated ability's mana cost now: its printed cost, plus any cemetery
+// tax when it picks cemetery cards.
+export function abilityManaCost(cardId, ability) {
+  let mana = Number(ability?.cost?.mana) || 0
+  const t = ability?.target
+  if (t?.mode === 'card' && t.required && t.from === 'cemetery') {
+    mana += cemeteryTaxFor(sideOf(cardId))
+  }
+  return mana
+}
+
+// ---------- oversized minions (animated auras) ----------
+
+// An animated aura on an intersection is an oversized minion: it occupies the
+// surface of all four squares around that crossing and moves crossing to
+// crossing. Taken off an intersection it is an ordinary one-square minion.
+function oversizedAt(cardId) {
+  const c = state.cards[cardId]
+  if (!c?.aura || !animationOf(cardId)) return null
+  const m = /^aura:(\d+)$/.exec(zoneOf(cardId) || '')
+  return m ? Number(m[1]) : null
+}
+export const isOversized = (cardId) => oversizedAt(cardId) != null
+
+// The four squares around intersection `i`, top-left first.
+export function intersectionSquares(i) {
+  const r = Math.floor(i / INTERSECTION_COLS)
+  const c = i % INTERSECTION_COLS
+  const tl = r * GRID_COLS + c
+  return [tl, tl + 1, tl + GRID_COLS, tl + GRID_COLS + 1]
+}
+
+// Every square a unit occupies (four for an oversized one), or [] off-board.
+export function squaresOf(cardId) {
+  const i = oversizedAt(cardId)
+  if (i != null) return intersectionSquares(i)
+  const n = nodeOf(cardId)
+  return n ? [n.sq] : []
+}
+
+// Intersections an oversized unit can reach within its movement: a step goes
+// to an orthogonally neighbouring crossing (diagonal too while Airborne), and it
+// may only stand where none of its four squares is void, unless it Voidwalks.
+function reachableIntersections(unitId) {
+  const start = oversizedAt(unitId)
+  const set = new Set()
+  if (start == null || isDisabled(unitId)) return set
+  const kw = effectiveKeywords(unitId)
+  const standable = (i) =>
+    kw.has('voidwalk') ||
+    intersectionSquares(i).every((sq) => regionOf(sq, 'top') !== 'void')
+  set.add(start)
+  let frontier = [start]
+  for (let d = 0; d < effectiveMovement(unitId); d++) {
+    const next = []
+    for (const f of frontier) {
+      const fr = Math.floor(f / INTERSECTION_COLS)
+      const fc = f % INTERSECTION_COLS
+      for (let dr = -1; dr <= 1; dr++) {
+        for (let dc = -1; dc <= 1; dc++) {
+          if (!dr && !dc) continue
+          if (dr && dc && !kw.has('airborne')) continue
+          const r = fr + dr
+          const c = fc + dc
+          if (r < 0 || c < 0 || r >= INTERSECTION_ROWS || c >= INTERSECTION_COLS) continue
+          const g = r * INTERSECTION_COLS + c
+          if (set.has(g) || !standable(g)) continue
+          set.add(g)
+          next.push(g)
+        }
+      }
+    }
+    frontier = next
+  }
+  return set
+}
+
+// Oversized units standing on a square (they are in an aura zone, not a cell).
+function oversizedOnSquare(idx) {
+  const out = []
+  for (let i = 0; i < INTERSECTIONS; i++) {
+    for (const id of state.zones[`aura:${i}`] || []) {
+      if (isOversized(id) && intersectionSquares(i).includes(idx)) out.push(id)
+    }
+  }
+  return out
+}
 
 // The units a passive on `sourceId` reaches. Area scopes are region-aware (same
 // region as the source) and drop the source itself; side suffixes filter by
@@ -554,9 +916,12 @@ function unitsInScope(sourceId, scope) {
   for (const u of boardUnits()) {
     if (u.id === sourceId) continue
     if (u.region !== src.region) continue
-    const inRange = near
-      ? areNearby(src.square, u.square)
-      : areAdjacent(src.square, u.square) && src.square !== u.square
+    // Oversized units cover four squares: in range if any pair of squares is.
+    const inRange = (src.squares || [src.square]).some((a) =>
+      (u.squares || [u.square]).some((b) =>
+        near ? areNearby(a, b) : areAdjacent(a, b) && a !== b
+      )
+    )
     if (!inRange) continue
     const sameSide = !!u.card.enemy === !!srcCard.enemy
     if (wantFriendly && !sameSide) continue
@@ -566,12 +931,94 @@ function unitsInScope(sourceId, scope) {
   return out
 }
 
+// The squares a source "is" on: an aura's four around its intersection, an
+// (oversized) unit's own square(s), a site's square, or a carried card's
+// carrier's square. [] off the board.
+function areaSquares(sourceId) {
+  const m = /^aura:(\d+)$/.exec(zoneOf(sourceId) || '')
+  if (m) return intersectionSquares(Number(m[1]))
+  const sq = squaresOf(sourceId)
+  if (sq.length) return sq
+  const site = squareOfSite(sourceId)
+  return site == null ? [] : [site]
+}
+
+// The board square a non-unit card sits on (carried cards: their carrier's).
+function cardSquare(id) {
+  const m = /^(?:cell|site):(\d+)/.exec(zoneOf(id) || '')
+  return m ? Number(m[1]) : null
+}
+
+// Every card a passive on `sourceId` reaches, by its scope and `affects` kinds.
+// Units use the region-aware unit scopes; sites and artifacts are matched by
+// square (the aura's area, or the ring around the source). Side suffixes filter
+// by controller. Never includes the source itself.
+function passiveTargets(sourceId, a) {
+  const scope = a.scope
+  if (scope === 'self') return [sourceId]
+  const srcCard = state.cards[sourceId]
+  if (!srcCard) return []
+  const affects = a.passive?.affects || ['units']
+  const wantFriendly = scope.endsWith('friendly')
+  const wantEnemy = scope.endsWith('enemy')
+  const sideOk = (id) => {
+    const same = !!state.cards[id]?.enemy === !!srcCard.enemy
+    return !(wantFriendly && !same) && !(wantEnemy && same)
+  }
+  const area = scope.startsWith('aura-area')
+  const srcSquares = areaSquares(sourceId)
+  if (!srcSquares.length) return []
+  // The squares sites/artifacts are looked for on.
+  let squares
+  if (area) squares = srcSquares
+  else {
+    const near = scope.startsWith('nearby')
+    squares = []
+    for (let s = 0; s < GRID_SIZE; s++) {
+      if (srcSquares.includes(s)) continue
+      if (srcSquares.some((q) => (near ? areNearby(q, s) : areAdjacent(q, s)))) squares.push(s)
+    }
+  }
+  const out = new Set()
+  if (affects.includes('units')) {
+    if (area) {
+      // Units on those squares, in the chosen layer(s) (oversized ones -- always
+      // on the surface -- if any of their squares overlap).
+      const layers = a.passive?.unitLayers || 'surface'
+      for (const u of boardUnits()) {
+        if (u.id === sourceId || !sideOk(u.id)) continue
+        const below = /:bot$/.test(zoneOf(u.id) || '')
+        if (layers === 'surface' && below) continue
+        if (layers === 'below' && !below) continue
+        if ((u.squares || [u.square]).some((s) => squares.includes(s))) out.add(u.id)
+      }
+    } else {
+      for (const id of unitsInScope(sourceId, scope)) out.add(id)
+    }
+  }
+  if (affects.includes('sites')) {
+    for (const s of squares) {
+      const id = state.zones[`site:${s}`]?.[0]
+      if (id && id !== sourceId && sideOk(id)) out.add(id)
+    }
+  }
+  if (affects.includes('artifacts')) {
+    for (const c of Object.values(state.cards)) {
+      if (!c.artifact || c.id === sourceId || isUnit(c) || !sideOk(c.id)) continue
+      const sq = cardSquare(c.id)
+      if (sq != null && squares.includes(sq)) out.add(c.id)
+    }
+  }
+  return [...out]
+}
+
 function accumPassive(p, acc) {
   if (!p) return
   for (const k of p.keywords || []) acc.keywords.add(k)
   acc.movement += Number(p.movement) || 0
   acc.strength += Number(p.strength) || 0
   acc.ranged += Number(p.ranged) || 0
+  if (p.summonOnEnemySites) acc.summonOnEnemySites = true
 }
 
 // Every unit's continuous traits, derived from passive abilities (self and
@@ -589,10 +1036,21 @@ export const effective = computed(() => {
   for (const src of Object.values(cards)) {
     for (const a of passivesOf(src)) {
       if (!a.passive.silence && !a.passive.disable) continue
-      for (const tid of unitsInScope(src.id, a.scope)) {
+      if (a.scope === 'self') continue
+      for (const tid of passiveTargets(src.id, a)) {
         if (a.passive.silence) silenced.add(tid)
         if (a.passive.disable) disabled.add(tid)
       }
+    }
+  }
+
+  // Area passives from sources that still work, resolved once: id -> [passive].
+  const lent = {}
+  for (const src of Object.values(cards)) {
+    if (silenced.has(src.id) || disabled.has(src.id)) continue
+    for (const a of passivesOf(src)) {
+      if (a.scope === 'self') continue
+      for (const tid of passiveTargets(src.id, a)) (lent[tid] || (lent[tid] = [])).push(a)
     }
   }
 
@@ -600,18 +1058,18 @@ export const effective = computed(() => {
   for (const id of Object.keys(cards)) {
     const disabledHere = disabled.has(id)
     const silencedHere = silenced.has(id) || disabledHere
-    const acc = { keywords: new Set(), movement: 0, strength: 0, ranged: 0 }
+    const acc = {
+      keywords: new Set(),
+      movement: 0,
+      strength: 0,
+      ranged: 0,
+      summonOnEnemySites: false,
+    }
     if (!silencedHere) {
       for (const a of passivesOf(cards[id])) {
         if (a.scope === 'self') accumPassive(a.passive, acc)
       }
-      for (const src of Object.values(cards)) {
-        if (src.id === id || silenced.has(src.id) || disabled.has(src.id)) continue
-        for (const a of passivesOf(src)) {
-          if (a.scope === 'self') continue
-          if (unitsInScope(src.id, a.scope).includes(id)) accumPassive(a.passive, acc)
-        }
-      }
+      for (const a of lent[id] || []) accumPassive(a.passive, acc)
       for (const k of state.grantedKeywords[id] || []) acc.keywords.add(k)
     }
     map[id] = {
@@ -622,6 +1080,7 @@ export const effective = computed(() => {
       strengthMod: acc.strength + (state.strengthMod[id] || 0),
       silenced: silencedHere,
       disabled: disabledHere,
+      summonOnEnemySites: acc.summonOnEnemySites,
     }
   }
   return map
@@ -650,6 +1109,8 @@ const blockedByStealth = (sourceId, targetId) =>
 export const effectiveStrengthMod = (id) => traits(id)?.strengthMod || 0
 export const effectiveRanged = (id) => traits(id)?.ranged || 0
 export const isSilenced = (id) => !!traits(id)?.silenced
+// May be summoned onto an opponent-controlled site (a passive-granted trait).
+export const canSummonOnEnemySites = (id) => !!traits(id)?.summonOnEnemySites
 
 // The side a card belongs to.
 const sideOf = (id) => (state.cards[id]?.enemy ? 'opponent' : 'player')
@@ -665,8 +1126,16 @@ export function playerControls(cardId) {
 
 // Combat stats: base Power/Life from the card (authored, shown on the art),
 // modified in play. An avatar's Life is its side's life total.
-export const effectivePower = (id) =>
-  (state.cards[id]?.power || 0) + effectiveStrengthMod(id)
+export const effectivePower = (id) => basePower(id) + effectiveStrengthMod(id)
+
+// An animated object fights with its animation's power; a real unit (or
+// anything else) with the power printed on it.
+function basePower(id) {
+  const c = state.cards[id]
+  if (!c) return 0
+  const anim = !c.unit && !c.avatar ? animationOf(id) : null
+  return anim ? animatedPower(id, anim) : c.power || 0
+}
 
 // A minion has no separate Life -- its toughness IS its power (damage >= power
 // kills it). An optional `defense` overrides toughness for the few cards whose
@@ -677,7 +1146,7 @@ export function effectiveLife(id) {
   if (!c) return 0
   if (c.avatar) return state.stats[sideOf(id)]?.life || 0
   const d = c.defense
-  const base = d === '' || d == null ? c.power || 0 : Number(d) || 0
+  const base = d === '' || d == null || (!c.unit && animationOf(id)) ? basePower(id) : Number(d) || 0
   return base + effectiveStrengthMod(id)
 }
 export const isDisabled = (id) => !!traits(id)?.disabled
@@ -702,6 +1171,9 @@ const nodeKey = (sq, layer) => `${sq}:${layer}`
 
 function nodeOf(cardId) {
   const z = zoneOf(cardId)
+  // An oversized unit anchors on its top-left square (squaresOf has all four).
+  const big = oversizedAt(cardId)
+  if (big != null) return { sq: intersectionSquares(big)[0], layer: 'top' }
   let m = /^cell:(\d+):(top|bot)$/.exec(z || '')
   if (m) return { sq: Number(m[1]), layer: m[2] }
   m = /^site:(\d+)$/.exec(z || '')
@@ -759,6 +1231,13 @@ function neighborNodes(F) {
 export function reachableNodes(unitId) {
   const set = new Set()
   if (!isUnit(unitId) || isDisabled(unitId)) return set
+  // An oversized unit reaches every surface square under a crossing it can reach.
+  if (isOversized(unitId)) {
+    for (const i of reachableIntersections(unitId)) {
+      for (const sq of intersectionSquares(i)) set.add(nodeKey(sq, 'top'))
+    }
+    return set
+  }
   const start = nodeOf(unitId)
   if (!start) return set
   const kw = effectiveKeywords(unitId)
@@ -808,6 +1287,14 @@ export const tapBlockedBySickness = (cardId) => enforcing() && hasSummoningSickn
 // movement-gated (summoning from hand, etc.). A summon-sick unit can't move at
 // all: the Move action taps it (Move & Attack), so it is barred while enforcing.
 export function canMoveUnit(unitId, toZone) {
+  // An oversized unit moves crossing to crossing, never onto a single square.
+  if (isOversized(unitId)) {
+    if (/^cell:/.test(toZone || '')) return false
+    const a = /^aura:(\d+)$/.exec(toZone || '')
+    if (!a) return true
+    if (tapBlockedBySickness(unitId)) return false
+    return reachableIntersections(unitId).has(Number(a[1]))
+  }
   const m = /^cell:(\d+):(top|bot)$/.exec(toZone || '')
   if (!m) return true
   if (tapBlockedBySickness(unitId)) return false
@@ -825,7 +1312,12 @@ export function canAttack(attackerId, targetId) {
   if (!target || (!isUnit(targetId) && !target.site)) return false
   if (!oppositeSides(attackerId, targetId)) return false
   const t = nodeOf(targetId)
-  if (!t || !reachableNodes(attackerId).has(nodeKey(t.sq, t.layer))) return false
+  if (!t) return false
+  const reach = reachableNodes(attackerId)
+  const hit = isOversized(targetId)
+    ? squaresOf(targetId).some((sq) => reach.has(nodeKey(sq, 'top')))
+    : reach.has(nodeKey(t.sq, t.layer))
+  if (!hit) return false
   if (isUnit(targetId)) {
     const atk = effectiveKeywords(attackerId)
     const tgt = effectiveKeywords(targetId)
@@ -854,7 +1346,7 @@ export function armedMoveLegal(zone) {
 // ---------- ranged (line-of-fire) ----------
 
 function unitsOnSquare(idx) {
-  const out = []
+  const out = oversizedOnSquare(idx)
   for (const layer of ['top', 'bot']) {
     for (const id of state.zones[`cell:${idx}:${layer}`] || []) {
       if (isUnit(id)) out.push(id)
@@ -867,7 +1359,7 @@ function unitsOnSquare(idx) {
 // underwater). Region is a (square, layer) property, so this picks the layer(s)
 // whose region matches -- used to keep a ranged shot within one region.
 function unitsInRegionOnSquare(idx, region) {
-  const out = []
+  const out = regionOf(idx, 'top') === region ? oversizedOnSquare(idx) : []
   for (const layer of ['top', 'bot']) {
     if (regionOf(idx, layer) !== region) continue
     for (const id of state.zones[`cell:${idx}:${layer}`] || []) {
@@ -890,29 +1382,96 @@ export function rangedTargets(shooterId) {
   const range = effectiveRanged(shooterId)
   const start = nodeOf(shooterId)
   if (!range || isDisabled(shooterId) || !start) return set
-  const region = regionOf(start.sq, start.layer)
   // Origin square: same-region units standing with the shooter are optional
   // targets and never block the outgoing shot.
   for (const id of state.zones[`cell:${start.sq}:${start.layer}`] || []) {
     if (id !== shooterId && isUnit(id) && !isStealthed(id)) set.add(id)
   }
+  for (const hit of lineHits(start, range)) for (const id of hit.units) set.add(id)
+  return set
+}
+
+// Walk each of the four cardinal lines out from a (square, layer) node, staying
+// in the node's region, and stop at the first square holding a unit -- any
+// unit, friend or foe, blocks the line beyond it; Stealth units are transparent.
+// One record per direction that hits something: { dr, dc, sq, units }. A range
+// of 0 or less is unlimited (the line runs to the edge of the realm).
+function lineHits(start, range) {
+  const out = []
+  const region = regionOf(start.sq, start.layer)
+  const max = range > 0 ? range : Math.max(GRID_ROWS, GRID_COLS)
   const row = Math.floor(start.sq / GRID_COLS)
   const col = start.sq % GRID_COLS
   for (const [dr, dc] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
-    for (let step = 1; step <= range; step++) {
+    for (let step = 1; step <= max; step++) {
       const r = row + dr * step
       const c = col + dc * step
       if (r < 0 || r >= GRID_ROWS || c < 0 || c >= GRID_COLS) break
-      const units = unitsInRegionOnSquare(r * GRID_COLS + c, region).filter(
-        (id) => !isStealthed(id)
-      )
+      const sq = r * GRID_COLS + c
+      const units = unitsInRegionOnSquare(sq, region).filter((id) => !isStealthed(id))
       if (units.length) {
-        for (const id of units) set.add(id)
-        break // any unit (friend or foe) blocks the line beyond this square
+        out.push({ dr, dc, sq, units })
+        break
       }
     }
   }
-  return set
+  return out
+}
+
+// ---------- projectiles ----------
+
+// A projectile is fired from its source in one cardinal direction and flies in
+// a straight line like a Ranged shot (same region, blocked by the first unit,
+// Stealth transparent), but its distance is unlimited unless the ability gives
+// it a range. It stops at -- and hits -- the first unit in its path, so the
+// units it can hit are exactly the first occupied square in each direction;
+// choosing one of them is choosing the direction. Unlike a Ranged shot it
+// leaves its origin, so units sharing the source's location are never hit.
+//
+// A source that isn't on the board (a spell cast from hand) fires from its
+// controller's avatar.
+function projectileOrigin(sourceId) {
+  const own = nodeOf(sourceId)
+  if (own) return own
+  const side = sideOf(sourceId)
+  for (const id of Object.keys(state.cards)) {
+    if (isAvatar(id) && sideOf(id) === side) {
+      const n = nodeOf(id)
+      if (n) return n
+    }
+  }
+  return null
+}
+
+// The units a projectile from this source could hit, each mapped to the line
+// record (direction, square) that reaches it.
+export function projectileTargets(sourceId, range = 0) {
+  const hits = new Map()
+  const start = projectileOrigin(sourceId)
+  if (!start) return hits
+  for (const hit of lineHits(start, range)) {
+    for (const id of hit.units) hits.set(id, hit)
+  }
+  return hits
+}
+
+// A square on the projectile's line relative to the unit it hit: -1 is where
+// it stopped (the square just before the hit, toward the source), +1 the square
+// past the hit (knockback). Same layer as the hit unit; null off the board or
+// when the target isn't in a straight line from the source.
+function projectileStep(sourceId, targetId, step) {
+  const o = projectileOrigin(sourceId)
+  const t = nodeOf(targetId)
+  if (!o || !t) return null
+  const or = Math.floor(o.sq / GRID_COLS)
+  const oc = o.sq % GRID_COLS
+  const tr = Math.floor(t.sq / GRID_COLS)
+  const tc = t.sq % GRID_COLS
+  if (or !== tr && oc !== tc) return null
+  const r = tr + Math.sign(tr - or) * step
+  const c = tc + Math.sign(tc - oc) * step
+  if (r < 0 || r >= GRID_ROWS || c < 0 || c >= GRID_COLS) return null
+  return `cell:${r * GRID_COLS + c}:${t.layer}`
 }
 
 export const canShoot = (shooterId, targetId) =>
@@ -956,9 +1515,9 @@ function sendToCemetery(unitId, entry, name, text) {
   snapshotStructural(entry)
   removeFromZones(state.zones, unitId)
   state.zones[`grave:${side}`].push(unitId)
-  shedInPlayState(unitId, `grave:${side}`)
   state.events.push({ id: uid(), seq: entry.seq, cardId: unitId, name, text })
   emitFx('death', { cardId: unitId })
+  shedInPlayState(unitId, `grave:${side}`, entry)
   fireTriggers({ type: 'move', cardId: unitId, from, to: `grave:${side}`, seq: entry.seq })
 }
 
@@ -969,11 +1528,13 @@ function sendToCemetery(unitId, entry, name, text) {
 function resolveDeaths(entry, lethalHit) {
   for (const u of boardUnits()) {
     if (u.card.avatar) continue
-    if (!zoneOf(u.id)?.startsWith('cell:')) continue
+    if (!zoneOf(u.id)?.startsWith('cell:') && !isOversized(u.id)) continue
     const dmg = state.damage[u.id] || 0
     if (!lethalHit.has(u.id) && dmg < Math.max(1, effectiveLife(u.id))) continue
     sendToCemetery(u.id, entry, 'Slain', `${cardName(u.id)} was slain.`)
   }
+  // Survivors animated "until damaged" now revert.
+  settleAnimations(entry)
 }
 
 // A fight: both combatants strike simultaneously (a site deals nothing back),
@@ -1083,6 +1644,7 @@ export const EFFECT_OPS = [
   'tap',
   'dealDamage',
   'gridDamage',
+  'strike',
   'modifyStrength',
   'grantKeyword',
   'move',
@@ -1094,6 +1656,9 @@ export const EFFECT_OPS = [
   'release',
   'flood',
   'unflood',
+  'summonToken',
+  'animate',
+  'banishAndCast',
 ]
 
 // Authoring options for a grid target.
@@ -1101,12 +1666,124 @@ export const TARGET_MODES = ['card', 'grid']
 export const GRID_ORIGINS = ['self', 'pick']
 export const GRID_SHAPES = ['location', 'adjacent', 'nearby']
 // Card-target restrictions relative to the source, and by side.
-export const TARGET_WITHIN = ['any', 'adjacent', 'nearby']
+// 'projectile' = the first unit hit by a projectile fired in a cardinal
+// direction (see projectileTargets); `target.range` limits its flight, 0 = no
+// limit.
+export const TARGET_WITHIN = ['any', 'adjacent', 'nearby', 'projectile']
 export const TARGET_SIDES = ['any', 'friendly', 'enemy']
-// Where a `move` effect sends its subject.
-export const LOCATION_REFS = ['sourceLocation', 'targetLocation']
+// Where a `move` effect sends its subject. 'picked' asks the player for a
+// destination when the ability resolves (or uses a grid ability's picked square).
+// With a projectile target, 'projectileStop' is the square the projectile
+// stopped in (just before the unit it hit) and 'projectileBeyond' the square
+// past that unit (knockback).
+export const LOCATION_REFS = [
+  'sourceLocation',
+  'targetLocation',
+  'picked',
+  'projectileStop',
+  'projectileBeyond',
+]
+// How a `move` effect moves its subject. Both are forced movement -- the unit
+// takes no step of its own, so Immobile doesn't stop it. Teleportation may
+// cross regions by default; other forced movement (push/pull/drag) may not.
+export const MOVE_KINDS = ['teleport', 'forced']
+// How far a picked destination may be from the moving unit. Only locations in
+// the same region are adjacent/nearby one another, so those reaches never
+// change region; 'any' reaches anywhere in the realm.
+export const MOVE_REACH = ['adjacent', 'nearby', 'any']
+
+// Tokens an ability can generate. Minion tokens enter the realm like a summon
+// (not movement); a lance is a carriable artifact; a ward is a Ward granted to a
+// unit.
+export const TOKEN_KINDS = ['soldier', 'skeleton', 'frog', 'lance', 'ward']
+const TOKEN_DEFS = {
+  soldier: { name: 'Foot Soldier', unit: true, power: 1 },
+  skeleton: { name: 'Skeleton', unit: true, power: 1 },
+  frog: { name: 'Frog', unit: true, power: 1 },
+  lance: { name: 'Lance', artifact: true, lanceToken: true },
+  // Left in a site's place when the site is animated: a land site that
+  // provides no mana or threshold. Not offered by summonToken.
+  rubble: { name: 'Rubble', site: true },
+}
+// Every kind a card can be designated as the template of (Rubble included: it
+// is generated by animating a site).
+export const TOKEN_TEMPLATE_KINDS = [...TOKEN_KINDS, 'rubble']
+export const TOKEN_NAMES = {
+  soldier: 'Foot Soldier',
+  skeleton: 'Skeleton',
+  frog: 'Frog',
+  lance: 'Lance',
+  ward: 'Ward',
+  rubble: 'Rubble',
+}
+
+// The card the author designated as a token kind's template (its art, name and
+// abilities), or null to fall back to the plain generated face. Prefers one on
+// the same side, so each player's tokens can have their own art.
+export function tokenTemplate(kind, enemy) {
+  let any = null
+  for (const c of Object.values(state.cards)) {
+    if (c.generated || c.tokenKind !== kind) continue
+    if (!!c.enemy === !!enemy) return c
+    any = any || c
+  }
+  return any
+}
+
+// Designate a card as a token kind's template ('' clears it). A template takes
+// the type its kind needs, so a Lance template is a carriable lance artifact, a
+// Rubble template a site, and a minion token's template a minion.
+export function setTokenTemplate(cardId, kind) {
+  const card = state.cards[cardId]
+  if (!card) return
+  const was = card.tokenKind
+  card.tokenKind = TOKEN_TEMPLATE_KINDS.includes(kind) ? kind : ''
+  if (was === 'lance' && card.tokenKind !== 'lance') card.lanceToken = false
+  const def = TOKEN_DEFS[card.tokenKind]
+  if (!def) return
+  if (def.unit) {
+    card.unit = true
+    card.site = card.aura = card.artifact = card.monument = card.magic = false
+    card.lanceToken = false
+  }
+  if (def.artifact) {
+    card.artifact = true
+    card.lanceToken = !!def.lanceToken
+    card.unit = card.avatar = card.site = card.aura = card.monument = card.magic = false
+  }
+  if (def.site) {
+    card.site = true
+    card.unit = card.avatar = card.aura = card.artifact = card.monument = card.magic = false
+    card.manaProvided = 0
+  }
+}
+
+// Where a generated token appears:
+//   self / target            -- on that unit (lance: carried by it; ward: granted)
+//   selfSurface / selfBelow  -- the source's square, surface or subsurface
+//   targetLocation           -- wherever the target is
+//   adjacent / nearby        -- a square the player picks near the source
+//   anySite                  -- any square with a site, picked by the player
+export const TOKEN_LOCATIONS = [
+  'self',
+  'target',
+  'selfSurface',
+  'selfBelow',
+  'targetLocation',
+  'adjacent',
+  'nearby',
+  'anySite',
+]
+// The locations that make sense for each token kind, for the editor.
+export function tokenLocationsFor(kind) {
+  if (kind === 'ward') return ['self', 'target']
+  if (kind === 'lance') return TOKEN_LOCATIONS
+  return TOKEN_LOCATIONS.filter((l) => l !== 'self' && l !== 'target')
+}
+const PICKED_TOKEN_LOCATIONS = ['adjacent', 'nearby', 'anySite']
 // How a damage/strength amount is computed.
-export const AMOUNT_REFS = ['literal', 'carriedCount', 'waterBodySize']
+// 'power' is the source unit's current combat power (what it would strike for).
+export const AMOUNT_REFS = ['literal', 'power', 'carriedCount', 'waterBodySize']
 
 // Whose action fires a trigger: the card's own move, anyone's, or one side's.
 export const TRIGGER_SUBJECTS = ['self', 'any', 'enemy', 'friendly']
@@ -1126,6 +1803,7 @@ export const TARGET_FILTERS = [
   'aura',
   'artifact',
   'monument',
+  'spell',
 ]
 
 // Boolean keyword abilities a passive can grant. Base ones live on the card art
@@ -1156,6 +1834,35 @@ export const PASSIVE_SCOPES = [
   'nearby-enemy',
   'adjacent-friendly',
   'adjacent-enemy',
+  // Where the source is: an aura's four squares around its intersection (any
+  // other card: its own square). Surface units, the sites, and artifacts there.
+  'aura-area',
+  'aura-area-friendly',
+  'aura-area-enemy',
+]
+// What kinds of card a non-self passive reaches.
+export const PASSIVE_AFFECTS = ['units', 'sites', 'artifacts']
+// Which layer's units an aura-area passive reaches: the surface, below the
+// site (underground / underwater), or both.
+export const UNIT_LAYERS = ['surface', 'below', 'both']
+
+// Whom a passive's cemetery tax applies to, relative to its controller.
+export const CEMETERY_TAX_ON = ['everyone', 'opponent', 'you']
+
+// "Only while" conditions a passive can carry. Amount-based ones read the
+// controller's stats; board ones read where the card stands.
+export const PASSIVE_CONDITIONS = [
+  'always',
+  'onWater',
+  'onLand',
+  'unitsNearby',
+  'lifeAtMost',
+  'lifeAtLeast',
+  'manaAtLeast',
+  'thresholdAtLeast',
+  'untapped',
+  'tapped',
+  'damaged',
 ]
 
 // Coerce any stored/partial ability into the full shape the editor and runtime
@@ -1178,6 +1885,37 @@ export function normalizeAbility(a = {}) {
       ranged: Number(a.passive?.ranged) || 0,
       silence: !!a.passive?.silence,
       disable: !!a.passive?.disable,
+      // May be summoned onto an opponent-controlled site. A trait rather than a
+      // card flag so a future aura scope can lend it to other cards.
+      summonOnEnemySites: !!a.passive?.summonOnEnemySites,
+      // Which kinds of card an area passive reaches (units only, by default).
+      affects: Array.isArray(a.passive?.affects)
+        ? a.passive.affects.filter((k) => PASSIVE_AFFECTS.includes(k))
+        : ['units'],
+      unitLayers: UNIT_LAYERS.includes(a.passive?.unitLayers) ? a.passive.unitLayers : 'surface',
+      // This (non-unit) card becomes a minion with this power while the passive
+      // applies. Self scope only.
+      animate: !!a.passive?.animate,
+      animatePower: a.passive?.animatePower == null ? 1 : Number(a.passive.animatePower) || 0,
+      animatePowerRef: ANIMATE_POWER_REFS.includes(a.passive?.animatePowerRef)
+        ? a.passive.animatePowerRef
+        : 'literal',
+      animatePowerBonus: Number(a.passive?.animatePowerBonus) || 0,
+      // Both players treat both cemeteries as their own while this applies.
+      swapCemeteries: !!a.passive?.swapCemeteries,
+      // Extra mana to interact with cemetery cards (cast one, or use an
+      // ability that targets one), and whom it taxes.
+      cemeteryTax: Number(a.passive?.cemeteryTax) || 0,
+      cemeteryTaxOn: CEMETERY_TAX_ON.includes(a.passive?.cemeteryTaxOn)
+        ? a.passive.cemeteryTaxOn
+        : 'everyone',
+    },
+    // Passive-only: the passive applies only while this holds.
+    condition: {
+      type: PASSIVE_CONDITIONS.includes(a.condition?.type) ? a.condition.type : 'always',
+      amount: Number(a.condition?.amount) || 0,
+      element: ELEMENTS.includes(a.condition?.element) ? a.condition.element : 'fire',
+      side: TARGET_SIDES.includes(a.condition?.side) ? a.condition.side : 'any',
     },
     trigger: {
       action: a.trigger?.action || 'move',
@@ -1188,6 +1926,9 @@ export function normalizeAbility(a = {}) {
     cost: {
       mana: Number(a.cost?.mana) || 0,
       tap: !!a.cost?.tap,
+      // Activations allowed per turn; 0 = unlimited. A puzzle is one turn, so
+      // this is per attempt.
+      perTurn: Math.max(0, Number(a.cost?.perTurn) || 0),
       // Elemental threshold required (checked, not spent) -- used by spell casts.
       threshold: {
         air: Number(a.cost?.threshold?.air) || 0,
@@ -1219,8 +1960,11 @@ export function normalizeAbility(a = {}) {
         : 'location',
       throughLayers: !!a.target?.throughLayers,
       prompt: a.target?.prompt || '',
+      // Card mode, activated: how many different cards to pick (e.g. "banish
+      // three spells from your cemetery").
+      count: Math.max(1, Number(a.target?.count) || 1),
     },
-    effects: Array.isArray(a.effects) ? clone(a.effects) : [],
+    effects: Array.isArray(a.effects) ? a.effects.map(normalizeEffect) : [],
     loseWhen: a.loseWhen || 'never',
   }
 }
@@ -1263,11 +2007,30 @@ function newEffect(op = 'adjustStat') {
   if (op === 'tap') e.who = 'self'
   if (op === 'dealDamage') Object.assign(e, { who: 'target', amount: 1, amountRef: 'literal' })
   if (op === 'gridDamage') Object.assign(e, { amount: 1, amountRef: 'literal' })
+  if (op === 'strike') e.who = 'target'
   if (op === 'modifyStrength') Object.assign(e, { who: 'target', amount: 1 })
   if (op === 'grantKeyword') Object.assign(e, { who: 'target', keyword: 'airborne' })
-  if (op === 'move') Object.assign(e, { who: 'target', to: 'sourceLocation' })
+  if (op === 'move')
+    Object.assign(e, {
+      who: 'target',
+      to: 'sourceLocation',
+      kind: 'teleport',
+      reach: 'nearby',
+      crossRegions: true,
+    })
+  if (op === 'summonToken')
+    Object.assign(e, { token: 'soldier', count: 1, at: 'selfSurface', side: 'self', power: 1 })
   if (op === 'destroy' || op === 'banish' || op === 'bounce') e.who = 'target'
   if (op === 'heal') e.who = 'self'
+  if (op === 'banishAndCast') Object.assign(e, { who: 'target', free: false })
+  if (op === 'animate')
+    Object.assign(e, {
+      who: 'target',
+      power: 1,
+      powerRef: 'literal',
+      powerBonus: 0,
+      duration: 'permanent',
+    })
   // Flood/unflood a site: whose square, and whether the whole connected body of
   // water is drained (unflood) rather than the single targeted site.
   if (op === 'flood' || op === 'unflood') Object.assign(e, { who: 'target', scope: 'site' })
@@ -1281,6 +2044,45 @@ export function addEffect(ability, op = 'adjustStat') {
 
 export function removeEffect(ability, i) {
   ability.effects.splice(i, 1)
+}
+
+// Back-fill params added to an op after puzzles were saved with it, so older
+// files load with sensible defaults. A move saved before kinds existed keeps its
+// old behavior: a teleport that goes anywhere.
+function normalizeEffect(eff) {
+  const e = clone(eff)
+  if (e.op === 'animate') {
+    if (!ANIMATE_POWER_REFS.includes(e.powerRef)) e.powerRef = 'literal'
+    e.powerBonus = Number(e.powerBonus) || 0
+    if (!ANIMATE_DURATIONS.includes(e.duration)) e.duration = 'permanent'
+  }
+  if (e.op === 'move') {
+    if (!MOVE_KINDS.includes(e.kind)) e.kind = 'teleport'
+    if (!MOVE_REACH.includes(e.reach)) e.reach = 'nearby'
+    if (typeof e.crossRegions !== 'boolean') e.crossRegions = e.kind === 'teleport'
+  }
+  if (e.op === 'summonToken') {
+    if (!TOKEN_KINDS.includes(e.token)) e.token = 'soldier'
+    if (!tokenLocationsFor(e.token).includes(e.at)) e.at = tokenLocationsFor(e.token)[0]
+    e.count = Math.max(1, Number(e.count) || 1)
+    e.side = e.side === 'enemy' ? 'enemy' : 'self'
+    e.power = e.power == null ? 1 : Number(e.power) || 0
+  }
+  return e
+}
+
+// Switching a move between teleport and other forced movement resets whether it
+// may change region to that kind's rule.
+export function setMoveKind(eff, kind) {
+  eff.kind = kind
+  eff.crossRegions = kind === 'teleport'
+}
+
+// Switching token kind keeps the location only if the new kind supports it.
+export function setTokenKind(eff, kind) {
+  eff.token = kind
+  const ok = tokenLocationsFor(kind)
+  if (!ok.includes(eff.at)) eff.at = ok[0]
 }
 
 // Re-default an effect's params when its op changes in the editor, so a stale
@@ -1342,10 +2144,12 @@ export function setDragGhost(e, imgEl, width = 90) {
 // cards dropped on a site slot land on the surface instead.
 function routeZone(cardId, to) {
   const card = state.cards[cardId]
+  // An animated site has left its slot to stand as a minion; route it like one.
+  const asSite = card?.site && !animationOf(cardId)
   const cellMatch = /^cell:(\d+):(top|bot)$/.exec(to)
-  if (cellMatch) return card?.site ? `site:${cellMatch[1]}` : to
+  if (cellMatch) return asSite ? `site:${cellMatch[1]}` : to
   const siteMatch = /^site:(\d+)$/.exec(to)
-  if (siteMatch) return card?.site ? to : `cell:${siteMatch[1]}:top`
+  if (siteMatch) return asSite ? to : `cell:${siteMatch[1]}:top`
   return to
 }
 
@@ -1438,8 +2242,8 @@ function applyMoveTaps(card, from, to, shouldTap) {
   if (
     isUnit(card) &&
     shouldTap &&
-    from.startsWith('cell:') &&
-    to.startsWith('cell:')
+    ((from.startsWith('cell:') && to.startsWith('cell:')) ||
+      (from.startsWith('aura:') && to.startsWith('aura:')))
   ) {
     state.tapped[card.id] = true
   }
@@ -1450,17 +2254,49 @@ function applyMoveTaps(card, from, to, shouldTap) {
   }
 }
 
+// A token that leaves the realm ceases to exist: it is taken out of whatever
+// zone it just landed in (after any death triggers keyed to its move, which
+// fire off the entry regardless). Tokens are generated cards and cards the
+// author designated as a token kind. Only while solving/recording -- the editor
+// moves them freely. Undo rides the entry's structural snapshot, taken here
+// after the card landed, so undoing the causing move puts it back.
+function vanishToken(cardId, toZone, entry) {
+  const c = state.cards[cardId]
+  if (!c || !(c.generated || c.tokenKind)) return
+  if (!state.recording && state.mode !== 'play') return
+  if (!state.zones[toZone]?.includes(cardId)) return
+  if (entry) snapshotStructural(entry)
+  removeFromZones(state.zones, cardId)
+  // Anything it was carrying goes with it to that zone rather than being
+  // orphaned in `carry` with no carrier.
+  for (const held of carriedBy(cardId)) {
+    delete state.carry[held]
+    delete state.grants[held]
+    state.zones[toZone].push(held)
+  }
+  state.events.push({
+    id: uid(),
+    seq: entry?.seq,
+    cardId,
+    name: 'Token gone',
+    text: `${cardName(cardId)} is a token and ceases to exist.`,
+  })
+}
+
 // Leaving the realm makes a card a fresh object: it sheds every in-play change
 // -- damage counters, strength counters, keywords granted during play, and the
 // once-per-life Ward/Stealth flags -- and untaps. Called wherever a card is put
 // into a non-realm zone; a no-op when it lands back in the realm (or never had
 // any of this state). Undo-safe as long as the causing entry already snapshotted
 // these maps (prevDamage/prevStrengthMod/... in logEntry), so clear only after.
-function shedInPlayState(cardId, toZone) {
-  if (zoneCategory(toZone) === 'realm') return
+function shedInPlayState(cardId, toZone, entry) {
+  // Intersections are part of the realm too (an animated aura steps between them).
+  if (['realm', 'aura'].includes(zoneCategory(toZone))) return
+  vanishToken(cardId, toZone, entry)
   delete state.damage[cardId]
   delete state.strengthMod[cardId]
   delete state.grantedKeywords[cardId]
+  delete state.animated[cardId]
   delete state.wardBroken[cardId]
   delete state.stealthLost[cardId]
   delete state.summoned[cardId]
@@ -1484,8 +2320,8 @@ function moveCardImpl(cardId, from, to, { tapOnMove } = {}) {
   if (
     enforcing() &&
     isUnit(cardId) &&
-    from.startsWith('cell:') &&
-    to.startsWith('cell:') &&
+    ((from.startsWith('cell:') && to.startsWith('cell:')) ||
+      (isOversized(cardId) && to.startsWith('aura:'))) &&
     !canMoveUnit(cardId, to)
   )
     return
@@ -1509,10 +2345,11 @@ function moveCardImpl(cardId, from, to, { tapOnMove } = {}) {
   ui.moving = null
   applyMoveTaps(card, from, to, shouldTap)
 
-  logEntry({ cardId, from, to, prevTapped, prevFloodedSites })
+  const entry = { cardId, from, to, prevTapped, prevFloodedSites }
+  logEntry(entry)
   // After the entry snapshots the pre-move maps, a unit that left the realm
   // sheds its in-play state (damage, strength, granted keywords, ward, ...).
-  shedInPlayState(cardId, to)
+  shedInPlayState(cardId, to, entry)
   // A plain Move & Attack without the attack: the opponent may intercept the
   // unit where it stopped (a separate, deterministic entry). Only the dedicated
   // cell-to-cell Move action offers this -- not summons or effect relocations.
@@ -1584,7 +2421,7 @@ export function targetShoot(targetId) {
   if (isUnit(shooterId)) state.tapped[shooterId] = true
   const entry = { type: 'shoot', cardId: shooterId, targetId, prevTapped }
   logEntry(entry)
-  emitFx('projectile', { sourceId: shooterId, targetId })
+  emitFx('projectile', { sourceId: shooterId, targetId, style: 'arrow' })
   if (combatActive()) strikeWithLance(shooterId, targetId, entry)
   ui.shooting = null
 }
@@ -1958,6 +2795,9 @@ function logEntry(entry) {
   if (!entry.prevStrengthMod) entry.prevStrengthMod = clone(state.strengthMod)
   if (!entry.prevGrantedKeywords)
     entry.prevGrantedKeywords = clone(state.grantedKeywords)
+  if (!entry.prevAnimated) entry.prevAnimated = clone(state.animated)
+  if (!entry.prevCastPermits) entry.prevCastPermits = clone(state.castPermits)
+  if (!entry.prevControlFlips) entry.prevControlFlips = clone(state.controlFlips)
   if (!entry.prevSummoned) entry.prevSummoned = clone(state.summoned)
   if (!entry.prevStealthLost) entry.prevStealthLost = clone(state.stealthLost)
   if (!entry.prevWardBroken) entry.prevWardBroken = clone(state.wardBroken)
@@ -1983,6 +2823,7 @@ function logEntry(entry) {
   fireTriggers(entry)
   checkGrantLoss(entry)
   checkSurvival(entry)
+  settleAnimations(entry)
 }
 
 // ---------- triggered abilities ----------
@@ -2048,6 +2889,8 @@ function collectTriggers(entry) {
     if (!owner.abilities?.length) continue
     for (const a of owner.abilities) {
       if (a.kind !== 'triggered') continue
+      // Silence strips abilities: a silenced card's triggers don't fire.
+      if (isSilenced(owner.id)) continue
       if (!triggerMatches(a.trigger, owner, entry)) continue
       if (!triggerLive(owner, a)) continue
       out.push({ ownerId: owner.id, ability: a, triggeringId: entry.cardId, entry })
@@ -2081,11 +2924,23 @@ function triggerTargets(ownerId, ability) {
 // Only when the author gave the ability a required card target (with legal
 // choices) or a picked grid origin.
 function needsChoice(ev) {
+  return needsCardChoice(ev) || needsDestChoice(ev, autoTarget(ev))
+}
+
+function needsCardChoice(ev) {
   const t = ev.ability.target
   if (t.mode === 'grid' && t.origin === 'pick') return true
   if (t.mode === 'card' && t.required)
     return triggerTargets(ev.ownerId, ev.ability).length > 0
   return false
+}
+
+// A destination pick is asked for only when it can be answered (the same rule
+// continueActivate applies to activated abilities).
+function needsDestChoice(ev, targetId) {
+  const spec = destSpec(ev.ability)
+  if (!spec || (spec.anchor === 'target' && !targetId)) return false
+  return anyDestLegal(spec, ev.ownerId, targetId)
 }
 
 function logStoryEvent(ev, ignored) {
@@ -2119,12 +2974,16 @@ function resolveStory() {
   while (storyStack && storyStack.length) {
     const ev = storyStack.shift()
     if (!sourceGone(ev) && needsChoice(ev)) {
-      // Suspend for the player to choose. The rest of the storyline waits.
+      // Suspend for the player to choose. The rest of the storyline waits. With
+      // no card to pick it goes straight to the destination pick.
+      const pickCard = needsCardChoice(ev)
       ui.storyChoice = {
         ownerId: ev.ownerId,
         ability: ev.ability,
         entry: ev.entry,
         triggeringId: ev.triggeringId,
+        dest: !pickCard,
+        targetId: pickCard ? null : autoTarget(ev),
       }
       return
     }
@@ -2141,13 +3000,23 @@ function resolveStory() {
 // resolve it, then continue the storyline.
 export function resolveStoryChoice(targetId, gridSquare) {
   const c = ui.storyChoice
-  if (!c) return
+  if (!c || c.dest) return
+  const t = targetId ?? c.triggeringId
+  // A destination still to pick: stay paused, now asking for the square.
+  if (gridSquare == null && needsDestChoice(c, t)) {
+    ui.storyChoice = { ...c, dest: true, targetId: t }
+    return
+  }
   ui.storyChoice = null
+  finishStoryChoice(c, t, gridSquare, null)
+}
+
+// Resolve a paused trigger with everything chosen, then resume the storyline.
+function finishStoryChoice(c, targetId, gridSquare, destZone) {
   const ev = { ability: c.ability, ownerId: c.ownerId, entry: c.entry, triggeringId: c.triggeringId }
   const ignored = sourceGone(ev)
   logStoryEvent(ev, ignored)
-  if (!ignored)
-    runEffects(c.ability, c.ownerId, targetId ?? c.triggeringId, c.entry, gridSquare)
+  if (!ignored) runEffects(c.ability, c.ownerId, targetId, c.entry, gridSquare, destZone)
   resolveStory() // resume the rest of the storyline
 }
 
@@ -2156,19 +3025,19 @@ export function resolveStoryChoice(targetId, gridSquare) {
 // continue the storyline. Only offered while an optional choice is pending.
 export function declineStoryChoice() {
   const c = ui.storyChoice
-  if (!c || !c.ability.target.optional) return
+  if (!c || c.dest || !c.ability.target.optional) return
+  if (needsDestChoice(c, null)) {
+    ui.storyChoice = { ...c, dest: true, targetId: null }
+    return
+  }
   ui.storyChoice = null
-  const ev = { ability: c.ability, ownerId: c.ownerId, entry: c.entry, triggeringId: c.triggeringId }
-  const ignored = sourceGone(ev)
-  logStoryEvent(ev, ignored)
-  if (!ignored) runEffects(c.ability, c.ownerId, null, c.entry)
-  resolveStory() // resume the rest of the storyline
+  finishStoryChoice(c, null, null, null)
 }
 
 // Whether a click on this card resolves the paused trigger's card target.
 export function isStoryChoiceTarget(id) {
   const c = ui.storyChoice
-  if (!c || c.ability.target.mode !== 'card') return false
+  if (!c || c.dest || c.ability.target.mode !== 'card') return false
   return id !== c.ownerId && satisfiesTarget(c.ownerId, id, c.ability.target)
 }
 
@@ -2279,12 +3148,13 @@ export function targetStrike(targetId) {
 function matchesFilter(card, filter) {
   if (!card) return false
   if (filter === 'unit') return isUnit(card)
-  if (filter === 'minion') return !!card.unit && !card.avatar
+  if (filter === 'minion') return isUnit(card) && !card.avatar
   if (filter === 'avatar') return isAvatar(card)
   if (filter === 'site') return !!card.site
   if (filter === 'aura') return !!card.aura
   if (filter === 'artifact') return !!card.artifact
   if (filter === 'monument') return !!card.monument
+  if (filter === 'spell') return isSpell(card.id)
   return true // 'any'
 }
 
@@ -2361,17 +3231,189 @@ export function pickGridSquare(sq) {
   else performAbility(cardId, abilityId, null, sq)
 }
 
+// ---------- destination picks (teleport / token placement) ----------
+
+// Some effects need a location chosen when the ability resolves: a `move` to a
+// picked location, or a token placed at an adjacent / nearby / any site. For a
+// card-target ability that is a second pick, after the target. A grid ability
+// already has its picked square, which these effects use instead. One pick per
+// ability: the first effect that needs one sets the rules for it.
+function destSpec(ability) {
+  if (!ability || ability.target?.mode === 'grid') return null
+  for (const eff of ability.effects || []) {
+    if (eff.op === 'move' && eff.to === 'picked') {
+      const reach = eff.reach || 'nearby'
+      return {
+        anchor: eff.who === 'target' ? 'target' : 'source',
+        mover: eff.who === 'target' ? 'target' : 'source',
+        reach,
+        needSite: false,
+        layers: ['top', 'bot'],
+        // Adjacent/nearby locations are always in the same region; an 'any'
+        // move may change region only if it is allowed to (teleport default).
+        sameRegion: reach !== 'any' || eff.crossRegions === false,
+        label: eff.kind === 'forced' ? 'where to move it' : 'where to teleport',
+      }
+    }
+    if (eff.op === 'summonToken' && PICKED_TOKEN_LOCATIONS.includes(eff.at)) {
+      return {
+        anchor: 'source',
+        mover: null,
+        reach: eff.at === 'anySite' ? 'any' : eff.at,
+        needSite: eff.at === 'anySite',
+        layers: ['top'],
+        sameRegion: false,
+        label: 'where the token appears',
+      }
+    }
+  }
+  return null
+}
+
+// The square a card stands on (a unit's cell, or a site's own square).
+function squareOf(id) {
+  if (!id) return null
+  return nodeOf(id)?.sq ?? squareOfSite(id) ?? null
+}
+
+// Whether a board zone is a legal destination for a spec, resolved against the
+// ability's source and chosen target. An anchor that isn't on the board (a
+// spell cast from hand) can't be measured from, so reach doesn't constrain it.
+function destLegal(spec, sourceId, targetId, zone) {
+  if (!spec) return false
+  const m = /^cell:(\d+):(top|bot)$/.exec(zone || '')
+  if (!m) return false
+  const sq = Number(m[1])
+  const layer = m[2]
+  if (!spec.layers.includes(layer)) return false
+  const region = regionOf(sq, layer)
+  if (!region) return false
+  if (spec.needSite && !siteOn(sq)) return false
+  const anchorSq = squareOf(spec.anchor === 'target' ? targetId : sourceId)
+  if (anchorSq != null) {
+    if (spec.reach === 'adjacent' && !(areAdjacent(anchorSq, sq) && anchorSq !== sq))
+      return false
+    if (spec.reach === 'nearby' && !areNearby(anchorSq, sq)) return false
+  }
+  const moverId =
+    spec.mover === 'target' ? targetId : spec.mover === 'source' ? sourceId : null
+  if (moverId) {
+    const from = zoneOf(moverId)
+    // Moving to where it already is isn't movement at all.
+    if (from === zone) return false
+    const fromRegion = zoneRegion(from)
+    if (spec.sameRegion && fromRegion && fromRegion !== region) return false
+  }
+  return true
+}
+
+const CELL_ZONES = Array.from({ length: GRID_SIZE }, (_, i) => [
+  `cell:${i}:top`,
+  `cell:${i}:bot`,
+]).flat()
+
+const anyDestLegal = (spec, sourceId, targetId) =>
+  CELL_ZONES.some((z) => destLegal(spec, sourceId, targetId, z))
+
+// Advance an armed activation/cast once its card target (possibly none) is
+// settled: ask for a destination if an effect needs one, else resolve now. A
+// spec with no legal destination resolves without one (those effects skip),
+// rather than leaving the player stuck on an impossible pick.
+function continueActivate(cardId, abilityId, cast, targetId, extra = null) {
+  const spec = destSpec(findAbility(cardId, abilityId))
+  if (
+    !extra &&
+    spec &&
+    !(spec.anchor === 'target' && !targetId) &&
+    anyDestLegal(spec, cardId, targetId)
+  ) {
+    ui.activating = { cardId, abilityId, cast: !!cast, targetId: targetId || null, dest: true }
+    return
+  }
+  ui.activating = null
+  if (cast) performCast(cardId, abilityId, targetId || null, null, null, extra)
+  else performAbility(cardId, abilityId, targetId || null, null, null, extra)
+}
+
+// Run an ability's effects. With several picked targets, each `who: target`
+// effect runs once per target; everything else (and banishAndCast, which takes
+// the whole pick) runs once.
+function runAbilityEffects(ability, cardId, targetId, entry) {
+  const ids = entry.targetIds
+  if (!ids || ids.length < 2) {
+    runEffects(ability, cardId, targetId, entry)
+    return
+  }
+  const perTarget = (ability.effects || []).filter(
+    (e) => e.who === 'target' && e.op !== 'banishAndCast'
+  )
+  const once = (ability.effects || []).filter((e) => !perTarget.includes(e))
+  runEffects({ ...ability, effects: once }, cardId, ids[0], entry)
+  for (const t of ids) runEffects({ ...ability, effects: perTarget }, cardId, t, entry)
+}
+
+// The armed activation's destination pick, if it is waiting for one.
+export function activeDestPick() {
+  return ui.activating?.dest ? destSpec(activeAbility()) : null
+}
+
+export function canPickDest(zone) {
+  const spec = activeDestPick()
+  return !!spec && destLegal(spec, ui.activating.cardId, ui.activating.targetId, zone)
+}
+
+export function pickDest(zone) {
+  if (!canPickDest(zone)) return
+  const { cardId, abilityId, cast, targetId } = ui.activating
+  ui.activating = null
+  if (cast) performCast(cardId, abilityId, targetId, null, zone)
+  else performAbility(cardId, abilityId, targetId, null, zone)
+}
+
+// The paused trigger's destination pick, if it is waiting for one.
+export function activeStoryDestPick() {
+  const c = ui.storyChoice
+  return c?.dest ? destSpec(c.ability) : null
+}
+
+export function canStoryPickDest(zone) {
+  const spec = activeStoryDestPick()
+  return !!spec && destLegal(spec, ui.storyChoice.ownerId, ui.storyChoice.targetId, zone)
+}
+
+export function pickStoryDest(zone) {
+  if (!canStoryPickDest(zone)) return
+  const c = ui.storyChoice
+  ui.storyChoice = null
+  finishStoryChoice(c, c.targetId, null, zone)
+}
+
+// Either kind of destination pick is armed (activation or paused trigger).
+export const destPickArmed = () => !!(activeDestPick() || activeStoryDestPick())
+export const canPickAnyDest = (zone) => canPickDest(zone) || canStoryPickDest(zone)
+export function pickAnyDest(zone) {
+  if (activeStoryDestPick()) pickStoryDest(zone)
+  else pickDest(zone)
+}
+
+// What the player is being asked to pick, for the prompts.
+export function destPrompt(ability) {
+  const spec = destSpec(ability)
+  return spec ? `Click a highlighted square: ${spec.label}.` : ''
+}
+
 // The target must be on the right side relative to the source.
-function matchesTargetSide(sourceId, targetId, side) {
+function matchesTargetSide(sourceId, targetId, side, invert = false) {
   if (side === 'any' || !side) return true
-  const same = !!state.cards[sourceId]?.enemy === !!state.cards[targetId]?.enemy
+  const same = (!!state.cards[sourceId]?.enemy === !!state.cards[targetId]?.enemy) !== invert
   return side === 'friendly' ? same : !same
 }
 
 // The target must be within range of the source (adjacent = cardinal, nearby =
 // king). Unmeasurable sources (a spell cast from hand) don't constrain range.
-function withinTargetRange(sourceId, targetId, within) {
+function withinTargetRange(sourceId, targetId, within, range) {
   if (within === 'any' || !within) return true
+  if (within === 'projectile') return projectileTargets(sourceId, range).has(targetId)
   const s = nodeOf(sourceId)
   const t = nodeOf(targetId)
   if (!s || !t) return true
@@ -2387,8 +3429,11 @@ function withinTargetRange(sourceId, targetId, within) {
 function satisfiesTarget(sourceId, targetId, t) {
   if (cardZoneCategory(targetId) !== t.from) return false
   if (!matchesFilter(state.cards[targetId], t.filter)) return false
-  if (!matchesTargetSide(sourceId, targetId, t.side)) return false
-  if (!withinTargetRange(sourceId, targetId, t.within)) return false
+  // With cemeteries swapped, "your" cemetery is the opponent's and vice versa,
+  // so the side restriction flips for cemetery cards.
+  const swappedGrave = t.from === 'cemetery' && cemeteriesSwapped()
+  if (!matchesTargetSide(sourceId, targetId, t.side, swappedGrave)) return false
+  if (!withinTargetRange(sourceId, targetId, t.within, t.range)) return false
   if (blockedByStealth(sourceId, targetId)) return false
   return true
 }
@@ -2396,9 +3441,32 @@ function satisfiesTarget(sourceId, targetId, t) {
 // Whether a click on this card would satisfy the armed ability's target.
 export function canActivateTarget(targetId) {
   const ability = activeAbility()
-  if (!ability) return false
+  if (!ability || ui.activating.dest) return false
+  // Choosing which of the picked cards to cast.
+  if (ui.activating.choosing) return (ui.activating.picked || []).includes(targetId)
   if (targetId === ui.activating.cardId) return false
+  if ((ui.activating.picked || []).includes(targetId)) return false
   return satisfiesTarget(ui.activating.cardId, targetId, ability.target)
+}
+
+// How many cards the armed ability picks, and whether it then asks which of
+// them to cast.
+const pickCount = (ability) =>
+  ability?.target?.mode === 'card' ? Math.max(1, Number(ability.target.count) || 1) : 1
+const choosesCast = (ability) =>
+  (ability?.effects || []).some((e) => e.op === 'banishAndCast')
+
+// The picker's progress, for the prompt: { picked, needed, choosing }.
+export function activatePickState() {
+  if (!ui.activating || ui.activating.dest) return null
+  const ability = activeAbility()
+  const needed = pickCount(ability)
+  if (needed <= 1 && !choosesCast(ability)) return null
+  return {
+    picked: (ui.activating.picked || []).length,
+    needed,
+    choosing: !!ui.activating.choosing,
+  }
 }
 
 // ---------- effect ops ----------
@@ -2502,10 +3570,106 @@ function releaseGrant(carrierId, entry) {
   }
 }
 
+// Banish the picked cemetery cards; the one chosen may then be cast (paying its
+// cost, or free) by the ability's controller -- from banishment, and back to
+// banishment once a magic resolves. The permission is a cast permit, so the
+// player casts it through the normal cast flow as a move of its own.
+function banishAndCast(eff, cardId, targetId, entry) {
+  const ids = entry?.targetIds || (targetId ? [targetId] : [])
+  const banished = []
+  for (const id of ids) {
+    if (cardZoneCategory(id) !== 'cemetery') continue
+    snapshotStructural(entry)
+    removeFromZones(state.zones, id)
+    const bz = `banished:${sideOf(id)}`
+    state.zones[bz].push(id)
+    shedInPlayState(id, bz, entry)
+    banished.push(id)
+  }
+  const castId = entry?.castId || (ids.length === 1 ? ids[0] : null)
+  if (castId && banished.includes(castId) && isSpell(castId)) {
+    state.castPermits[castId] = { side: sideOf(cardId), free: !!eff.free }
+  }
+  if (!banished.length) return
+  const names = banished.map(cardName).join(', ')
+  state.events.push({
+    id: uid(),
+    seq: entry?.seq,
+    cardId: castId || banished[0],
+    name: 'Banished',
+    text:
+      castId && state.castPermits[castId]
+        ? `${names} ${banished.length > 1 ? 'are' : 'is'} banished. ${cardName(castId)} may be cast${eff.free ? ' for free' : ''}.`
+        : `${names} ${banished.length > 1 ? 'are' : 'is'} banished.`,
+  })
+}
+
+// Animate: a non-unit object in the realm becomes a minion of the given power
+// until it leaves the realm. A carried object is set down first on its
+// carrier's square, since a minion stands on its own. A site steps off its slot
+// onto its square's surface and leaves Rubble; an aura becomes an oversized
+// minion on its intersection. Undo rides the entry's
+// prevAnimated snapshot (plus the structural one if it was set down).
+function animateCard(id, spec, entry, sourceId) {
+  const c = state.cards[id]
+  if (!c || c.unit || c.avatar || animationOf(id)) return
+  const zone = zoneOf(id) || ''
+  if (!['realm', 'aura'].includes(zoneCategory(zone))) return
+  const carrier = state.carry[id]
+  const siteSlot = carrier ? null : /^site:(\d+)$/.exec(zone)
+  if (siteSlot) {
+    // A site gets up and walks off: it stands on its own square's surface as a
+    // minion, and Rubble takes its place so the square stays land.
+    const sq = siteSlot[1]
+    snapshotStructural(entry)
+    removeFromZones(state.zones, id)
+    delete state.floodedSites[sq]
+    state.zones[`cell:${sq}:top`].push(id)
+    const rubbleId = nextTokenId(id, 'rubble')
+    state.cards[rubbleId] = makeTokenCard(rubbleId, 'rubble', c.enemy, 0)
+    state.zones[`site:${sq}`].push(rubbleId)
+  } else if (!carrier && /^aura:\d+$/.test(zone)) {
+    // An aura stays on its intersection: an oversized minion on all four squares.
+  } else if (carrier) {
+    const zone = zoneOf(carrier)
+    if (!/^cell:\d+:(top|bot)$/.test(zone || '')) return
+    snapshotStructural(entry)
+    delete state.carry[id]
+    delete state.grants[id]
+    state.zones[zone].push(id)
+  } else if (!/^cell:\d+:(top|bot)$/.test(zoneOf(id) || '')) {
+    return
+  }
+  state.animated[id] = {
+    power: Number(spec.power) || 0,
+    powerRef: spec.powerRef || 'literal',
+    powerBonus: Number(spec.powerBonus) || 0,
+    // How long it lasts, with the baselines each duration measures against.
+    duration: ANIMATE_DURATIONS.includes(spec.duration) ? spec.duration : 'permanent',
+    tapped0: !!state.tapped[id],
+    damage0: state.damage[id] || 0,
+    sourceId: sourceId || null,
+  }
+  const power = animatedPower(id, state.animated[id])
+  const how = siteSlot
+    ? ', leaving Rubble behind'
+    : isOversized(id)
+    ? ', occupying all four squares around it'
+    : ''
+  state.events.push({
+    id: uid(),
+    seq: entry?.seq,
+    cardId: id,
+    name: 'Animated',
+    text: `${cardName(id)} becomes a ${power}-power minion${how}.`,
+  })
+}
+
 // The numeric amount an effect uses: a literal, or a computed value like the
 // number of cards the source is carrying (a projectile's picked-up payload).
 function effectAmount(eff, sourceId) {
   if (eff.amountRef === 'carriedCount') return carriedBy(sourceId).length
+  if (eff.amountRef === 'power') return combatPower(sourceId)
   // Scale off the body of water the source stands on (or the site it is).
   if (eff.amountRef === 'waterBodySize') {
     const sq = nodeOf(sourceId)?.sq ?? squareOfSite(sourceId)
@@ -2514,9 +3678,209 @@ function effectAmount(eff, sourceId) {
   return Number(eff.amount) || 0
 }
 
-// Resolve a `move` effect's location reference to a board zone id.
-function resolveLocation(ref, sourceId, targetId) {
+// Resolve a `move` effect's location reference to a board zone id. A picked
+// location is the chosen destination, or a grid ability's picked square.
+function resolveLocation(ref, sourceId, targetId, destZone, pickSquare) {
+  if (ref === 'picked') {
+    if (destZone) return destZone
+    return typeof pickSquare === 'number' ? `cell:${pickSquare}:top` : null
+  }
+  if (ref === 'projectileStop') return projectileStep(sourceId, targetId, -1)
+  if (ref === 'projectileBeyond') return projectileStep(sourceId, targetId, 1)
   return zoneOf(ref === 'targetLocation' ? targetId : sourceId)
+}
+
+// Forced movement (teleport, push, pull, drag, being carried): the unit takes no
+// step of its own, so Immobile doesn't stop it and no Move is spent. Teleports
+// may cross regions by default; other forced movement stays in its region unless
+// the effect says otherwise. Moving to the location it is already in is not
+// movement at all -- nothing happens and nothing triggers. What it carries comes
+// along (carried cards follow their carrier). Fires "move" triggers like any
+// other movement; undo rides the causing entry's structural snapshot.
+function forceMove(id, to, eff, entry) {
+  if (!id || !to || !state.cards[id]) return
+  const routed = routeZone(id, to)
+  if (!state.zones[routed]) return
+  const from = zoneOf(id)
+  if (from === routed) return
+  const fromRegion = zoneRegion(from)
+  const toRegion = zoneRegion(routed)
+  const crosses = eff.crossRegions ?? (eff.kind || 'teleport') === 'teleport'
+  if (fromRegion && toRegion && fromRegion !== toRegion && !crosses) return
+  relocateCard(id, routed, entry)
+  const teleport = (eff.kind || 'teleport') === 'teleport'
+  state.events.push({
+    id: uid(),
+    seq: entry?.seq,
+    cardId: id,
+    name: teleport ? 'Teleports' : 'Moved',
+    text: `${cardName(id)} ${teleport ? 'teleports' : 'is moved'} to ${zoneLabel(routed)}.`,
+  })
+  fireTriggers({ type: 'move', cardId: id, from, to: routed, seq: entry?.seq, forced: true })
+  checkSurvival(entry) // moving into a hostile region can kill
+}
+
+// ---------- tokens ----------
+
+// A small generated face for a token card, so it reads on the board without an
+// uploaded image.
+function tokenImage(name, enemy) {
+  const fill = enemy ? '#5a2330' : '#23405a'
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="250" height="350" viewBox="0 0 250 350">` +
+    `<rect x="6" y="6" width="238" height="338" rx="18" fill="${fill}" stroke="#d8c690" stroke-width="6"/>` +
+    `<text x="125" y="160" font-family="Georgia,serif" font-size="30" fill="#f3e9c9" text-anchor="middle">${name}</text>` +
+    `<text x="125" y="205" font-family="Georgia,serif" font-size="20" fill="#d8c690" text-anchor="middle">token</text>` +
+    `</svg>`
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
+}
+
+// Token ids are deterministic -- source, kind and the first free index -- so a
+// recorded solution that later moves a token names the same card when the
+// solver replays it. An index is free when no zone or carrier holds that id;
+// after an undo the id is simply reused.
+function nextTokenId(sourceId, kind) {
+  const held = new Set(Object.values(state.zones).flat())
+  for (let k = 0; ; k++) {
+    const id = `${sourceId}~${kind}~${k}`
+    if (!held.has(id) && !state.carry[id]) return id
+  }
+}
+
+function makeTokenCard(id, kind, enemy, power) {
+  const def = TOKEN_DEFS[kind]
+  // A designated template lends its name, art and abilities; the effect still
+  // sets the power, and the kind still decides the card type.
+  const tpl = tokenTemplate(kind, enemy)
+  return {
+    id,
+    name: tpl?.name || def.name,
+    img: tpl?.img || tokenImage(def.name, enemy),
+    imgId: tpl?.imgId,
+    abilities: tpl ? clone(tpl.abilities || []) : [],
+    affinity: tpl?.site
+      ? { air: 0, earth: 0, fire: 0, water: 0 }
+      : clone(tpl?.affinity || { air: 0, earth: 0, fire: 0, water: 0 }),
+    defense: tpl?.defense ?? '',
+    enemy: !!enemy,
+    // Generated during play: purged on reset and never saved with the puzzle.
+    generated: true,
+    token: kind,
+    unit: !!def.unit,
+    avatar: false,
+    site: !!def.site,
+    aura: false,
+    water: false,
+    magic: false,
+    artifact: !!def.artifact,
+    monument: false,
+    lanceToken: !!def.lanceToken,
+    castFromCemetery: false,
+    power: def.unit ? power : 0,
+    spellCost: { mana: 0, air: 0, earth: 0, fire: 0, water: 0 },
+    manaProvided: 0,
+    tokenKind: '',
+  }
+}
+
+// The art of the designated Ward token, drawn on a unit whose Ward is intact.
+export function wardTokenArt(unitId) {
+  if (!hasWard(unitId)) return null
+  return tokenTemplate('ward', state.cards[unitId]?.enemy)?.img || null
+}
+
+// The board zone a token lands in for an effect's `at`, or null if it can't be
+// placed. self/target are handled by the caller (they attach to a unit).
+function tokenZone(at, sourceId, targetId, destZone, pickSquare) {
+  if (at === 'selfSurface' || at === 'selfBelow') {
+    const sq = squareOf(sourceId)
+    if (sq == null) return null
+    if (at === 'selfBelow') return regionOf(sq, 'bot') ? `cell:${sq}:bot` : null
+    return `cell:${sq}:top`
+  }
+  if (at === 'targetLocation') {
+    const z = zoneOf(targetId)
+    if (/^cell:\d+:(top|bot)$/.test(z || '')) return z
+    const sq = squareOf(targetId) ?? (typeof pickSquare === 'number' ? pickSquare : null)
+    return sq == null ? null : `cell:${sq}:top`
+  }
+  if (PICKED_TOKEN_LOCATIONS.includes(at)) {
+    if (destZone) return destZone
+    if (typeof pickSquare !== 'number') return null
+    if (at === 'anySite' && !siteOn(pickSquare)) return null
+    return `cell:${pickSquare}:top`
+  }
+  return null
+}
+
+// Generate token(s). Entering the realm is not movement (it comes from outside),
+// but it is a genesis: "enters" triggers fire, a minion token is summoned this
+// turn, and a unit that lands where it can't survive dies/is banished at once.
+function summonTokens(eff, cardId, targetId, entry, destZone, pickSquare) {
+  const source = state.cards[cardId]
+  if (!source) return
+  const kind = eff.token || 'soldier'
+  const enemy = eff.side === 'enemy' ? !source.enemy : !!source.enemy
+  const onUnit = eff.at === 'self' ? cardId : eff.at === 'target' ? targetId : null
+
+  // A ward is a Ward on a unit: grant (or restore) the keyword.
+  if (kind === 'ward') {
+    if (!onUnit || !isUnit(onUnit)) return
+    const list = state.grantedKeywords[onUnit] || (state.grantedKeywords[onUnit] = [])
+    if (!list.includes('ward')) list.push('ward')
+    delete state.wardBroken[onUnit]
+    state.events.push({
+      id: uid(),
+      seq: entry?.seq,
+      cardId: onUnit,
+      name: 'Ward',
+      text: `${cardName(onUnit)} gains a Ward.`,
+    })
+    return
+  }
+  if (!TOKEN_DEFS[kind]) return
+
+  const count = Math.max(1, Number(eff.count) || 1)
+  for (let n = 0; n < count; n++) {
+    const id = nextTokenId(cardId, kind)
+    let carrierId = null
+    let zone = null
+    if (onUnit) {
+      // A lance on a unit is carried by it.
+      if (kind !== 'lance' || !isUnit(onUnit)) return
+      carrierId = onUnit
+    } else {
+      zone = tokenZone(eff.at, cardId, targetId, destZone, pickSquare)
+      if (!zone || !state.zones[zone]) return
+    }
+    snapshotStructural(entry)
+    state.cards[id] = makeTokenCard(id, kind, enemy, Number(eff.power ?? 1) || 0)
+    if (carrierId) state.carry[id] = carrierId
+    else state.zones[zone].push(id)
+    if (state.cards[id].unit) state.summoned[id] = true
+    const landed = carrierId ? zoneOf(carrierId) : zone
+    state.events.push({
+      id: uid(),
+      seq: entry?.seq,
+      cardId: id,
+      name: 'Token',
+      text: carrierId
+        ? `${cardName(id)} token enters carried by ${cardName(carrierId)}.`
+        : `${cardName(id)} token enters the realm.`,
+    })
+    emitFx('genesis', { cardId: id })
+    fireTriggers({ type: 'move', cardId: id, from: null, to: landed, seq: entry?.seq })
+  }
+  checkSurvival(entry)
+}
+
+// Generated tokens exist only for the play session that made them. Drop them
+// from the card map (a reset or a new line starts without them, and a save never
+// records them).
+function purgeGeneratedCards() {
+  for (const [id, c] of Object.entries(state.cards)) {
+    if (c.generated) delete state.cards[id]
+  }
 }
 
 // Relocate a card as an effect (not a logged move): drop what it carried onto it
@@ -2531,7 +3895,7 @@ function relocateCard(id, to, entry) {
   delete state.carry[id]
   removeFromZones(state.zones, id)
   state.zones[routed].push(id)
-  shedInPlayState(id, routed)
+  shedInPlayState(id, routed, entry)
 }
 
 // Send a card out of play as an effect. Avatars can't be removed this way.
@@ -2555,7 +3919,6 @@ function effectRemove(id, kind, entry) {
   delete state.carry[id]
   removeFromZones(state.zones, id)
   state.zones[zone].push(id)
-  shedInPlayState(id, zone)
   state.events.push({
     id: uid(),
     seq: entry.seq,
@@ -2565,6 +3928,7 @@ function effectRemove(id, kind, entry) {
       kind === 'banish' ? 'is banished' : kind === 'bounce' ? 'returns to hand' : 'is destroyed'
     }.`,
   })
+  shedInPlayState(id, zone, entry)
 }
 
 // Run an ability's structured effects. Stat/tap/damage changes are reversed from
@@ -2580,7 +3944,7 @@ function breakWard(id, entry) {
   })
 }
 
-function runEffects(ability, cardId, targetId, entry, gridSquare) {
+function runEffects(ability, cardId, targetId, entry, gridSquare, destZone) {
   const card = state.cards[cardId]
   const side = card?.enemy ? 'opponent' : 'player'
   // Ward: an opponent's ability that would target the warded object is prevented,
@@ -2590,6 +3954,9 @@ function runEffects(ability, cardId, targetId, entry, gridSquare) {
   // For a grid ability, the affected cards are resolved once from its area. A
   // trigger that picked a square passes it here; otherwise the entry carries it.
   const pickSquare = gridSquare == null ? entry?.gridSquare : gridSquare
+  // A chosen destination (teleport / token placement): passed in by a paused
+  // trigger, or carried on an activation's own entry.
+  const dest = destZone || (entry?.type === 'ability' || entry?.type === 'cast' ? entry.destZone : null)
   const gridArea =
     ability.target?.mode === 'grid'
       ? resolveGridArea(cardId, pickSquare, ability.target)
@@ -2630,6 +3997,13 @@ function runEffects(ability, cardId, targetId, entry, gridSquare) {
       // life loss to avatars/sites, death); otherwise it just marks counters.
       if (t && combatActive()) resolveHit(cardId, t, amount, entry)
       else if (t) adjustDamage(t, amount)
+    } else if (eff.op === 'strike') {
+      // The source strikes the target: its power plus any Lance bonus (the
+      // lances break), resolved like a manual strike. Without combat it just
+      // marks the power as damage counters.
+      const t = effectSubject(eff.who, cardId, targetId)
+      if (t && combatActive()) strikeWithLance(cardId, t, entry)
+      else if (t) adjustDamage(t, combatPower(cardId))
     } else if (eff.op === 'modifyStrength') {
       const t = effectSubject(eff.who, cardId, targetId)
       if (t) state.strengthMod[t] = (state.strengthMod[t] || 0) + (Number(eff.amount) || 0)
@@ -2641,15 +4015,21 @@ function runEffects(ability, cardId, targetId, entry, gridSquare) {
       }
     } else if (eff.op === 'move') {
       const who = effectSubject(eff.who, cardId, targetId)
-      const to = resolveLocation(eff.to, cardId, targetId)
-      relocateCard(who, to, entry)
-      checkSurvival(entry) // moving into a hostile region can kill
+      const to = resolveLocation(eff.to, cardId, targetId, dest, pickSquare)
+      forceMove(who, to, eff, entry)
+    } else if (eff.op === 'summonToken') {
+      summonTokens(eff, cardId, targetId, entry, dest, pickSquare)
     } else if (eff.op === 'destroy' || eff.op === 'banish' || eff.op === 'bounce') {
       const who = effectSubject(eff.who, cardId, targetId)
       if (who) effectRemove(who, eff.op, entry)
     } else if (eff.op === 'heal') {
       const who = effectSubject(eff.who, cardId, targetId)
       if (who) adjustDamage(who, -damageOf(who))
+    } else if (eff.op === 'banishAndCast') {
+      banishAndCast(eff, cardId, targetId, entry)
+    } else if (eff.op === 'animate') {
+      const who = effectSubject(eff.who, cardId, targetId)
+      if (who) animateCard(who, eff, entry, cardId)
     } else if (eff.op === 'grantFrom') {
       grantFrom(cardId, targetId, ability, entry)
     } else if (eff.op === 'release') {
@@ -2731,7 +4111,7 @@ function checkSurvival(entry) {
       removeFromZones(state.zones, u.id)
       const bz = `banished:${sideOf(u.id)}`
       state.zones[bz].push(u.id)
-      shedInPlayState(u.id, bz)
+      shedInPlayState(u.id, bz, entry)
       state.events.push({ id: uid(), seq: entry.seq, cardId: u.id, name: rule.name, text })
     } else {
       sendToCemetery(u.id, entry, rule.name, text)
@@ -2745,7 +4125,7 @@ function checkSurvival(entry) {
 // auto-applied and reversed on undo via the snapshots on the entry. Only card
 // moves count toward the solution, and an ability activation is one -- it logs
 // like an attack or strike, and check() compares it by cardId+abilityId+target.
-function performAbility(cardId, abilityId, targetId, gridSquare) {
+function performAbility(cardId, abilityId, targetId, gridSquare, destZone, extra = null) {
   const ability = findAbility(cardId, abilityId)
   const card = state.cards[cardId]
   if (!ability || !card) return
@@ -2754,7 +4134,10 @@ function performAbility(cardId, abilityId, targetId, gridSquare) {
     cardId,
     abilityId,
     targetId: targetId || null,
+    targetIds: extra?.targetIds || null,
+    castId: extra?.castId || null,
     gridSquare: gridSquare == null ? null : gridSquare,
+    destZone: destZone || null,
     prevTapped: clone(state.tapped),
     prevStats: clone(state.stats),
     prevDamage: clone(state.damage),
@@ -2762,12 +4145,19 @@ function performAbility(cardId, abilityId, targetId, gridSquare) {
     prevGrantedKeywords: clone(state.grantedKeywords),
   }
   const side = card.enemy ? 'opponent' : 'player'
-  if (ability.cost.mana) adjustStat(side, 'mana', -ability.cost.mana)
+  const mana = abilityManaCost(cardId, ability)
+  if (mana) adjustStat(side, 'mana', -mana)
   if (ability.cost.tap) state.tapped[cardId] = true
   // Log first so the entry has its seq before effects run -- a damage effect can
   // kill a minion and queue a death event, which undo keys off that seq.
   logEntry(entry)
-  runEffects(ability, cardId, targetId, entry)
+  // A projectile ability flies from its source to the unit it hits. Emitted
+  // before the effects run; FxOverlay reads positions pre-render, so a "pull
+  // the shooter in" effect still launches from where the source stood.
+  if (targetId && ability.target?.within === 'projectile') {
+    emitFx('projectile', { sourceId: cardId, targetId, style: 'fireball' })
+  }
+  runAbilityEffects(ability, cardId, targetId, entry)
 }
 
 // ---------- casting spells ----------
@@ -2796,7 +4186,10 @@ function inPlayCards(side) {
 // some minions). Affinity is the threshold spells are checked against.
 export function providedAffinity(side, el) {
   let sum = 0
-  for (const id of inPlayCards(side)) sum += Number(state.cards[id].affinity?.[el]) || 0
+  for (const id of inPlayCards(side)) {
+    if (state.cards[id].site && animationOf(id)) continue // a minion now, not a site
+    sum += Number(state.cards[id].affinity?.[el]) || 0
+  }
   return sum
 }
 
@@ -2809,7 +4202,10 @@ export function effectiveThreshold(side, el) {
 // Mana a side's sites (and other providers) would yield when collected.
 export function providedMana(side) {
   let sum = 0
-  for (const id of inPlayCards(side)) sum += Number(state.cards[id].manaProvided) || 0
+  for (const id of inPlayCards(side)) {
+    if (state.cards[id].site && animationOf(id)) continue
+    sum += Number(state.cards[id].manaProvided) || 0
+  }
   return sum
 }
 
@@ -2845,6 +4241,7 @@ export function cardTypeLabel(cardId) {
   if (!c) return ''
   if (c.avatar) return 'Avatar'
   if (c.unit) return 'Minion'
+  if (animationOf(cardId)) return 'Animated'
   if (c.site) return 'Site'
   if (c.aura) return 'Aura'
   if (c.monument) return 'Monument'
@@ -2878,14 +4275,23 @@ export function isSpell(cardId) {
 
 // Whether the caster's side has the mana and elemental threshold a spell needs.
 export function canAffordCast(cardId) {
-  const side = sideOf(cardId)
+  const side = castSide(cardId)
   const s = state.stats[side]
   if (!s) return false
   const cost = castCostOf(cardId)
-  if ((s.mana || 0) < cost.mana) return false
+  if ((s.mana || 0) < castManaCost(cardId)) return false
   // Threshold is affinity: the authored base plus what the board provides.
   for (const el of ELEMENTS) if (effectiveThreshold(side, el) < cost[el]) return false
   return true
+}
+
+// Mana a cast costs from where the card lies: nothing with a free permit; the
+// printed cost otherwise, plus any cemetery tax when cast out of a cemetery.
+export function castManaCost(cardId) {
+  if (state.castPermits[cardId]?.free) return 0
+  let mana = castCostOf(cardId).mana
+  if (cardZoneCategory(cardId) === 'cemetery') mana += cemeteryTaxFor(castSide(cardId))
+  return mana
 }
 
 // A spell is normally cast from hand. A card may also grant casting from the
@@ -2899,6 +4305,15 @@ export function castsFromCemetery(cardId) {
 // the hand always, the cemetery only when the card grants it.
 export function spellCastable(cardId) {
   if (!isSpell(cardId) || !casting()) return false
+  return castSourceOk(cardId)
+}
+
+// Whether the card sits somewhere it may be cast from (ignoring play mode):
+// the hand; the cemetery when the card grants it; or anywhere a cast permit
+// (banishAndCast) allows.
+export function castSourceOk(cardId) {
+  if (!isSpell(cardId)) return false
+  if (state.castPermits[cardId]) return true
   const cat = cardZoneCategory(cardId)
   if (cat === 'hand') return true
   return cat === 'cemetery' && castsFromCemetery(cardId)
@@ -2923,12 +4338,17 @@ export function hasCaster(side) {
 // (and those with the Avatar off-board as a life stat) are unchanged.
 export function canCastFrom(cardId) {
   if (!enforcing() || !needsCaster(cardId)) return true
-  return hasCaster(sideOf(cardId))
+  return hasCaster(castSide(cardId))
 }
+
+// The solver may cast a card in play mode when they are its caster (their own
+// card, or one a permit / swapped cemetery hands them).
+export const castControlled = (cardId) =>
+  state.mode !== 'play' || castSide(cardId) === 'player'
 
 export function canCast(cardId) {
   return (
-    playerControls(cardId) &&
+    castControlled(cardId) &&
     spellCastable(cardId) &&
     canAffordCast(cardId) &&
     canCastFrom(cardId)
@@ -2939,43 +4359,61 @@ export function canCast(cardId) {
 // card to the cemetery (a magic is not a permanent). Mirrors performAbility's
 // snapshot-before-pay so undo refunds mana; the cast is a gradeable `cast` entry
 // and fires "when cast" triggers before it resolves.
-function performCast(cardId, abilityId, targetId, gridSquare) {
+function performCast(cardId, abilityId, targetId, gridSquare, destZone, extra = null) {
   const card = state.cards[cardId]
   if (!card) return
   const ability = abilityId ? findAbility(cardId, abilityId) : null
-  const side = card.enemy ? 'opponent' : 'player'
+  const owner = sideOf(cardId)
+  const side = castSide(cardId)
+  const mana = castManaCost(cardId)
+  const permit = state.castPermits[cardId]
   const entry = {
     type: 'cast',
     cardId,
     abilityId: abilityId || null,
     targetId: targetId || null,
+    targetIds: extra?.targetIds || null,
+    castId: extra?.castId || null,
+    prevCastPermits: clone(state.castPermits),
+    prevControlFlips: clone(state.controlFlips),
     gridSquare: gridSquare == null ? null : gridSquare,
+    destZone: destZone || null,
     prevTapped: clone(state.tapped),
     prevStats: clone(state.stats),
     prevDamage: clone(state.damage),
     prevStrengthMod: clone(state.strengthMod),
     prevGrantedKeywords: clone(state.grantedKeywords),
   }
-  const cost = castCostOf(cardId)
-  if (cost.mana) adjustStat(side, 'mana', -cost.mana)
+  if (mana) adjustStat(side, 'mana', -mana)
+  delete state.castPermits[cardId]
+  // Cast by the other side (out of a swapped cemetery / by permit): the caster
+  // controls it while it resolves, so its effects' self/enemy read from them.
+  takeControl(cardId, side)
   logEntry(entry) // fires "when a spell is cast" triggers, before it resolves
   emitFx('cast', { cardId })
-  // A targeted spell fires a projectile from the caster to its victim.
-  if (targetId) emitFx('projectile', { sourceId: cardId, targetId })
-  if (ability) runEffects(ability, cardId, targetId, entry)
-  // The spell resolves and the card goes to the cemetery.
+  // A targeted spell fires a projectile from the caster to its victim -- a
+  // fireball if it's a true projectile spell, an arcane bolt otherwise.
+  if (targetId) {
+    const style = ability?.target?.within === 'projectile' ? 'fireball' : 'bolt'
+    emitFx('projectile', { sourceId: cardId, targetId, style })
+  }
+  if (ability) runAbilityEffects(ability, cardId, targetId, entry)
+  // The spell resolves and the card goes to its owner's cemetery -- or back to
+  // banishment when it was cast from there by permit.
+  takeControl(cardId, owner)
   const from = zoneOf(cardId)
+  const to = permit ? `banished:${owner}` : `grave:${owner}`
   snapshotStructural(entry)
   removeFromZones(state.zones, cardId)
-  state.zones[`grave:${side}`].push(cardId)
+  state.zones[to].push(cardId)
   state.events.push({
     id: uid(),
     seq: entry.seq,
     cardId,
     name: 'Spell resolves',
-    text: `${cardName(cardId)} resolves and goes to the cemetery.`,
+    text: `${cardName(cardId)} resolves and goes to ${permit ? 'banishment' : 'the cemetery'}.`,
   })
-  fireTriggers({ type: 'move', cardId, from, to: `grave:${side}`, seq: entry.seq })
+  fireTriggers({ type: 'move', cardId, from, to, seq: entry.seq })
 }
 
 // Whether a minion may be summoned onto this location (enforced casts). Surface
@@ -3017,7 +4455,8 @@ function performPermanentCast(cardId, zone) {
   if (!carrierId && !canPlace(cardId, to)) return false
   if (enforcing() && card.unit && !card.avatar && !legalSummonLocation(cardId, to))
     return false
-  const side = card.enemy ? 'opponent' : 'player'
+  const side = castSide(cardId)
+  const mana = castManaCost(cardId)
   const from = zoneOf(cardId)
   const entry = {
     type: 'cast',
@@ -3026,14 +4465,18 @@ function performPermanentCast(cardId, zone) {
     targetId: carrierId || null,
     gridSquare: null,
     to: carrierId ? null : to,
+    prevCastPermits: clone(state.castPermits),
+    prevControlFlips: clone(state.controlFlips),
     prevTapped: clone(state.tapped),
     prevStats: clone(state.stats),
     prevDamage: clone(state.damage),
     prevStrengthMod: clone(state.strengthMod),
     prevGrantedKeywords: clone(state.grantedKeywords),
   }
-  const cost = castCostOf(cardId)
-  if (cost.mana) adjustStat(side, 'mana', -cost.mana)
+  if (mana) adjustStat(side, 'mana', -mana)
+  delete state.castPermits[cardId]
+  // A permanent cast by the other side enters under the caster's control.
+  takeControl(cardId, side)
   logEntry(entry) // fires "when a spell is cast" triggers (card still in hand)
   // The spell resolves: the card enters the realm (or a carrier's hands).
   snapshotStructural(entry)
@@ -3075,10 +4518,11 @@ export function castByDrop(cardId, zone) {
   if (t?.mode === 'card' && t.required) {
     const targetId = findDropTarget(cardId, ability, zone, sq)
     if (!targetId) return false
-    performCast(cardId, ability.id, targetId, null)
+    continueActivate(cardId, ability.id, true, targetId)
     return true
   }
-  performCast(cardId, ability?.id || null, null, null)
+  if (ability) continueActivate(cardId, ability.id, true, null)
+  else performCast(cardId, null, null, null)
   return true
 }
 
@@ -3120,9 +4564,11 @@ export function beginCast(cardId) {
     ui.activating = { cardId, abilityId, cast: true }
   } else if (t?.mode === 'card' && t.required) {
     ui.activating = { cardId, abilityId, cast: true }
+  } else if (abilityId) {
+    continueActivate(cardId, abilityId, true, null)
   } else {
     ui.activating = null
-    performCast(cardId, abilityId, null, null)
+    performCast(cardId, null, null, null)
   }
 }
 
@@ -3205,6 +4651,11 @@ export function beginActivate(cardId, abilityId) {
   if (!ability) return
   // A tap cost can't be paid by a summon-sick card (Charge exempts).
   if (ability.cost?.tap && tapBlockedBySickness(cardId)) return
+  // Used up its activations for this turn.
+  if (casting() && abilityUsesLeft(cardId, ability) <= 0) return
+  // Under enforcement the mana cost (with any cemetery tax) must be affordable.
+  if (enforcing() && (state.stats[sideOf(cardId)]?.mana || 0) < abilityManaCost(cardId, ability))
+    return
   if (
     ui.activating &&
     ui.activating.cardId === cardId &&
@@ -3230,24 +4681,48 @@ export function beginActivate(cardId, abilityId) {
   } else if (t.required) {
     ui.activating = { cardId, abilityId }
   } else {
-    ui.activating = null
-    performAbility(cardId, abilityId, null)
+    continueActivate(cardId, abilityId, false, null)
   }
 }
 
 export function targetActivate(targetId) {
   if (!ui.activating || !canActivateTarget(targetId)) return
   const { cardId, abilityId, cast } = ui.activating
-  ui.activating = null
-  if (cast) performCast(cardId, abilityId, targetId, null)
-  else performAbility(cardId, abilityId, targetId)
+  const ability = findAbility(cardId, abilityId)
+  const needed = pickCount(ability)
+  if (needed <= 1 && !choosesCast(ability)) {
+    continueActivate(cardId, abilityId, cast, targetId)
+    return
+  }
+  // The final click names which picked card may be cast.
+  if (ui.activating.choosing) {
+    const picked = ui.activating.picked
+    continueActivate(cardId, abilityId, cast, picked[0], { targetIds: picked, castId: targetId })
+    return
+  }
+  const picked = [...(ui.activating.picked || []), targetId]
+  if (picked.length < needed) {
+    ui.activating = { ...ui.activating, picked }
+    return
+  }
+  if (choosesCast(ability)) {
+    ui.activating = { ...ui.activating, picked, choosing: true }
+    return
+  }
+  continueActivate(cardId, abilityId, cast, picked[0], { targetIds: picked })
 }
 
 // Whether the armed ability/cast has an optional ("may") card target that the
 // player can decline right now.
 export function canDeclineActivate() {
   const ab = activeAbility()
-  return !!(ui.activating && ab && ab.target.mode === 'card' && ab.target.optional)
+  return !!(
+    ui.activating &&
+    !ui.activating.dest &&
+    ab &&
+    ab.target.mode === 'card' &&
+    ab.target.optional
+  )
 }
 
 // Resolve the armed optional ability/cast with no target: its `who: target`
@@ -3255,9 +4730,7 @@ export function canDeclineActivate() {
 export function declineActivate() {
   if (!canDeclineActivate()) return
   const { cardId, abilityId, cast } = ui.activating
-  ui.activating = null
-  if (cast) performCast(cardId, abilityId, null, null)
-  else performAbility(cardId, abilityId, null)
+  continueActivate(cardId, abilityId, cast, null)
 }
 
 // Reverse a pickup: give the item back to its previous holder, or return it to
@@ -3325,6 +4798,9 @@ export function undo() {
   if (m.prevFloodedSites) state.floodedSites = clone(m.prevFloodedSites)
   if (m.prevStrengthMod) state.strengthMod = clone(m.prevStrengthMod)
   if (m.prevGrantedKeywords) state.grantedKeywords = clone(m.prevGrantedKeywords)
+  if (m.prevAnimated) state.animated = clone(m.prevAnimated)
+  if (m.prevCastPermits) state.castPermits = clone(m.prevCastPermits)
+  if (m.prevControlFlips) restoreControlFlips(m.prevControlFlips)
   if (m.prevSummoned) state.summoned = clone(m.prevSummoned)
   if (m.prevStealthLost) state.stealthLost = clone(m.prevStealthLost)
   if (m.prevWardBroken) state.wardBroken = clone(m.prevWardBroken)
@@ -3393,6 +4869,8 @@ export function startRecording() {
 }
 
 function restoreInitial() {
+  revertControlFlips()
+  purgeGeneratedCards()
   if (state.initialZones) {
     state.carry = clone(state.initialCarry || {})
     state.zones = restoreZones(state.initialZones)
@@ -3405,6 +4883,9 @@ function restoreInitial() {
   state.grants = {}
   state.strengthMod = {}
   state.grantedKeywords = {}
+  state.animated = {}
+  state.castPermits = {}
+  state.controlFlips = {}
   state.summoned = {}
   state.stealthLost = {}
   state.wardBroken = {}
@@ -3419,13 +4900,20 @@ const sameEntry = (a, b) => {
   const type = a.type || 'move'
   if (type !== (b.type || 'move')) return false
   if (a.cardId !== b.cardId) return false
+  if ((a.targetIds || []).join() !== (b.targetIds || []).join()) return false
+  if ((a.castId ?? null) !== (b.castId ?? null)) return false
   if (type === 'ability')
-    return a.abilityId === b.abilityId && a.targetId === b.targetId
+    return (
+      a.abilityId === b.abilityId &&
+      a.targetId === b.targetId &&
+      (a.destZone ?? null) === (b.destZone ?? null)
+    )
   if (type === 'cast')
     return (
       a.abilityId === b.abilityId &&
       a.targetId === b.targetId &&
       (a.gridSquare ?? null) === (b.gridSquare ?? null) &&
+      (a.destZone ?? null) === (b.destZone ?? null) &&
       (a.to ?? null) === (b.to ?? null)
     )
   if (type === 'damage') return (a.amount || 0) === (b.amount || 0)
@@ -3616,7 +5104,7 @@ export function adjustStat(side, key, delta) {
 
 export function isUnit(cardOrId) {
   const card = typeof cardOrId === 'string' ? state.cards[cardOrId] : cardOrId
-  return !!(card?.unit || card?.avatar)
+  return !!(card?.unit || card?.avatar || (card?.id && animationOf(card.id)))
 }
 
 export function isAvatar(cardOrId) {
@@ -3721,16 +5209,6 @@ export function toggleLanceToken(cardId) {
     card.artifact = true
     card.monument = false
   }
-}
-
-// Whether this minion may be summoned onto an opponent-controlled site. A site's
-// water type is no longer a manual flag -- it comes from the site's water
-// threshold (affinity.water) plus the reversible in-play Flood state -- so the
-// old per-card water toggle is gone; legacy `water` flags still migrate on load.
-export function toggleOppSiteSummon(cardId) {
-  const card = state.cards[cardId]
-  if (!card) return
-  card.allowOpponentSiteSummon = !card.allowOpponentSiteSummon
 }
 
 // Whether this spell may also be cast from its owner's cemetery, not just the
@@ -4126,6 +5604,8 @@ export function fingerprint() {
     date: state.puzzleDate,
     enforce: state.enforce,
     combat: state.combat,
+    hideAtlas: state.hideAtlas,
+    hideSpellbook: state.hideSpellbook,
     cards: state.cards,
     initial: state.initialZones || state.zones,
     tapped: state.initialTapped || state.tapped,
@@ -4159,7 +5639,15 @@ export function serialize() {
     date: state.puzzleDate || null,
     enforce: !!state.enforce,
     combat: !!state.combat,
-    cards: clone(state.cards),
+    hideAtlas: !!state.hideAtlas,
+    hideSpellbook: !!state.hideSpellbook,
+    // Tokens generated while recording/playing are not part of the puzzle.
+    // A card taken over in play is saved under its original owner.
+    cards: Object.fromEntries(
+      Object.entries(clone(state.cards))
+        .filter(([, c]) => !c.generated)
+        .map(([id, c]) => [id, state.controlFlips[id] ? { ...c, enemy: !c.enemy } : c])
+    ),
     initial: clone(state.initialZones || state.zones),
     initialTapped: clone(state.initialTapped || state.tapped || {}),
     initialDamage: clone(state.initialDamage || state.damage || {}),
@@ -4253,6 +5741,8 @@ export function loadPuzzle(data, { play = true } = {}) {
   state.puzzleDate = data.date || ''
   state.enforce = !!data.enforce
   state.combat = !!data.combat
+  state.hideAtlas = !!data.hideAtlas
+  state.hideSpellbook = !!data.hideSpellbook
   state.cards = clone(data.cards || {})
   for (const c of Object.values(state.cards)) {
     c.unit = !!(c.unit || c.avatar)
@@ -4264,10 +5754,10 @@ export function loadPuzzle(data, { play = true } = {}) {
     c.monument = !!c.monument
     c.lanceToken = !!c.lanceToken
     c.magic = !!c.magic
-    // Minion capability: may be summoned onto an opponent-controlled site.
-    c.allowOpponentSiteSummon = !!c.allowOpponentSiteSummon
     // Spell capability: may be cast from the cemetery, not just the hand.
     c.castFromCemetery = !!c.castFromCemetery
+    // Designated as the template for a token kind ('' = an ordinary card).
+    c.tokenKind = TOKEN_TEMPLATE_KINDS.includes(c.tokenKind) ? c.tokenKind : ''
     c.spellCost = {
       mana: Number(c.spellCost?.mana) || 0,
       air: Number(c.spellCost?.air) || 0,
@@ -4295,6 +5785,21 @@ export function loadPuzzle(data, { play = true } = {}) {
     c.abilities = Array.isArray(c.abilities)
       ? c.abilities.map(normalizeAbility)
       : []
+    // Enemy-site summoning used to be a per-card flag; it is now a passive
+    // ability trait. Carry an old flag over as a self passive.
+    if (c.allowOpponentSiteSummon) {
+      if (!c.abilities.some((a) => a.kind === 'passive' && a.passive.summonOnEnemySites)) {
+        c.abilities.push(
+          normalizeAbility({
+            kind: 'passive',
+            name: 'Enemy-site summon',
+            scope: 'self',
+            passive: { summonOnEnemySites: true },
+          })
+        )
+      }
+    }
+    delete c.allowOpponentSiteSummon
   }
   state.initialZones = normalizeZones(data.initial)
   state.initialFloodedSites = normalizeFloodedSites(
@@ -4314,6 +5819,9 @@ export function loadPuzzle(data, { play = true } = {}) {
   state.grants = {}
   state.strengthMod = {}
   state.grantedKeywords = {}
+  state.animated = {}
+  state.castPermits = {}
+  state.controlFlips = {}
   state.summoned = {}
   state.stealthLost = {}
   state.wardBroken = {}
@@ -4356,12 +5864,17 @@ export function newPuzzle() {
   state.puzzleDate = ''
   state.enforce = false
   state.combat = false
+  state.hideAtlas = false
+  state.hideSpellbook = false
   state.cards = {}
   state.zones = emptyZones()
   state.carry = {}
   state.grants = {}
   state.strengthMod = {}
   state.grantedKeywords = {}
+  state.animated = {}
+  state.castPermits = {}
+  state.controlFlips = {}
   state.summoned = {}
   state.stealthLost = {}
   state.wardBroken = {}

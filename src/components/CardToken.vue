@@ -22,6 +22,9 @@ import {
   pickGridSquare,
   isStoryChoiceTarget,
   resolveStoryChoice,
+  destPickArmed,
+  canPickAnyDest,
+  pickAnyDest,
   carriedBy,
   damageOf,
   isSilenced,
@@ -29,6 +32,8 @@ import {
   effectiveStrengthMod,
   grantedKeywordsOf,
   cardTypeLabel,
+  isAnimated,
+  wardTokenArt,
   beginDrag,
   moveCard,
   zoneOf,
@@ -94,7 +99,7 @@ const moveArmed = computed(
 // Transient cosmetic flash for this card. Only kinds whose card stays put are
 // drawn on the token; cast/death cards leave for the cemetery, so those play as
 // a positional burst in FxOverlay instead. Driven off the self-expiring ui.fx.
-const FLASH_KINDS = ['genesis', 'impact']
+const FLASH_KINDS = ['genesis', 'impact', 'trigger']
 const fxKind = computed(() => {
   const hit = ui.fx.find(
     (f) => f.cardId === props.cardId && FLASH_KINDS.includes(f.kind)
@@ -112,6 +117,7 @@ const label = computed(() => {
   const bits = [c.name]
   if (c.avatar) bits.push('avatar')
   else if (c.unit) bits.push('minion')
+  else if (isAnimated(props.cardId)) bits.push('animated minion')
   if (c.site) bits.push('site')
   if (c.aura) bits.push('aura')
   bits.push(c.enemy ? "opponent's" : 'yours')
@@ -144,6 +150,16 @@ function onDragStart(e) {
 // puts its actions in the bar above the storyline. The click must not reach
 // the zone underneath, or selecting would immediately move the card.
 function onClick() {
+  // Picking a destination (teleport / token placement): a click on a card picks
+  // its location -- its own layer if legal there, else that square's surface.
+  if (destPickArmed()) {
+    const m = /^cell:(\d+):/.exec(props.from)
+    if (m) {
+      const zone = canPickAnyDest(props.from) ? props.from : `cell:${m[1]}:top`
+      if (canPickAnyDest(zone)) pickAnyDest(zone)
+    }
+    return
+  }
   // The storyline is paused for a trigger to pick a target.
   if (ui.storyChoice) {
     if (isStoryChoiceTarget(props.cardId)) resolveStoryChoice(props.cardId)
@@ -200,9 +216,9 @@ function onClick() {
     :data-card-id="cardId"
     :class="{
       [`fx-${fxKind}`]: fxKind,
-      'is-site': card.site,
+      'is-site': card.site && !isAnimated(cardId),
       'is-aura': card.aura,
-      'is-unit': card.unit,
+      'is-unit': card.unit || isAnimated(cardId),
       'is-avatar': card.avatar,
       'is-tapped': tapped,
       'is-under': isUnder,
@@ -270,6 +286,15 @@ function onClick() {
     >
       {{ signedStr }}
     </span>
+    <!-- An intact Ward, drawn with the designated Ward token's art. -->
+    <img
+      v-if="wardTokenArt(cardId)"
+      :src="wardTokenArt(cardId)"
+      class="ward-token-art"
+      alt=""
+      aria-hidden="true"
+      draggable="false"
+    />
     <!-- Keywords gained in play, badged (base keywords are on the art). -->
     <div v-if="grantedKw.length" class="kw-tags" aria-hidden="true">
       <span v-for="kw in grantedKw" :key="kw" class="kw-tag">{{ kw }}</span>
@@ -308,6 +333,17 @@ function onClick() {
 </template>
 
 <style scoped>
+.ward-token-art {
+  position: absolute;
+  left: 2px;
+  top: 2px;
+  z-index: 3;
+  width: 34% !important;
+  height: auto;
+  border-radius: 4px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}
 .dmg-badge {
   position: absolute;
   top: 2px;
@@ -414,6 +450,21 @@ function onClick() {
   }
   .card-token.fx-impact {
     animation: fx-impact 0.5s ease-out;
+  }
+  .card-token.fx-trigger {
+    animation: fx-trigger 1.2s ease-out;
+  }
+}
+/* Two soft violet pulses as one of the card's abilities triggers. */
+@keyframes fx-trigger {
+  0%,
+  50%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(200, 120, 255, 0);
+  }
+  20%,
+  70% {
+    box-shadow: 0 0 14px 5px rgba(200, 120, 255, 0.85);
   }
 }
 /* Bright flash-in as a card enters the realm. */
