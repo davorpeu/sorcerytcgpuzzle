@@ -139,7 +139,15 @@ const directScope = (s) => s === 'self' || s === 'bearer' || s.startsWith('avata
 const costFilterLabel = (f) =>
   f === 'any' ? 'all spells' : f === 'permanent' ? 'permanents (non-magic)' : `${f} spells`
 const costOnLabel = (o) =>
-  o === 'spells' ? 'spells the affected side casts' : "the affected card's own cost"
+  o === 'spells'
+    ? 'spells the affected side casts'
+    : o === 'abilities'
+    ? "the affected cards' activated abilities"
+    : "the affected card's own cost"
+
+// Whether any effect (or a count it uses) picks a side's Avatar.
+const usesAvatarSelector = (ability) =>
+  (ability.effects || []).some((e) => e.who === 'avatar' || e.countOf?.who === 'avatar')
 
 const TOKEN_LABELS = {
   soldier: 'Foot Soldier',
@@ -546,6 +554,10 @@ function onRemove(ability) {
             cards on the board — so this does nothing. Use scope <em>this card</em>,
             or "spells the affected side casts" with a spell filter (e.g. minions).
           </p>
+          <p v-if="ability.passive.costOn === 'abilities' && ability.passive.costMod" class="hint">
+            Changes the mana cost of each affected card's own activated abilities
+            (never below 0) — not spells, and not threshold requirements.
+          </p>
 
           <div class="field-label section-head">Grants affinity</div>
           <div class="effect-row">
@@ -937,10 +949,16 @@ function onRemove(ability) {
         <em>adjacent</em>/<em>nearby</em> are the ring around its square and
         leave out its own location (add a second effect <em>at its location</em>
         to include it), and <em>units</em>/<em>cards</em> include avatars. A spell
-        measures from the square it was dropped on, else from its caster.
-        <em>avatar</em> hits that side's Avatar card, on the board or kept off it
-        as a life stat. A Ward protects each card an effect would hit.
+        measures from the square it was dropped on, else from its caster; a
+        Deathrite from the square the card died on. A Ward protects each card an
+        effect would hit.
       </p>
+      <p v-if="abilities.some(usesAvatarSelector)" class="hint">
+        <em>avatar</em> hits that side's Avatar card, on the board or kept off it
+        as a life stat. With no Avatar card in the puzzle it hits nothing — use
+        <em>adjustStat life</em> instead.
+      </p>
+
       <p class="hint">
         Effects run automatically and reverse on undo. The mana cost is deducted
         on activation — don't also add an <em>adjustStat mana</em> effect for it.

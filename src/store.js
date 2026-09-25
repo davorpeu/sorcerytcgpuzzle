@@ -835,7 +835,9 @@ export const abilityCostBlocked = (cardId, ability) =>
 // An activated ability's mana cost now: its printed cost, plus any cemetery
 // tax when it picks cemetery cards.
 export function abilityManaCost(cardId, ability) {
-  let mana = Number(ability?.cost?.mana) || 0
+  // A passive 'abilities' cost modifier on the card changes its printed cost
+  // (never below 0).
+  let mana = Math.max(0, (Number(ability?.cost?.mana) || 0) + (traits(cardId)?.abilityCostMod || 0))
   const t = ability?.target
   if (t?.mode === 'card' && t.required && t.from === 'cemetery') {
     mana += cemeteryTaxFor(sideOf(cardId))
@@ -1067,6 +1069,7 @@ function accumPassive(p, acc) {
   acc.ranged += Number(p.ranged) || 0
   if (p.summonOnEnemySites) acc.summonOnEnemySites = true
   if (p.costOn === 'own') acc.costMod += Number(p.costMod) || 0
+  if (p.costOn === 'abilities') acc.abilityCostMod += Number(p.costMod) || 0
   if (p.cantAttack) acc.cantAttack = true
   if (p.cantBeTargeted) acc.cantBeTargeted = true
   if (p.cantMove) acc.cantMove = true
@@ -1150,6 +1153,7 @@ const passiveState = computed(() => {
       ranged: 0,
       summonOnEnemySites: false,
       costMod: 0,
+      abilityCostMod: 0,
       cantAttack: false,
       cantBeTargeted: false,
       cantMove: false,
@@ -1171,6 +1175,7 @@ const passiveState = computed(() => {
       disabled: disabledHere,
       summonOnEnemySites: acc.summonOnEnemySites,
       costMod: acc.costMod,
+      abilityCostMod: acc.abilityCostMod,
       cantAttack: acc.cantAttack,
       cantBeTargeted: acc.cantBeTargeted,
       cantMove: acc.cantMove,
@@ -1696,13 +1701,21 @@ function sendToCemetery(unitId, entry, name, text) {
 // Lethal source, dies to its cemetery. Avatars never leave for the cemetery --
 // they bleed life and sit at Death's Door on 0. The zoneOf guard skips a unit a
 // nested Deathrite already removed, so it is never sent twice.
+// Repeats until a pass kills nobody: a death can lower another unit's Life (it
+// was the source of a strength passive), and that unit must then die too,
+// whatever order the squares were checked in.
 function resolveDeaths(entry, lethalHit) {
-  for (const u of boardUnits()) {
-    if (u.card.avatar) continue
-    if (!zoneOf(u.id)?.startsWith('cell:') && !isOversized(u.id)) continue
-    const dmg = state.damage[u.id] || 0
-    if (!lethalHit.has(u.id) && dmg < Math.max(1, effectiveLife(u.id))) continue
-    sendToCemetery(u.id, entry, 'Slain', `${cardName(u.id)} was slain.`)
+  let died = true
+  while (died) {
+    died = false
+    for (const u of boardUnits()) {
+      if (u.card.avatar) continue
+      if (!zoneOf(u.id)?.startsWith('cell:') && !isOversized(u.id)) continue
+      const dmg = state.damage[u.id] || 0
+      if (!lethalHit.has(u.id) && dmg < Math.max(1, effectiveLife(u.id))) continue
+      sendToCemetery(u.id, entry, 'Slain', `${cardName(u.id)} was slain.`)
+      died = true
+    }
   }
   // Survivors animated "until damaged" now revert.
   settleAnimations(entry)
@@ -2075,8 +2088,10 @@ export const PASSIVE_SCOPES = [
 export const PASSIVE_AFFECTS = ['units', 'sites', 'artifacts']
 
 // What a passive cost modifier applies to: the affected card's own cast cost,
-// or every spell the affected side casts.
-export const PASSIVE_COST_ON = ['own', 'spells']
+// every spell the affected side casts, or the mana cost of the affected cards'
+// activated abilities.
+export const PASSIVE_COST_ON = ['own', 'spells', 'abilities']
+
 
 // Which spells a side-wide cost modifier applies to: the target filters that
 // make sense for a cast card, plus magic and "permanent" (any non-magic spell).
@@ -3306,11 +3321,14 @@ function collectTriggers(entry) {
     if (!owner.abilities?.length) continue
     for (const a of owner.abilities) {
       if (a.kind !== 'triggered') continue
-      // Silence strips abilities: a silenced card's triggers don't fire.
-      if (isSilenced(owner.id)) continue
       const party = triggerMatches(a.trigger, owner, entry)
       if (!party) continue
       if (!triggerLive(owner, a)) continue
+      // Silence strips abilities: a silenced card's triggers don't fire --
+      // except one resolving after its owner has left play (Deathrite), which
+      // silence no longer reaches.
+      if (isSilenced(owner.id) && !(departureTrigger(a, owner.id, party.subject) && !inPlay(owner.id)))
+        continue
       // A consequence event (damage, a death's replayed move) snapshots onto the
       // logged entry that caused it.
       out.push({
@@ -3319,6 +3337,7 @@ function collectTriggers(entry) {
         triggeringId: party.subject,
         otherId: party.other,
         killed: entry.killed || null,
+        ownerAt: ownerOrigin(owner.id, entry),
         entry: entry.root || entry,
       })
     }
@@ -3331,10 +3350,8 @@ function collectTriggers(entry) {
 // cemetery or banished zone, i.e. Deathrite), which is meant to resolve after
 // the owner has left.
 function sourceGone(ev) {
-  const to = ev.ability.trigger.to
   // Departure triggers (Deathrite) are meant to resolve after the owner leaves.
-  if (to === 'cemetery' || to === 'banished') return false
-  if (ev.ability.trigger.action === 'death' && ev.triggeringId === ev.ownerId) return false
+  if (departureTrigger(ev.ability, ev.ownerId, ev.triggeringId)) return false
   // Deaths settle before damage events do, so a unit killed in the exchange still
   // gets its own "when damaged" / "whenever this deals damage" ability -- but
   // only from the batch that killed it: later damage to or from a dead card must
@@ -3346,9 +3363,35 @@ function sourceGone(ev) {
   )
     return false
   // Otherwise the event is ignored once its source has left the board (it is no
-  // longer in the realm nor an aura on the mat).
-  const cat = cardZoneCategory(ev.ownerId)
-  return cat !== 'realm' && cat !== 'aura'
+  // longer in the realm nor an aura on the mat) -- or has been silenced since
+  // it triggered.
+  if (!inPlay(ev.ownerId)) return true
+  return isSilenced(ev.ownerId)
+}
+
+// A departure trigger resolves after its owner has left play: a Deathrite-style
+// move to the cemetery/banished zone, or the owner's own death.
+function departureTrigger(ability, ownerId, subjectId) {
+  const t = ability.trigger
+  if (t.to === 'cemetery' || t.to === 'banished') return true
+  return t.action === 'death' && subjectId === ownerId
+}
+
+// Where a trigger's owner is measured from when it has no board position of its
+// own (it just died, or was hit and then left): the node it left, or where it
+// stood when the causing hit landed. Null when it is on the board (its own
+// position is used) or can't be placed.
+function ownerOrigin(ownerId, event) {
+  if (nodeOf(ownerId)) return null
+  if (event.cardId === ownerId && (event.type || 'move') === 'move') {
+    const m = /^cell:(\d+):(top|bot)$/.exec(event.from || '')
+    if (m) return { sq: Number(m[1]), layer: m[2] }
+    const s = /^site:(\d+)$/.exec(event.from || '')
+    if (s) return { sq: Number(s[1]), layer: 'top' }
+    const a = /^aura:(\d+)$/.exec(event.from || '')
+    if (a) return { sq: intersectionSquares(Number(a[1]))[0], layer: 'top' }
+  }
+  return event.at?.[ownerId] || null
 }
 
 // Cards a triggered ability could target, evaluated from its owner.
@@ -3402,12 +3445,30 @@ function logStoryEvent(ev, ignored) {
 function autoTarget(ev) {
   const t = ev.ability.target
   if (t.mode === 'card' && t.required && t.optional) return null
-  return triggerRef(ev)
+  return fallbackTarget(ev)
 }
 
 // The card a trigger refers to by default: its subject, or the other party.
 const triggerRef = (ev) =>
   ev.ability.trigger?.targets === 'other' ? ev.otherId || null : ev.triggeringId
+
+// The trigger's default card, when it may stand in as the ability's target. With
+// a required card target it must be a legal pick (so an untargetable card is
+// never hit through the fallback); the other party is also shielded by Stealth
+// and "can't be targeted". Otherwise the ability resolves with no target: its
+// `who: target` effects are skipped and the rest still run.
+function fallbackTarget(ev) {
+  const ref = triggerRef(ev)
+  if (!ref) return null
+  const t = ev.ability.target
+  if (t.mode === 'card' && t.required && !satisfiesTarget(ev.ownerId, ref, t)) return null
+  if (
+    ev.ability.trigger?.targets === 'other' &&
+    (blockedByStealth(ev.ownerId, ref) || (cantBeTargeted(ref) && oppositeSides(ev.ownerId, ref)))
+  )
+    return null
+  return ref
+}
 
 // Drain the storyline. Resumable: if an event needs a player choice, it pauses
 // (leaving the rest on storyStack) and returns; resolveStoryChoice runs the
@@ -3440,6 +3501,7 @@ function resolveStory() {
         triggeringId: ev.triggeringId,
         otherId: ev.otherId,
         killed: ev.killed,
+        ownerAt: ev.ownerAt,
         dest: !pickCard,
         targetId: pickCard ? null : autoTarget(ev),
       }
@@ -3452,6 +3514,7 @@ function resolveStory() {
     if (!ignored)
       runEffects(ev.ability, ev.ownerId, autoTarget(ev), ev.entry, null, null, {
         triggeringId: ev.triggeringId,
+        ownerAt: ev.ownerAt,
       })
   }
   storyStack = null
@@ -3462,7 +3525,7 @@ function resolveStory() {
 export function resolveStoryChoice(targetId, gridSquare) {
   const c = ui.storyChoice
   if (!c || c.dest) return
-  const t = targetId ?? triggerRef(c)
+  const t = targetId ?? fallbackTarget(c)
   // A destination still to pick: stay paused, now asking for the square.
   if (gridSquare == null && needsDestChoice(c, t)) {
     ui.storyChoice = { ...c, dest: true, targetId: t }
@@ -3481,12 +3544,14 @@ function finishStoryChoice(c, targetId, gridSquare, destZone) {
     triggeringId: c.triggeringId,
     otherId: c.otherId,
     killed: c.killed,
+    ownerAt: c.ownerAt,
   }
   const ignored = sourceGone(ev)
   logStoryEvent(ev, ignored)
   if (!ignored)
     runEffects(c.ability, c.ownerId, targetId, c.entry, gridSquare, destZone, {
       triggeringId: c.triggeringId,
+      ownerAt: c.ownerAt,
     })
   resolveStory() // resume the rest of the storyline
 }
@@ -3982,12 +4047,16 @@ function selectCards(sel, ctx) {
   }
 }
 
-// Where a relative area is measured from: the source's own position, or -- for
-// a spell resolving from hand, which has none -- the square it was dropped on,
-// else its caster (the side's avatar).
+// Where a relative area is measured from: the source's own position; for a
+// triggered ability whose owner has left the board (a Deathrite), the node it
+// left or was hit on; for a spell resolving from hand, which has none, the
+// square it was dropped on, else its caster (the side's avatar). Anything else
+// with no position has no area.
 function areaOrigin(ctx) {
   const own = nodeOf(ctx.sourceId)
   if (own) return own
+  if (ctx.ownerAt) return ctx.ownerAt
+  if (!ctx.isSpellCast) return null
   if (ctx.castSquare != null) return { sq: ctx.castSquare, layer: 'top' }
   const caster = selectCards({ who: 'avatar', avatarSide: 'self' }, ctx)[0]
   return caster ? nodeOf(caster) : null
@@ -4526,12 +4595,16 @@ function runEffects(ability, cardId, targetId, entry, gridSquare, destZone, extr
       : null
   // A cast spell's drop square (a grid spell's is its picked square), for areas
   // measured around a spell that has no board position of its own.
-  const castSquare = entry?.type === 'cast' ? entry.dropSquare ?? entry.gridSquare ?? null : null
+  // Only the spell being cast measures an area from its caster as a last resort.
+  const isSpellCast = entry?.type === 'cast' && entry.cardId === cardId
+  const castSquare = isSpellCast ? entry.dropSquare ?? entry.gridSquare ?? null : null
   const ctx = {
     ability,
     sourceId: cardId,
     targetId,
     triggeringId: extra.triggeringId ?? null,
+    ownerAt: extra.ownerAt ?? null,
+    isSpellCast,
     pickSquare,
     castSquare,
   }
@@ -4608,10 +4681,15 @@ function runEffects(ability, cardId, targetId, entry, gridSquare, destZone, extr
       // Resolved up front; skip one an earlier removal's Deathrite already took
       // out of play. (A card picked where it lies off the mat -- a cemetery
       // target to bounce, say -- is still removed from there.)
+      // A card already in a cemetery (or banished) is never destroyed, but the
+      // card that set a trigger off may still be banished or returned from
+      // there ("whenever a nearby enemy dies, banish it").
+
       const ids = recipients(eff)
       const wasInPlay = new Set(ids.filter(inPlay))
       for (const who of ids) {
         if (wasInPlay.has(who) && !inPlay(who)) continue
+        if (eff.op === 'destroy' && ['cemetery', 'banished'].includes(cardZoneCategory(who))) continue
         effectRemove(who, eff.op, entry)
       }
     } else if (eff.op === 'heal') {
