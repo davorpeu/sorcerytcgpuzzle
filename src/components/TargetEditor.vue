@@ -1,6 +1,14 @@
 <script setup>
 import AreaPicker from './AreaPicker.vue'
-import { ZONE_CATEGORIES, TARGET_FILTERS, FILTER_LABELS, FILTER_PLURALS, GRID_SHAPES, TARGET_WITHIN } from '../store.js'
+import {
+  ZONE_CATEGORIES,
+  TARGET_FILTERS,
+  FILTER_LABELS,
+  FILTER_PLURALS,
+  GRID_SHAPES,
+  TARGET_WITHIN,
+  TARGET_SHOOTERS,
+} from '../store.js'
 
 // The "choose" step of an ability: nothing, a card, or a square/area on the
 // realm. Edits one target spec (the shape normalizeAbility gives an ability's
@@ -18,6 +26,11 @@ const PROJECTILE_HINT =
   'Fired in a cardinal direction: it flies in a straight line (same region, ' +
   'Stealth units are skipped) and hits the first unit in its path. The player ' +
   'picks the direction by clicking the unit it would hit.'
+
+const SHOOTER_LABELS = {
+  source: 'fired by this card (a spell: its caster)',
+  ally: 'fired by an ally the player picks first',
+}
 
 const choice = () => (props.t.mode === 'grid' ? 'grid' : props.t.required ? 'card' : 'none')
 function setChoice(c) {
@@ -65,6 +78,14 @@ const choices = () => [
           class="text-input num"
           title="Squares it flies; 0 = unlimited"
         />
+        <select
+          v-if="t.within === 'projectile'"
+          v-model="t.shooter"
+          class="text-input"
+          title="Who shoots it. An ally shooter is picked before the unit it hits; effects reach it as “the ally who shot”."
+        >
+          <option v-for="s in TARGET_SHOOTERS" :key="s" :value="s">{{ SHOOTER_LABELS[s] }}</option>
+        </select>
       </div>
       <div v-else class="row span2">
         <span class="hint">whose</span>

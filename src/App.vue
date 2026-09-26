@@ -29,6 +29,8 @@ import {
   declineDefender,
   declineStoryChoice,
   destPrompt,
+  shooterStage,
+  storyShooterStage,
   activeAbility,
   storyPickState,
   finishStoryPicks,
@@ -736,6 +738,21 @@ watch(
               <button class="btn small" @click="ui.awaitingDefender = null">Cancel</button>
             </div>
 
+            <!-- "An ally shoots a projectile": the player picks the ally, then
+                 the unit its projectile hits (a spell may be drag-cast onto the
+                 ally, so this lives here rather than on the selected card). -->
+            <div v-if="shooterStage()" class="story-prompt trigger-prompt">
+              <span v-if="shooterStage() === 'shooter'">
+                <strong>{{ state.cards[ui.activating.cardId]?.name }}</strong>
+                — click the ally who shoots the projectile.
+              </span>
+              <span v-else>
+                <strong>{{ state.cards[ui.activating.shooterId]?.name }}</strong>
+                shoots — click the highlighted unit the projectile hits.
+              </span>
+              <button class="btn small" @click="ui.activating = null">Cancel</button>
+            </div>
+
             <!-- A spell (possibly drag-cast, so not selected) waits for its
                  destination: where to teleport / where its token appears. -->
             <div v-if="ui.activating?.dest && ui.activating.cast" class="story-prompt trigger-prompt">
@@ -755,6 +772,10 @@ watch(
                 {{
                   ui.storyChoice.dest
                     ? destPrompt(ui.storyChoice.ability)
+                    : storyShooterStage() === 'shooter'
+                    ? 'click the ally who shoots the projectile.'
+                    : storyShooterStage() === 'hit'
+                    ? `${state.cards[ui.storyChoice.shooterId]?.name} shoots — click the unit the projectile hits.`
                     : ui.storyChoice.ability.target.prompt || 'click a highlighted target.'
                 }}
                 <template v-if="storyPickState()">

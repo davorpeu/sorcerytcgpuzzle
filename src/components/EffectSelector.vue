@@ -12,12 +12,15 @@ const props = defineProps({
   grid: { type: Boolean, default: false },
   triggered: { type: Boolean, default: false },
   pick: { type: Boolean, default: false },
+  // Whether an ally fires the ability's projectile target (so 'shooter' names it).
+  shooter: { type: Boolean, default: false },
   suffix: { type: String, default: '' },
 })
 
 const WHO_LABELS = {
   self: 'this card',
   target: 'the picked target',
+  shooter: 'the ally who shot',
   triggering: 'the triggering card',
   other: 'the other card involved',
   avatar: 'an Avatar',
@@ -28,6 +31,7 @@ const WHO_TITLES = {
   triggering: 'The card the trigger is about: the one that entered, died, attacked, was attacked…',
   other: 'The other party of the action: the attacker for "when this is attacked", the defender for "when this attacks", the damage source for "when this takes damage"',
   target: 'The card the player picks when this resolves',
+  shooter: 'The ally that fired the projectile at the target',
 }
 // Each card gets exactly one name: in a trigger with no pick there is no
 // separate "target" -- it is the triggering or the other card. Options that
@@ -37,11 +41,12 @@ const whos = () =>
     if (w === props.sel.who) return true
     if (w === 'target') return !props.triggered || props.pick || props.grid
     if (w === 'triggering' || w === 'other') return props.triggered
+    if (w === 'shooter') return props.shooter
     return true
   })
 const shapes = () => AREA_SHAPES.filter((s) => s !== 'grid' || props.grid || props.sel.area?.shape === 'grid')
 const whoLabel = (w) =>
-  props.suffix && ['self', 'target', 'triggering', 'other'].includes(w) ? `${WHO_LABELS[w]}${props.suffix}` : WHO_LABELS[w]
+  props.suffix && ['self', 'target', 'shooter', 'triggering', 'other'].includes(w) ? `${WHO_LABELS[w]}${props.suffix}` : WHO_LABELS[w]
 // includeSelf is only saved while set.
 function setIncludeSelf(on) {
   if (on) props.sel.area.includeSelf = true

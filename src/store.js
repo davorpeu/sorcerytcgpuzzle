@@ -2151,6 +2151,11 @@ export const GRID_SHAPES = ['location', 'adjacent', 'nearby']
 // direction (see projectileTargets); `target.range` limits its flight, 0 = no
 // limit.
 export const TARGET_WITHIN = ['any', 'adjacent', 'nearby', 'projectile']
+// Who fires a projectile target's projectile: the ability's own card (a spell
+// in hand fires from its caster's avatar), or an ally the player picks first --
+// "An ally shoots a projectile" (Grapple Shot). Effects reach that ally as
+// `who: shooter`.
+export const TARGET_SHOOTERS = ['source', 'ally']
 export const TARGET_SIDES = ['any', 'friendly', 'enemy']
 // Where a `move` effect sends its subject. 'picked' asks the player for a
 // destination when the ability resolves (or uses a grid ability's picked square).
@@ -2274,6 +2279,7 @@ export const AMOUNT_REFS = ['literal', 'power', 'carriedCount', 'waterBodySize',
 // Who an effect hits (its selector):
 //   self       -- the card whose ability it is
 //   target     -- the ability's chosen card target
+//   shooter    -- the ally that fired a projectile target (target.shooter 'ally')
 //   triggering -- the card whose action set a triggered ability off (which may
 //                 differ from a picked target)
 //   avatar     -- a side's avatar (`avatarSide`: 'self' | 'enemy', relative to
@@ -2284,7 +2290,10 @@ export const AMOUNT_REFS = ['literal', 'power', 'carriedCount', 'waterBodySize',
 //                 kind (TARGET_FILTERS) and side (TARGET_SIDES)
 //   other      -- a triggered ability's other party (the attacker, for "when
 //                 this is attacked"); shielded by Stealth / "can't be targeted"
-export const EFFECT_WHO = ['self', 'target', 'triggering', 'other', 'avatar', 'carrier', 'area']
+export const EFFECT_WHO = ['self', 'target', 'shooter', 'triggering', 'other', 'avatar', 'carrier', 'area']
+// Who deals a `strike` effect's blow: the ability's own card, or the ally that
+// shot its projectile target.
+export const STRIKE_BY = ['self', 'shooter']
 export const AVATAR_SIDES = ['self', 'enemy']
 // A relative area's reach: the source's own location, or that plus the squares
 // adjacent (4 cardinal) or nearby (8 around) it -- the same shapes as passive
@@ -2728,6 +2737,8 @@ function buildAbility(a) {
       count: Math.max(1, Number(a.target?.count) || 1),
       // With `count` > 1: "up to" that many -- the player may stop early.
       upTo: !!a.target?.upTo,
+      // Projectile targets: who fires it (see TARGET_SHOOTERS).
+      shooter: TARGET_SHOOTERS.includes(a.target?.shooter) ? a.target.shooter : 'source',
     },
     effects: Array.isArray(a.effects) ? a.effects.map(normalizeEffect) : [],
     loseWhen: a.loseWhen || 'never',
@@ -2774,7 +2785,11 @@ export function abilityView(ability, modes) {
   const all = ability.modes.map((_, i) => i)
   const picked = cleanModes(ability, modes ?? (needsModeChoice(ability) ? [] : all))
   const chosen = picked.map((i) => ability.modes[i])
-  const aim = chosen.find((m) => targetNeedsPick(m.target)) || chosen[0]
+  // A mode that doesn't aim anywhere of its own ("strike it" / "don't") leaves
+  // the ability's own target in charge when that one needs a pick.
+  const aim =
+    chosen.find((m) => targetNeedsPick(m.target)) ||
+    (targetNeedsPick(ability.target) ? null : chosen[0])
   return {
     ...ability,
     target: aim ? aim.target : ability.target,
@@ -3046,6 +3061,9 @@ function normalizeEffect(eff) {
     e.count = Math.max(1, Number(e.count) || 1)
   }
   if (e.op === 'reanimate') e.reach = REANIMATE_REACH.includes(e.reach) ? e.reach : 'any'
+  // The source strikes unless `by: shooter`; left implicit so older files are
+  // unchanged.
+  if (e.op === 'strike' && e.by !== 'shooter') delete e.by
   if (e.op === 'grantFrom') e.releaseTo = GRANT_RELEASE.includes(e.releaseTo) ? e.releaseTo : 'origin'
   if (e.op === 'addCounter' || e.op === 'removeCounter') e.name = String(e.name || 'charge')
   if (e.op === 'animate') {
@@ -4108,8 +4126,11 @@ function ownerOrigin(ownerId, event) {
   return event.at?.[ownerId] || null
 }
 
-// Cards a triggered ability could target, evaluated from its owner.
+// Cards a triggered ability could target, evaluated from its owner. An
+// ally-fired projectile's first pick is the ally, so what it offers is the
+// allies with something to hit.
 function triggerTargets(ownerId, ability) {
+  if (allyShoots(ability.target)) return shootersFor(ownerId, ability.target)
   return Object.keys(state.cards).filter(
     (id) => id !== ownerId && satisfiesTarget(ownerId, id, ability.target)
   )
@@ -4185,6 +4206,8 @@ function fallbackTarget(ev) {
   const ref = triggerRef(ev)
   if (!ref) return null
   const t = ev.ability.target
+  // An ally-fired projectile hits only what the picked ally shoots.
+  if (t.required && allyShoots(t)) return null
   if (t.mode === 'card' && t.required && !satisfiesTarget(ev.ownerId, ref, t)) return null
   if (
     ev.ability.trigger?.targets === 'other' &&
@@ -4291,7 +4314,10 @@ function chooseStoryModes(picked) {
 // Any card still pickable for the paused trigger besides those picked.
 function storyTargetsLeft(c, picks) {
   return Object.keys(state.cards).some(
-    (id) => id !== c.ownerId && !picks.includes(id) && satisfiesTarget(c.ownerId, id, c.ability.target)
+    (id) =>
+      id !== c.ownerId &&
+      !picks.includes(id) &&
+      satisfiesTarget(c.ownerId, id, c.ability.target, c.shooterId || null)
   )
 }
 
@@ -4300,6 +4326,12 @@ function storyTargetsLeft(c, picks) {
 export function resolveStoryChoice(targetId, gridSquare) {
   const c = ui.storyChoice
   if (!c || c.dest || c.pickModes) return
+  // "An ally shoots": the first pick is the ally; the storyline stays paused
+  // for what it hits.
+  if (storyAwaitingShooter(c)) {
+    if (targetId != null) ui.storyChoice = { ...c, shooterId: targetId }
+    return
+  }
   // A multi-target trigger collects `count` distinct targets -- or all there
   // are (a trigger has to resolve, so it never waits on an impossible pick).
   const needed = pickCount(c.ability)
@@ -4337,13 +4369,30 @@ function finishStoryChoice(c, targetId, gridSquare, destZone, ids = null) {
   }
   const ignored = storyIgnored(ev)
   logStoryEvent(ev, ignored)
+  if (!ignored && c.shooterId) recordShot(c, targetId)
+  if (!ignored && c.shooterId && targetId)
+    emitFx('projectile', { sourceId: c.shooterId, targetId, style: 'fireball' })
   if (!ignored)
     runAbilityEffects(c.ability, c.ownerId, targetId, c.entry, ids, gridSquare, destZone, {
       triggeringId: c.triggeringId,
       otherId: c.otherId,
       ownerAt: c.ownerAt,
+      shooterId: c.shooterId || null,
     })
   resolveStory() // resume the rest of the storyline
+}
+
+// A trigger's ally-fired projectile is part of the move that set it off: which
+// ally shot and what it hit (null: declined) are kept on that logged entry as
+// `shots`, in resolution order, so a solution line grades them like a spell's
+// own shooterId/targetId. Written through the reactive proxy so the solve
+// verdict re-runs -- the entry was logged before the storyline paused.
+function recordShot(c, targetId) {
+  const e = reactive(c.entry)
+  e.shots = [
+    ...(e.shots || []),
+    { abilityId: c.ability.id, ownerId: c.ownerId, shooterId: c.shooterId, targetId: targetId || null },
+  ]
 }
 
 // "Up to N" on a paused trigger: stop picking and resolve with what is picked.
@@ -4373,7 +4422,21 @@ export function isStoryChoiceTarget(id) {
   const c = ui.storyChoice
   if (!c || c.dest || c.pickModes || c.ability.target.mode !== 'card') return false
   if (c.picked?.includes(id)) return false
-  return id !== c.ownerId && satisfiesTarget(c.ownerId, id, c.ability.target)
+  if (storyAwaitingShooter(c)) return shootersFor(c.ownerId, c.ability.target).includes(id)
+  return id !== c.ownerId && satisfiesTarget(c.ownerId, id, c.ability.target, c.shooterId || null)
+}
+
+// The paused trigger still needs the ally that fires its projectile.
+const storyAwaitingShooter = (c) =>
+  !!c && !c.dest && !c.pickModes && !c.shooterId && allyShoots(c.ability.target)
+
+// Where a paused trigger's ally-fired projectile picks stand, for the prompt:
+// 'shooter', 'hit', or null (see shooterStage).
+export function storyShooterStage() {
+  const c = ui.storyChoice
+  if (storyAwaitingShooter(c)) return 'shooter'
+  if (c?.shooterId && !c.dest && !c.pickModes) return 'hit'
+  return null
 }
 
 // The paused trigger's grid pick, if it wants a square.
@@ -4548,7 +4611,14 @@ export function activeAbility() {
 
 // The chosen modes riding along an activation (for the `extra` of
 // continueActivate/performAbility/performCast), or null.
-const modesExtra = (a) => (a?.modes ? { modes: a.modes } : null)
+// The choices an armed activation carries into its resolution: a modal
+// ability's chosen modes, and the ally that shot its projectile target.
+const modesExtra = (a) => {
+  const out = {}
+  if (a?.modes) out.modes = a.modes
+  if (a?.shooterId) out.shooterId = a.shooterId
+  return Object.keys(out).length ? out : null
+}
 
 // The grid target waiting for a square to be picked, if any.
 export function activeGridPick() {
@@ -4709,6 +4779,7 @@ function continueActivate(cardId, abilityId, cast, targetId, extra = null, dropS
       dest: true,
       dropSquare,
       ...(extra?.modes ? { modes: extra.modes } : {}),
+      ...(extra?.shooterId ? { shooterId: extra.shooterId } : {}),
     }
     return
   }
@@ -4794,9 +4865,10 @@ function matchesTargetSide(sourceId, targetId, side, invert = false) {
 
 // The target must be within range of the source (adjacent = cardinal, nearby =
 // king). Unmeasurable sources (a spell cast from hand) don't constrain range.
-function withinTargetRange(sourceId, targetId, within, range) {
+function withinTargetRange(sourceId, targetId, within, range, shooterId = null) {
   if (within === 'any' || !within) return true
-  if (within === 'projectile') return projectileTargets(sourceId, range).has(targetId)
+  if (within === 'projectile')
+    return projectileTargets(shooterId || sourceId, range).has(targetId)
   const s = nodeOf(sourceId)
   const t = nodeOf(targetId)
   if (!s || !t) return true
@@ -4809,14 +4881,15 @@ function withinTargetRange(sourceId, targetId, within, range) {
 
 // Does a card satisfy an ability's full card-target spec (zone, kind, side,
 // range, stealth)? `sourceId` is the card whose ability it is.
-function satisfiesTarget(sourceId, targetId, t) {
+// `shooterId` is the ally that fires a projectile target, once picked.
+function satisfiesTarget(sourceId, targetId, t, shooterId = null) {
   if (!catMatches(t.from, cardZoneCategory(targetId))) return false
   if (!matchesFilter(state.cards[targetId], t.filter)) return false
   // With cemeteries swapped, "your" cemetery is the opponent's and vice versa,
   // so the side restriction flips for cemetery cards.
   const swappedGrave = t.from === 'cemetery' && cemeteriesSwapped()
   if (!matchesTargetSide(sourceId, targetId, t.side, swappedGrave)) return false
-  if (!withinTargetRange(sourceId, targetId, t.within, t.range)) return false
+  if (!withinTargetRange(sourceId, targetId, t.within, t.range, shooterId)) return false
   if (blockedByStealth(sourceId, targetId)) return false
   // A passive "can't be targeted" only shields against the opponent.
   if (cantBeTargeted(targetId) && oppositeSides(sourceId, targetId)) return false
@@ -4834,7 +4907,68 @@ export function canActivateTarget(targetId) {
   // A target that is also the sacrifice cost must be sacrificeable.
   if (ability.cost?.sacrifice === 'target' && !sacrificeable(ui.activating.cardId, targetId))
     return false
-  return satisfiesTarget(ui.activating.cardId, targetId, ability.target)
+  // "An ally shoots": the first click picks the shooter, the next what it hits.
+  if (awaitingShooter())
+    return shootersFor(ui.activating.cardId, ability.target).includes(targetId)
+  return satisfiesTarget(
+    ui.activating.cardId,
+    targetId,
+    ability.target,
+    ui.activating.shooterId || null
+  )
+}
+
+// ---------- ally-fired projectiles ----------
+
+// Whether a target spec has an ally fire its projectile (Grapple Shot).
+const allyShoots = (t) => t?.mode === 'card' && t.within === 'projectile' && t.shooter === 'ally'
+
+// The armed ability is still waiting for the ally who shoots.
+export function awaitingShooter() {
+  const a = ui.activating
+  if (!a || a.dest || a.pickModes || a.shooterId) return false
+  return allyShoots(activeAbility()?.target)
+}
+
+// Where an ally-fired projectile's picks stand, for the prompts: 'shooter'
+// (waiting for the ally), 'hit' (waiting for what it hits), or null.
+export function shooterStage() {
+  if (awaitingShooter()) return 'shooter'
+  const a = ui.activating
+  if (a?.shooterId && !a.dest && !a.pickModes) return 'hit'
+  return null
+}
+
+// An ally that may fire the projectile: a unit in play on the source's side,
+// other than the source itself.
+function canShootFor(sourceId, id) {
+  return (
+    id !== sourceId &&
+    isUnit(id) &&
+    inPlay(id) &&
+    !oppositeSides(sourceId, id) &&
+    !isDisabled(id)
+  )
+}
+
+// The allies that could fire `t`'s projectile at something legal.
+function shootersFor(sourceId, t) {
+  return Object.keys(state.cards).filter(
+    (s) =>
+      canShootFor(sourceId, s) &&
+      Object.keys(state.cards).some((id) => id !== sourceId && satisfiesTarget(sourceId, id, t, s))
+  )
+}
+
+// A drag-cast spell aimed by its drop: an ally-fired projectile's drop names
+// the shooter (the hit is then clicked). Null when the drop holds no such ally.
+function findDropShooter(sourceId, t, zone, sq) {
+  const ids =
+    sq != null
+      ? [`cell:${sq}:top`, `cell:${sq}:bot`].flatMap((z) => state.zones[z] || [])
+      : [...(state.zones[zone] || [])]
+  const allies = shootersFor(sourceId, t)
+  return ids.find((id) => allies.includes(id)) || null
 }
 
 // How many cards the armed ability picks, and whether it then asks which of
@@ -4888,6 +5022,8 @@ function selectCards(sel, ctx) {
   switch (sel?.who) {
     case 'target':
       return one(ctx.targetId)
+    case 'shooter':
+      return one(ctx.shooterId)
     case 'triggering':
       return one(ctx.triggeringId)
     case 'other': {
@@ -5201,13 +5337,15 @@ function effectAmount(eff, sourceId, ctx) {
 
 // Resolve a `move` effect's location reference to a board zone id. A picked
 // location is the chosen destination, or a grid ability's picked square.
-function resolveLocation(ref, sourceId, targetId, destZone, pickSquare) {
+// A projectile's line is measured from whoever shot it (`shooterId`, when an
+// ally fired it), else from the source.
+function resolveLocation(ref, sourceId, targetId, destZone, pickSquare, shooterId = null) {
   if (ref === 'picked') {
     if (destZone) return destZone
     return typeof pickSquare === 'number' ? `cell:${pickSquare}:top` : null
   }
-  if (ref === 'projectileStop') return projectileStep(sourceId, targetId, -1)
-  if (ref === 'projectileBeyond') return projectileStep(sourceId, targetId, 1)
+  if (ref === 'projectileStop') return projectileStep(shooterId || sourceId, targetId, -1)
+  if (ref === 'projectileBeyond') return projectileStep(shooterId || sourceId, targetId, 1)
   return zoneOf(ref === 'targetLocation' ? targetId : sourceId)
 }
 
@@ -5494,6 +5632,15 @@ function runEffects(ability, cardId, targetId, entry, gridSquare, destZone, extr
     targetId,
     triggeringId: extra.triggeringId ?? null,
     otherId: extra.otherId ?? null,
+    // The ally that shot this ability's projectile target -- only for the
+    // ability that logged the entry, not a trigger resolving under it.
+    // A trigger passes its own in (`extra`); a trigger never inherits one.
+    shooterId:
+      'shooterId' in extra
+        ? extra.shooterId
+        : !('triggeringId' in extra) && entry?.cardId === cardId
+        ? entry.shooterId ?? null
+        : null,
     ownerAt: extra.ownerAt ?? null,
     isSpellCast,
     pickSquare,
@@ -5542,9 +5689,13 @@ function runEffects(ability, cardId, targetId, entry, gridSquare, destZone, extr
       // The source strikes each recipient: its power plus any Lance bonus (the
       // lances break), resolved like a manual strike. Without combat it just
       // marks the power as damage counters.
+      // `by: shooter` has the ally that fired the projectile strike instead.
+      const striker = eff.by === 'shooter' ? ctx.shooterId : cardId
+      if (!striker || !state.cards[striker]) continue
       for (const t of recipients(eff)) {
-        if (combatActive()) strikeWithLance(cardId, t, entry)
-        else adjustDamage(t, combatPower(cardId))
+        if (t === striker) continue
+        if (combatActive()) strikeWithLance(striker, t, entry)
+        else adjustDamage(t, combatPower(striker))
       }
     } else if (eff.op === 'modifyStrength') {
       const amount = effectAmount(eff, cardId, ctx)
@@ -5561,7 +5712,7 @@ function runEffects(ability, cardId, targetId, entry, gridSquare, destZone, extr
         }
       }
     } else if (eff.op === 'move') {
-      const to = resolveLocation(eff.to, cardId, targetId, dest, pickSquare)
+      const to = resolveLocation(eff.to, cardId, targetId, dest, pickSquare, ctx.shooterId)
       for (const who of recipients(eff)) forceMove(who, to, eff, entry)
     } else if (eff.op === 'summonToken') {
       summonTokens(eff, cardId, targetId, entry, dest, pickSquare)
@@ -5890,6 +6041,7 @@ function performAbility(cardId, abilityId, targetId, gridSquare, destZone, extra
     castId: extra?.castId || null,
     gridSquare: gridSquare == null ? null : gridSquare,
     destZone: destZone || null,
+    ...(extra?.shooterId ? { shooterId: extra.shooterId } : {}),
     prevTapped: clone(state.tapped),
     prevStats: clone(state.stats),
     prevDamage: clone(state.damage),
@@ -5912,7 +6064,7 @@ function performAbility(cardId, abilityId, targetId, gridSquare, destZone, extra
   // before the effects run; FxOverlay reads positions pre-render, so a "pull
   // the shooter in" effect still launches from where the source stood.
   if (targetId && ability.target?.within === 'projectile') {
-    emitFx('projectile', { sourceId: cardId, targetId, style: 'fireball' })
+    emitFx('projectile', { sourceId: entry.shooterId || cardId, targetId, style: 'fireball' })
   }
   runAbilityEffects(ability, cardId, targetId, entry)
 }
@@ -6147,6 +6299,7 @@ function performCast(cardId, abilityId, targetId, gridSquare, destZone, extra = 
     targetId: targetId || null,
     targetIds: extra?.targetIds || null,
     castId: extra?.castId || null,
+    ...(extra?.shooterId ? { shooterId: extra.shooterId } : {}),
     prevCastPermits: clone(state.castPermits),
     prevControlFlips: clone(state.controlFlips),
     gridSquare: gridSquare == null ? null : gridSquare,
@@ -6172,7 +6325,7 @@ function performCast(cardId, abilityId, targetId, gridSquare, destZone, extra = 
   // fireball if it's a true projectile spell, an arcane bolt otherwise.
   if (targetId) {
     const style = ability?.target?.within === 'projectile' ? 'fireball' : 'bolt'
-    emitFx('projectile', { sourceId: cardId, targetId, style })
+    emitFx('projectile', { sourceId: entry.shooterId || cardId, targetId, style })
   }
   if (ability) runAbilityEffects(ability, cardId, targetId, entry)
   // The spell resolves and the card goes to its owner's cemetery -- or back to
@@ -6296,6 +6449,14 @@ export function castByDrop(cardId, zone) {
   if (t?.mode === 'grid') {
     if (sq == null) return false // grid spells must land on a square
     performCast(cardId, ability.id, null, sq)
+    return true
+  }
+  // Dropped on the ally who shoots: arm the hit pick.
+  if (allyShoots(t) && t.required) {
+    const shooterId = findDropShooter(cardId, t, zone, sq)
+    if (!shooterId) return false
+    disarmOthers()
+    ui.activating = { cardId, abilityId: ability.id, cast: true, shooterId, dropSquare: sq }
     return true
   }
   if (t?.mode === 'card' && t.required) {
@@ -6467,6 +6628,10 @@ export function beginActivate(cardId, abilityId) {
 
 export function targetActivate(targetId) {
   if (!ui.activating || !canActivateTarget(targetId)) return
+  if (awaitingShooter()) {
+    ui.activating = { ...ui.activating, shooterId: targetId }
+    return
+  }
   const { cardId, abilityId, cast } = ui.activating
   const ability = activeAbility()
   const modes = modesExtra(ui.activating)
@@ -6557,9 +6722,15 @@ export function chooseModes(modes) {
   }
   if (t?.mode === 'card' && t.required) {
     // A drop that lands on a legal target aims there; otherwise pick by click.
+    const armed = { cardId, abilityId, cast: !!cast, modes: picked, dropSquare: dropSquare ?? null }
+    if (allyShoots(t)) {
+      const shooterId = dropped ? findDropShooter(cardId, t, dropZone, dropSquare) : null
+      ui.activating = shooterId ? { ...armed, shooterId } : armed
+      return
+    }
     const hit = dropped && pickCount(view) <= 1 ? findDropTarget(cardId, view, dropZone, dropSquare) : null
     if (hit) continueActivate(cardId, abilityId, cast, hit, extra, dropSquare ?? null)
-    else ui.activating = { cardId, abilityId, cast: !!cast, modes: picked, dropSquare: dropSquare ?? null }
+    else ui.activating = armed
     return
   }
   continueActivate(cardId, abilityId, cast, null, extra, dropSquare ?? null)
@@ -6763,6 +6934,10 @@ const sameEntry = (a, b) => {
   if (a.cardId !== b.cardId) return false
   if ((a.targetIds || []).join() !== (b.targetIds || []).join()) return false
   if ((a.castId ?? null) !== (b.castId ?? null)) return false
+  if ((a.shooterId ?? null) !== (b.shooterId ?? null)) return false
+  // Ally-fired projectiles its triggers shot (recordShot). None on either side
+  // (every older entry) compares equal.
+  if (shotsKey(a) !== shotsKey(b)) return false
   // A modal ability's chosen modes, as a set. No `modes` (every older entry, and
   // every non-modal ability) is the empty set, so those compare as before.
   if (modesKey(a) !== modesKey(b)) return false
@@ -6790,6 +6965,10 @@ const sameEntry = (a, b) => {
   return a.from === b.from && a.to === b.to
 }
 
+function shotsKey(e) {
+  return (e.shots || []).map((s) => `${s.ownerId}:${s.abilityId}:${s.shooterId}>${s.targetId}`).join('|')
+}
+
 function modesKey(e) {
   return [...(e.modes || [])].sort((x, y) => x - y).join(',')
 }
@@ -6806,6 +6985,11 @@ function entryCards(entry) {
   if (entry.cardId) ids.add(entry.cardId)
   if (entry.targetId) ids.add(entry.targetId)
   if (entry.defenderId) ids.add(entry.defenderId)
+  if (entry.shooterId) ids.add(entry.shooterId)
+  for (const s of entry.shots || []) {
+    ids.add(s.shooterId)
+    if (s.targetId) ids.add(s.targetId)
+  }
   return ids
 }
 

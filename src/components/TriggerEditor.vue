@@ -20,6 +20,7 @@ import {
   setTriggerPick,
   LOSE_CONDITIONS,
   LOCATION_REFS,
+  STRIKE_BY,
   MOVE_KINDS,
   MOVE_REACH,
   TOKEN_KINDS,
@@ -233,8 +234,10 @@ function effectGroups(ability) {
     })
   }
   const modes = ability.modes || []
-  modes.forEach((m, i) => walk(m.effects, `If “${m.name}” is chosen, do`, m.target, `m${i}`, 0))
-  walk(ability.effects, modes.length ? 'Then, whichever was chosen, do' : 'Do', modes.length ? modes[0].target : ability.target, 'base', 0)
+  // A mode that aims nowhere of its own uses the ability's target (abilityView).
+  const aim = (t) => (pickOf({ target: t }) || !pickOf(ability) ? t : ability.target)
+  modes.forEach((m, i) => walk(m.effects, `If “${m.name}” is chosen, do`, aim(m.target), `m${i}`, 0))
+  walk(ability.effects, modes.length ? 'Then, whichever was chosen, do' : 'Do', modes.length ? aim(modes[0].target) : ability.target, 'base', 0)
   return out
 }
 
@@ -247,6 +250,9 @@ const allEffects = (ability) => {
 }
 const hasGrant = (ability) => allEffects(ability).some((e) => e.op === 'grantFrom')
 const pickOf = (view) => view.target.mode === 'card' && !!view.target.required
+// An ally fires this view's projectile target, so effects can name it.
+const shootsOf = (view) =>
+  pickOf(view) && view.target.within === 'projectile' && view.target.shooter === 'ally'
 
 // An effect that repeats something the cost already does.
 function dupWarning(ability, eff) {
@@ -288,6 +294,37 @@ function onStarter(e) {
 const moreCosts = (c) =>
   !!(c.discard || c.banish || c.perTurn || ELEMENTS.some((el) => c.threshold[el]))
 
+// Folded sections, keyed `${ability.id}:${section}` ('all' folds the whole
+// ability). View-only, so it lives here rather than on the card: a long list of
+// abilities stays scannable by folding away the parts you're done with.
+const folded = reactive(new Set())
+const isOpen = (ability, section) => !folded.has(`${ability.id}:${section}`)
+function toggleFold(ability, section) {
+  const k = `${ability.id}:${section}`
+  if (folded.has(k)) folded.delete(k)
+  else folded.add(k)
+}
+// One-line recaps shown beside a folded section's heading.
+const triggerRecap = (a) =>
+  presetOf(a) === 'custom' ? `${a.trigger.action}, ${a.trigger.subject}` : TRIGGER_PRESETS[presetOf(a)]?.label || ''
+function costRecap(a) {
+  const c = a.cost
+  const bits = []
+  if (c.tap) bits.push('tap')
+  if (c.mana) bits.push(`${c.mana} mana`)
+  if (c.life) bits.push(`${c.life} life`)
+  if (c.sacrifice !== 'none') bits.push(`sacrifice ${c.sacrifice}`)
+  return bits.join(', ') || 'free'
+}
+function targetRecap(a) {
+  const t = a.target
+  if (t.mode === 'grid') return `a square (${t.shape})`
+  if (!t.required) return 'nothing'
+  const shot = t.within === 'projectile' ? (t.shooter === 'ally' ? ', shot by an ally' : ', projectile') : ''
+  return `${t.count > 1 ? `${t.count}× ` : ''}${FILTER_LABELS[t.filter] || t.filter} in ${t.from}${shot}`
+}
+const effectsRecap = (list) => (list || []).map((e) => OP_LABELS[e.op] || e.op).join(', ') || 'nothing'
+
 function onRemove(ability) {
   if (!confirm(`Delete ability "${ability.name || 'Untitled'}"?`)) return
   removeAbility(props.cardId, ability.id)
@@ -309,10 +346,20 @@ function onRemove(ability) {
 
       <div v-for="ability in abilities" :key="ability.id" class="ability-block">
         <div class="ability-row">
+          <button
+            type="button"
+            class="fold caret-only"
+            :aria-expanded="isOpen(ability, 'all')"
+            :title="isOpen(ability, 'all') ? 'Collapse this ability' : 'Expand this ability'"
+            @click="toggleFold(ability, 'all')"
+          >
+            <span class="caret">{{ isOpen(ability, 'all') ? '▾' : '▸' }}</span>
+          </button>
           <span class="ability-kind" :class="ability.kind">{{ ability.kind }}</span>
           <input v-model="ability.name" class="text-input" placeholder="Ability name (e.g. Assume Form)" />
           <button class="btn small danger" :title="`Delete ${ability.name || 'ability'}`" @click="onRemove(ability)">🗑</button>
         </div>
+        <template v-if="isOpen(ability, 'all')">
         <textarea
           v-model="ability.text"
           class="text-input text-area"
@@ -322,6 +369,12 @@ function onRemove(ability) {
 
         <!-- ================= TRIGGERED: When ... ================= -->
         <template v-if="ability.kind === 'triggered'">
+          <button type="button" class="fold" :aria-expanded="isOpen(ability, 'when')" @click="toggleFold(ability, 'when')">
+            <span class="caret">{{ isOpen(ability, 'when') ? '▾' : '▸' }}</span>
+            <span class="fold-label">Trigger</span>
+            <span v-if="!isOpen(ability, 'when')" class="fold-recap">{{ triggerRecap(ability) }}</span>
+          </button>
+          <template v-if="isOpen(ability, 'when')">
           <div class="step">
             <span class="step-word">When</span>
             <select :value="presetOf(ability)" class="text-input" @change="onPreset(ability, $event.target.value)">
@@ -387,10 +440,17 @@ function onRemove(ability) {
               <ConditionEditor :cond="ability.condition" :triggered="true" :pick="pickOf(ability)" />
             </span>
           </div>
+          </template>
         </template>
 
         <!-- ================= ACTIVATED: Pay ... ================= -->
         <template v-else-if="ability.kind === 'activated'">
+          <button type="button" class="fold" :aria-expanded="isOpen(ability, 'pay')" @click="toggleFold(ability, 'pay')">
+            <span class="caret">{{ isOpen(ability, 'pay') ? '▾' : '▸' }}</span>
+            <span class="fold-label">Cost</span>
+            <span v-if="!isOpen(ability, 'pay')" class="fold-recap">{{ costRecap(ability) }}</span>
+          </button>
+          <template v-if="isOpen(ability, 'pay')">
           <div class="step">
             <span class="step-word">Pay</span>
             <label class="chk"><input v-model="ability.cost.tap" type="checkbox" /> tap this card</label>
@@ -436,10 +496,17 @@ function onRemove(ability) {
           <p v-if="ability.cost.sacrifice === 'target'" class="hint">
             Sacrificing the target needs "choose a card" below; only your own non-avatar cards in play can be picked.
           </p>
+          </template>
         </template>
 
         <!-- ================= PASSIVE ================= -->
         <template v-else>
+          <button type="button" class="fold" :aria-expanded="isOpen(ability, 'passive')" @click="toggleFold(ability, 'passive')">
+            <span class="caret">{{ isOpen(ability, 'passive') ? '▾' : '▸' }}</span>
+            <span class="fold-label">Passive</span>
+            <span v-if="!isOpen(ability, 'passive')" class="fold-recap">{{ ability.scope }}</span>
+          </button>
+          <template v-if="isOpen(ability, 'passive')">
           <div class="step">
             <span class="step-word">While</span>
             <span class="effect-row grow">
@@ -570,11 +637,17 @@ function onRemove(ability) {
               </select>
             </div>
           </details>
+          </template>
         </template>
 
         <!-- ================= Choose ... Do ... (triggered + activated) ================= -->
         <template v-if="ability.kind !== 'passive'">
-          <div class="step block">
+          <button type="button" class="fold" :aria-expanded="isOpen(ability, 'choose')" @click="toggleFold(ability, 'choose')">
+            <span class="caret">{{ isOpen(ability, 'choose') ? '▾' : '▸' }}</span>
+            <span class="fold-label">Target</span>
+            <span v-if="!isOpen(ability, 'choose')" class="fold-recap">{{ targetRecap(ability) }}</span>
+          </button>
+          <div v-if="isOpen(ability, 'choose')" class="step block">
             <TargetEditor
               :t="ability.target"
               :triggered="ability.kind === 'triggered'"
@@ -603,8 +676,18 @@ function onRemove(ability) {
           </details>
 
           <template v-for="grp in effectGroups(ability)" :key="grp.key">
-            <div class="step-word" :class="grp.depth ? 'else-head' : 'section-head'">{{ grp.label }}</div>
-            <template v-for="view in [grp.view]" :key="grp.key">
+            <button
+              type="button"
+              class="fold step-word"
+              :class="grp.depth ? 'else-head' : 'section-head'"
+              :aria-expanded="isOpen(ability, `fx:${grp.key}`)"
+              @click="toggleFold(ability, `fx:${grp.key}`)"
+            >
+              <span class="caret">{{ isOpen(ability, `fx:${grp.key}`) ? '▾' : '▸' }}</span>
+              <span class="fold-label">{{ grp.label }}</span>
+              <span v-if="!isOpen(ability, `fx:${grp.key}`)" class="fold-recap">{{ effectsRecap(grp.view.effects) }}</span>
+            </button>
+            <template v-for="view in isOpen(ability, `fx:${grp.key}`) ? [grp.view] : []" :key="grp.key">
               <div v-for="(eff, i) in view.effects" :key="i" class="effect-row">
                 <select :value="opValue(eff)" class="text-input op" @change="onOpChange(view, i, $event.target.value)">
                   <option v-for="op in pickerOps" :key="op" :value="op">{{ OP_LABELS[op] || op }}</option>
@@ -622,7 +705,7 @@ function onRemove(ability) {
                 </template>
 
                 <template v-else-if="SEND_OPS[eff.op]">
-                  <EffectSelector :sel="eff" :grid="view.target.mode === 'grid'" :triggered="view.kind === 'triggered'" :pick="pickOf(view)" />
+                  <EffectSelector :sel="eff" :grid="view.target.mode === 'grid'" :triggered="view.kind === 'triggered'" :pick="pickOf(view)" :shooter="shootsOf(view)" />
                   <span class="hint effect-note">to</span>
                   <select :value="SEND_OPS[eff.op]" class="text-input" @change="eff.op = SEND_TO_OP[$event.target.value]">
                     <option v-for="(label, d) in SEND_LABELS" :key="d" :value="d">{{ label }}</option>
@@ -630,7 +713,7 @@ function onRemove(ability) {
                 </template>
 
                 <template v-else-if="['dealDamage', 'modifyStrength', 'addCounter', 'removeCounter', 'preventDamage'].includes(eff.op)">
-                  <EffectSelector :sel="eff" :grid="view.target.mode === 'grid'" :triggered="view.kind === 'triggered'" :pick="pickOf(view)" />
+                  <EffectSelector :sel="eff" :grid="view.target.mode === 'grid'" :triggered="view.kind === 'triggered'" :pick="pickOf(view)" :shooter="shootsOf(view)" />
                   <input
                     v-if="eff.op === 'addCounter' || eff.op === 'removeCounter'"
                     v-model="eff.name"
@@ -649,14 +732,24 @@ function onRemove(ability) {
                     :sel="eff.countOf"
                     :grid="view.target.mode === 'grid'"
                     :triggered="view.kind === 'triggered'"
-                    :pick="pickOf(view)"
+                    :pick="pickOf(view)" :shooter="shootsOf(view)"
                   />
                   <span v-if="eff.op === 'preventDamage'" class="hint effect-note">damage</span>
                 </template>
 
                 <template v-else-if="eff.op === 'strike'">
-                  <span class="hint effect-note">this unit strikes</span>
-                  <EffectSelector :sel="eff" :grid="view.target.mode === 'grid'" :triggered="view.kind === 'triggered'" :pick="pickOf(view)" />
+                  <select
+                    v-if="shootsOf(view) || eff.by === 'shooter'"
+                    :value="eff.by || 'self'"
+                    class="text-input"
+                    title="Who deals the blow"
+                    @change="$event.target.value === 'shooter' ? (eff.by = 'shooter') : delete eff.by"
+                  >
+                    <option v-for="b in STRIKE_BY" :key="b" :value="b">{{ b === 'shooter' ? 'the ally who shot' : 'this unit' }}</option>
+                  </select>
+                  <span v-else class="hint effect-note">this unit</span>
+                  <span class="hint effect-note">strikes</span>
+                  <EffectSelector :sel="eff" :grid="view.target.mode === 'grid'" :triggered="view.kind === 'triggered'" :pick="pickOf(view)" :shooter="shootsOf(view)" />
                   <span class="hint effect-note">for its power (+Lance)</span>
                 </template>
 
@@ -669,7 +762,7 @@ function onRemove(ability) {
                   >
                     <option v-for="k in MOVE_KINDS" :key="k" :value="k">{{ k === 'teleport' ? 'teleport' : 'push / pull' }}</option>
                   </select>
-                  <EffectSelector :sel="eff" :grid="view.target.mode === 'grid'" :triggered="view.kind === 'triggered'" :pick="pickOf(view)" />
+                  <EffectSelector :sel="eff" :grid="view.target.mode === 'grid'" :triggered="view.kind === 'triggered'" :pick="pickOf(view)" :shooter="shootsOf(view)" />
                   <span class="hint effect-note">to</span>
                   <select v-model="eff.to" class="text-input">
                     <option v-for="l in LOCATION_REFS" :key="l" :value="l">{{ locationLabel(view, l) }}</option>
@@ -708,12 +801,12 @@ function onRemove(ability) {
                 </template>
 
                 <template v-else-if="['heal', 'tap', 'untap', 'gainControl'].includes(eff.op)">
-                  <EffectSelector :sel="eff" :grid="view.target.mode === 'grid'" :triggered="view.kind === 'triggered'" :pick="pickOf(view)" />
+                  <EffectSelector :sel="eff" :grid="view.target.mode === 'grid'" :triggered="view.kind === 'triggered'" :pick="pickOf(view)" :shooter="shootsOf(view)" />
                   <span v-if="eff.op === 'gainControl'" class="hint effect-note">— joins your side</span>
                 </template>
 
                 <template v-else-if="eff.op === 'grantKeyword'">
-                  <EffectSelector :sel="eff" :grid="view.target.mode === 'grid'" :triggered="view.kind === 'triggered'" :pick="pickOf(view)" />
+                  <EffectSelector :sel="eff" :grid="view.target.mode === 'grid'" :triggered="view.kind === 'triggered'" :pick="pickOf(view)" :shooter="shootsOf(view)" />
                   <select v-model="eff.keyword" class="text-input">
                     <option v-for="k in KEYWORDS" :key="k" :value="k">{{ k }}</option>
                   </select>
@@ -725,7 +818,7 @@ function onRemove(ability) {
                 </template>
 
                 <template v-else-if="eff.op === 'animate'">
-                  <EffectSelector :sel="eff" :grid="view.target.mode === 'grid'" :triggered="view.kind === 'triggered'" :pick="pickOf(view)" />
+                  <EffectSelector :sel="eff" :grid="view.target.mode === 'grid'" :triggered="view.kind === 'triggered'" :pick="pickOf(view)" :shooter="shootsOf(view)" />
                   <span class="hint effect-note">becomes a minion, power</span>
                   <select v-model="eff.powerRef" class="text-input">
                     <option v-for="r in ANIMATE_POWER_REFS" :key="r" :value="r">{{ POWER_REF_LABELS[r] }}</option>
@@ -747,7 +840,7 @@ function onRemove(ability) {
                 </template>
 
                 <template v-else-if="eff.op === 'flood' || eff.op === 'unflood'">
-                  <EffectSelector :sel="eff" :grid="view.target.mode === 'grid'" :triggered="view.kind === 'triggered'" :pick="pickOf(view)" suffix="'s site" />
+                  <EffectSelector :sel="eff" :grid="view.target.mode === 'grid'" :triggered="view.kind === 'triggered'" :pick="pickOf(view)" :shooter="shootsOf(view)" suffix="'s site" />
                   <span v-if="view.target.mode === 'grid' && (eff.who === 'self' || eff.who === 'target')" class="hint effect-note">
                     — every site the target covers
                   </span>
@@ -776,7 +869,7 @@ function onRemove(ability) {
                   <select v-model="eff.pick" class="text-input" title="Which cards are discarded">
                     <option v-for="d in DISCARD_PICKS" :key="d" :value="d">{{ d === 'chosen' ? 'the chosen card(s)' : 'cards from a hand' }}</option>
                   </select>
-                  <EffectSelector v-if="eff.pick === 'chosen'" :sel="eff" :grid="view.target.mode === 'grid'" :triggered="view.kind === 'triggered'" :pick="pickOf(view)" />
+                  <EffectSelector v-if="eff.pick === 'chosen'" :sel="eff" :grid="view.target.mode === 'grid'" :triggered="view.kind === 'triggered'" :pick="pickOf(view)" :shooter="shootsOf(view)" />
                   <template v-else>
                     <select v-model="eff.side" class="text-input" title="Whose hand">
                       <option v-for="d in EFFECT_SIDES" :key="d" :value="d">{{ SIDE_LABELS[d] }}</option>
@@ -801,7 +894,7 @@ function onRemove(ability) {
                 </template>
 
                 <template v-else-if="eff.op === 'reanimate'">
-                  <EffectSelector :sel="eff" :grid="view.target.mode === 'grid'" :triggered="view.kind === 'triggered'" :pick="pickOf(view)" />
+                  <EffectSelector :sel="eff" :grid="view.target.mode === 'grid'" :triggered="view.kind === 'triggered'" :pick="pickOf(view)" :shooter="shootsOf(view)" />
                   <span class="hint effect-note">to</span>
                   <select v-if="view.target.mode !== 'grid'" v-model="eff.reach" class="text-input" title="Where the picked summon location may be, relative to this card">
                     <option v-for="r in REANIMATE_REACH" :key="r" :value="r">{{ r === 'any' ? 'a picked location' : `a picked ${r} location` }}</option>
@@ -811,7 +904,7 @@ function onRemove(ability) {
 
                 <template v-else-if="eff.op === 'swap'">
                   <span class="hint effect-note">this unit with</span>
-                  <EffectSelector :sel="eff" :grid="view.target.mode === 'grid'" :triggered="view.kind === 'triggered'" :pick="pickOf(view)" />
+                  <EffectSelector :sel="eff" :grid="view.target.mode === 'grid'" :triggered="view.kind === 'triggered'" :pick="pickOf(view)" :shooter="shootsOf(view)" />
                 </template>
 
                 <template v-else-if="eff.op === 'grantFrom'">
@@ -852,6 +945,7 @@ function onRemove(ability) {
               <option v-for="l in LOSE_CONDITIONS" :key="l" :value="l">{{ l }}</option>
             </select>
           </label>
+        </template>
         </template>
       </div>
 
@@ -1097,5 +1191,47 @@ function onRemove(ability) {
 }
 .starter {
   width: 100%;
+}
+/* Fold / unfold heading for an ability or one of its sections. */
+.fold {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  width: 100%;
+  margin: 0.45rem 0 0.2rem;
+  padding: 0.15rem 0;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  color: inherit;
+  font: inherit;
+  font-size: 0.85rem;
+  text-align: left;
+  cursor: pointer;
+}
+.fold.caret-only {
+  width: auto;
+  margin: 0;
+  border: 0;
+}
+.fold .caret {
+  flex: none;
+  width: 0.8rem;
+  opacity: 0.7;
+}
+.fold-label {
+  flex: none;
+}
+.fold-recap {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  opacity: 0.55;
+  font-size: 0.78rem;
+  font-weight: normal;
+  text-transform: none;
+  letter-spacing: normal;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 </style>

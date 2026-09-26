@@ -28,6 +28,7 @@ import {
   abilityUsesLeft,
   activatePickState,
   activeAbility,
+  shooterStage,
   canFinishPicks,
   finishPicks,
   beginCast,
@@ -226,6 +227,8 @@ const isArming = (abilityId) =>
 const armingAbility = computed(
   () =>
     (ui.activating &&
+      // The ally-shoot picks are prompted above the storyline instead.
+      !shooterStage() &&
       liveAbilities.value.some((a) => a.id === ui.activating.abilityId) &&
       // As it resolves for any chosen modes; null while they are being chosen.
       activeAbility()) ||
