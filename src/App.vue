@@ -61,6 +61,21 @@ const oppOpen = ref(false)
 
 const count = (zone) => state.zones[zone].length
 
+// ...unless the puzzle puts something there: then the opponent's hand,
+// cemetery or collection is part of what the solver needs to read, so a play
+// session opens with the tray down. Keyed on the puzzle too, so loading
+// another one while already in play re-decides.
+watch(
+  () => [state.mode, state.puzzleId],
+  ([mode]) => {
+    if (mode !== 'play') return
+    oppOpen.value = ['hand:opponent', 'grave:opponent', 'collection:opponent'].some(
+      (z) => count(z) > 0
+    )
+  },
+  { immediate: true }
+)
+
 async function onArchiveSelect(id) {
   if (!(await loadById(id))) flash('That puzzle is not available.')
   showArchive.value = false
