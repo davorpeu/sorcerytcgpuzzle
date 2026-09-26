@@ -947,13 +947,6 @@ details[open] > .panel-summary {
   outline-offset: 2px;
 }
 
-/* An animated aura is an oversized minion standing on all four squares around
-   its crossing, so it is drawn larger than a plain aura -- about one square
-   wide, straddling the crossing -- with a unit-style ring. */
-.aura-node.occupied.oversized {
-  width: 18%;
-}
-
 .oversized-tag {
   position: absolute;
   left: 2px;
@@ -1015,20 +1008,11 @@ details[open] > .panel-summary {
   z-index: 10 !important;
 }
 
+/* An animated aura is an oversized minion standing on all four squares around
+   its crossing. It keeps the plain aura size; the unit-style ring and ANIM tag
+   are what mark it. */
 .aura-token.oversized {
   box-shadow: 0 0 0 2px var(--accent), 0 4px 14px rgba(0, 0, 0, 0.7);
-}
-
-/* A plain aura sharing a crossing with an oversized one keeps its plain size. */
-.aura-token.minor {
-  width: 60%;
-  height: auto;
-  margin: 0 auto;
-}
-
-.aura-token.stacked.minor {
-  left: 20%;
-  margin: 0;
 }
 
 .aura-token:active {
@@ -1045,6 +1029,13 @@ details[open] > .panel-summary {
 
 .aura-token img.flipped {
   transform: rotate(180deg);
+}
+
+/* Tapped (an animated aura that moved or attacked), turned a quarter like a
+   tapped card token. The whole token turns so its tags go with the art. */
+.aura-token.tapped {
+  rotate: 90deg;
+  opacity: 0.9;
 }
 
 .aura-name {

@@ -16,6 +16,7 @@ import {
   canActivateTarget,
   targetActivate,
   isOversized,
+  isTapped,
   damageOf,
   effectivePower,
   selectCard,
@@ -65,8 +66,6 @@ const belowCount = (idx) => state.zones[`cell:${idx}:bot`].length
 // (animated or not) may share a crossing.
 const auraCards = (idx) =>
   state.zones[`aura:${idx}`].map((id) => state.cards[id]).filter(Boolean)
-
-const nodeOversized = (idx) => auraCards(idx).some((c) => isOversized(c.id))
 
 // Cards sharing a crossing fan out along the grid line, centred on it, each
 // offset by a fraction of its own size so enough of every card shows to grab.
@@ -176,6 +175,7 @@ function pieceLabel(card, kind, zone) {
   const bits = [card.name, kind, card.enemy ? "opponent's" : 'yours']
   if (carriedBy(card.id).length)
     bits.push(`carrying ${carriedBy(card.id).length}`)
+  if (isTapped(card.id)) bits.push('tapped')
   bits.push(`at ${zoneLabel(zone)}`)
   return `${bits.join(', ')}. Select for actions`
 }
@@ -335,7 +335,7 @@ function nodeStyle(idx) {
           :key="n"
           :zone="`aura:${n - 1}`"
           class="aura-node"
-          :class="{ occupied: auraCards(n - 1).length, oversized: nodeOversized(n - 1) }"
+          :class="{ occupied: auraCards(n - 1).length }"
           :style="nodeStyle(n - 1)"
           :keyboard="auraSelected"
         >
@@ -346,7 +346,7 @@ function nodeStyle(idx) {
             :class="{
               stacked: k > 0,
               oversized: isOversized(card.id),
-              minor: nodeOversized(n - 1) && !isOversized(card.id),
+              tapped: isTapped(card.id),
               selected: ui.selected === card.id,
               targetable:
                 (ui.storyChoice ? isStoryChoiceTarget(card.id) : canActivateTarget(card.id)),

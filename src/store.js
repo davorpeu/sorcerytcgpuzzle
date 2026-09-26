@@ -1636,10 +1636,13 @@ export function armedAttackLegal(targetId) {
   return enforcing() ? canAttack(ui.attacker, targetId) : true
 }
 
-// null = no move armed or not enforcing (no highlight); else whether the armed
-// unit may reach this zone.
+// null = no move armed, or a realm zone in a free-form puzzle (no highlight);
+// else whether the armed unit may reach this zone. Off-realm zones are never
+// reachable: a Move is a step through the realm.
 export function armedMoveLegal(zone) {
-  if (!ui.moving || !enforcing()) return null
+  if (!ui.moving) return null
+  if (!inRealm(routeZone(ui.moving, zone))) return false
+  if (!enforcing()) return null
   return canMoveUnit(ui.moving, zone)
 }
 
@@ -3315,6 +3318,9 @@ const inRealm = (zone) => ['realm', 'aura'].includes(zoneCategory(zone))
 // and effects (death, bounce, banish, draw, ...) do that, and those relocate
 // cards without going through this check. The editor, recording included, is free.
 export function manualMoveAllowed(cardId, to) {
+  // The Move action is a step through the realm, in every mode: an armed mover
+  // never goes to a hand, cemetery, collection, the pool, etc.
+  if (ui.moving === cardId && !inRealm(routeZone(cardId, to))) return false
   if (state.mode !== 'play') return true
   if (!inRealm(routeZone(cardId, to))) return false
   return !inRealm(zoneOf(cardId)) || ui.moving === cardId
