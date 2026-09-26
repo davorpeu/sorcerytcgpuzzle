@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, reactive } from 'vue'
 import {
   state,
   ui,
@@ -55,18 +55,28 @@ function dragSite(e, idx) {
   beginDrag(e, e.currentTarget, 130)
 }
 
-// How many cards are standing in a square. Both slots are drawn in the top
-// band, so they share its width and the band has to know how many ways.
-const occupants = (idx) =>
-  state.zones[`cell:${idx}:top`].length + state.zones[`cell:${idx}:bot`].length
+// How many cards stand side by side on a square's surface; the band shares its
+// width that many ways. Anything below splits the square: surface cards to the
+// upper left, below cards to the lower right.
+const surfaceCount = (idx) => state.zones[`cell:${idx}:top`].length
+const belowCount = (idx) => state.zones[`cell:${idx}:bot`].length
 
-function auraCard(idx) {
-  const id = state.zones[`aura:${idx}`][0]
-  return id ? state.cards[id] : null
+// Every card on crossing `idx`, bottom of the stack first. Any number of auras
+// (animated or not) may share a crossing.
+const auraCards = (idx) =>
+  state.zones[`aura:${idx}`].map((id) => state.cards[id]).filter(Boolean)
+
+const nodeOversized = (idx) => auraCards(idx).some((c) => isOversized(c.id))
+
+// Cards sharing a crossing fan out along the grid line, centred on it, each
+// offset by a fraction of its own size so enough of every card shows to grab.
+function fanStyle(k, n) {
+  if (n < 2) return null
+  const t = k - (n - 1) / 2
+  return { transform: `translate(${t * 45}%, ${t * 12}%)`, zIndex: k + 1 }
 }
 
-function dragAura(e, idx) {
-  const card = auraCard(idx)
+function dragAura(e, card, idx) {
   if (!card) return
   e.dataTransfer.setData(
     'text/plain',
@@ -84,7 +94,7 @@ function dragAura(e, idx) {
 // zones covered the art from then on you could no longer Alt-preview or drag
 // the very card you had just picked. So a click that was meant for the zone
 // underneath arrives here instead, and is handed back down: the band actually
-// under the pointer decides surface or below, which keeps the 74/26 split in
+// under the pointer decides surface or below, which keeps the 50/50 split in
 // the stylesheet rather than restating it here.
 // The band (surface / below) under the pointer on a square.
 function bandAt(idx, e) {
@@ -121,16 +131,21 @@ function clickSite(idx, e) {
   else selectCard(card.id)
 }
 
-function clickAura(idx) {
-  const card = auraCard(idx)
+function clickAura(card) {
   if (!card) return
+  // Any aura -- animated or not -- can be an ability's or trigger's target
+  // (e.g. "animate an aura"); the ability's target spec decides.
+  if (ui.storyChoice) {
+    if (isStoryChoiceTarget(card.id)) resolveStoryChoice(card.id)
+    return
+  }
+  if (canActivateTarget(card.id)) {
+    targetActivate(card.id)
+    return
+  }
   // An animated aura is an oversized minion, so it can be the target of the
   // same armed actions a unit token answers to.
   if (isOversized(card.id)) {
-    if (ui.storyChoice) {
-      if (isStoryChoiceTarget(card.id)) resolveStoryChoice(card.id)
-      return
-    }
     if (ui.awaitingDefender) {
       if (armedDefendLegal(card.id)) chooseDefender(card.id)
       return
@@ -145,10 +160,6 @@ function clickAura(idx) {
     }
     if (ui.striker && ui.striker !== card.id) {
       targetStrike(card.id)
-      return
-    }
-    if (canActivateTarget(card.id)) {
-      targetActivate(card.id)
       return
     }
   }
@@ -167,6 +178,14 @@ function pieceLabel(card, kind, zone) {
     bits.push(`carrying ${carriedBy(card.id).length}`)
   bits.push(`at ${zoneLabel(zone)}`)
   return `${bits.join(', ')}. Select for actions`
+}
+
+// Site art arrives in both orientations: some files are landscape (the card as
+// it lies on the table), others are portrait scans of the same card. Remember
+// which image URLs are portrait so only those get turned a quarter.
+const portraitImgs = reactive({})
+const notePortrait = (e, src) => {
+  portraitImgs[src] = e.target.naturalHeight > e.target.naturalWidth
 }
 
 // Nothing but an aura can legally land on an intersection, so the twelve
@@ -234,6 +253,7 @@ function nodeStyle(idx) {
               class="site-bg"
               :class="{
                 flipped: siteCard(n - 1).enemy,
+                portrait: portraitImgs[siteCard(n - 1).img],
                 selected: ui.selected === siteCard(n - 1).id,
                 targetable:
                 armedAttackLegal(siteCard(n - 1).id) ||
@@ -247,6 +267,7 @@ function nodeStyle(idx) {
               :aria-pressed="ui.selected === siteCard(n - 1).id"
               :aria-label="pieceLabel(siteCard(n - 1), 'site', `site:${n - 1}`)"
               :title="siteCard(n - 1).name + ' (click for actions, hold Alt to enlarge)'"
+              @load="notePortrait($event, siteCard(n - 1).img)"
               @dragstart="dragSite($event, n - 1)"
               @click.stop="clickSite(n - 1, $event)"
               @keydown.enter.stop.prevent="clickSite(n - 1, $event)"
@@ -264,14 +285,16 @@ function nodeStyle(idx) {
               ✋ {{ carriedBy(siteCard(n - 1).id).length }}
             </span>
           </div>
-          <!-- Surface and underground cards render side by side in the top
-               area; underground ones are darkened and badged instead of
-               living in the bottom band. -->
+          <!-- Surface cards stand in the upper half of the square, cards
+               below it (underground / underwater, darkened and badged) in the
+               lower half. Sharing the square, the surface keeps to the left and
+               the below to the right; a level shrinks only when more than one
+               card stands on it. -->
           <DropZone
             :zone="`cell:${n - 1}:top`"
             class="cell-half top"
-            :class="`region-${topRegion(n - 1)}`"
-            :style="{ '--n': occupants(n - 1) || 1 }"
+            :class="[`region-${topRegion(n - 1)}`, { split: belowCount(n - 1), crowded: surfaceCount(n - 1) > 1 }]"
+            :style="{ '--n': surfaceCount(n - 1) || 1 }"
           >
             <CardToken
               v-for="id in state.zones[`cell:${n - 1}:top`]"
@@ -279,24 +302,27 @@ function nodeStyle(idx) {
               :card-id="id"
               :from="`cell:${n - 1}:top`"
             />
+            <span v-if="topRegion(n - 1) === 'void'" class="region-tag" aria-hidden="true">
+              void
+            </span>
+          </DropZone>
+          <!-- The lower half: cards below the surface, laid out like the surface. -->
+          <DropZone
+            :zone="`cell:${n - 1}:bot`"
+            class="cell-half bot"
+            :class="[
+              botRegion(n - 1) ? `region-${botRegion(n - 1)}` : 'region-none',
+              { split: surfaceCount(n - 1), crowded: belowCount(n - 1) > 1 },
+            ]"
+            :style="{ '--n': belowCount(n - 1) || 1 }"
+            :keyboard="false"
+          >
             <CardToken
               v-for="id in state.zones[`cell:${n - 1}:bot`]"
               :key="id"
               :card-id="id"
               :from="`cell:${n - 1}:bot`"
             />
-            <span v-if="topRegion(n - 1) === 'void'" class="region-tag" aria-hidden="true">
-              void
-            </span>
-          </DropZone>
-          <!-- Drop-only band: cards dropped here go underground but are
-               displayed in the top area with the BELOW mark. -->
-          <DropZone
-            :zone="`cell:${n - 1}:bot`"
-            class="cell-half bot"
-            :class="botRegion(n - 1) ? `region-${botRegion(n - 1)}` : 'region-none'"
-            :keyboard="false"
-          >
             <span v-if="botRegion(n - 1)" class="region-tag" aria-hidden="true">
               {{ REGION_ABBR[botRegion(n - 1)] }}
             </span>
@@ -309,53 +335,62 @@ function nodeStyle(idx) {
           :key="n"
           :zone="`aura:${n - 1}`"
           class="aura-node"
-          :class="{ occupied: auraCard(n - 1), oversized: auraCard(n - 1) && isOversized(auraCard(n - 1).id) }"
+          :class="{ occupied: auraCards(n - 1).length, oversized: nodeOversized(n - 1) }"
           :style="nodeStyle(n - 1)"
           :keyboard="auraSelected"
         >
           <div
-            v-if="auraCard(n - 1)"
+            v-for="(card, k) in auraCards(n - 1)"
+            :key="card.id"
             class="aura-token"
-            :class="{ selected: ui.selected === auraCard(n - 1).id }"
+            :class="{
+              stacked: k > 0,
+              oversized: isOversized(card.id),
+              minor: nodeOversized(n - 1) && !isOversized(card.id),
+              selected: ui.selected === card.id,
+              targetable:
+                (ui.storyChoice ? isStoryChoiceTarget(card.id) : canActivateTarget(card.id)),
+            }"
+            :style="fanStyle(k, auraCards(n - 1).length)"
             draggable="true"
             role="button"
             tabindex="0"
-            :aria-pressed="ui.selected === auraCard(n - 1).id"
-            :aria-label="pieceLabel(auraCard(n - 1), 'aura', `aura:${n - 1}`)"
-            :title="auraCard(n - 1).name + ' (click for actions, hold Alt to enlarge)'"
-            @dragstart="dragAura($event, n - 1)"
-            @click.stop="clickAura(n - 1)"
-            @keydown.enter.stop.prevent="clickAura(n - 1)"
-            @keydown.space.stop.prevent="clickAura(n - 1)"
-            @mouseenter="ui.hoverCard = auraCard(n - 1).id"
+            :aria-pressed="ui.selected === card.id"
+            :aria-label="pieceLabel(card, 'aura', `aura:${n - 1}`)"
+            :title="card.name + ' (click for actions, hold Alt to enlarge)'"
+            @dragstart="dragAura($event, card, n - 1)"
+            @click.stop="clickAura(card)"
+            @keydown.enter.stop.prevent="clickAura(card)"
+            @keydown.space.stop.prevent="clickAura(card)"
+            @mouseenter="ui.hoverCard = card.id"
             @mouseleave="ui.hoverCard = null"
-            @focus="ui.hoverCard = auraCard(n - 1).id"
+            @focus="ui.hoverCard = card.id"
             @blur="ui.hoverCard = null"
           >
             <img
-              v-if="auraCard(n - 1).img"
-              :src="auraCard(n - 1).img"
+              v-if="card.img"
+              :src="card.img"
               alt=""
-              :class="{ flipped: auraCard(n - 1).enemy }"
+              :class="{ flipped: card.enemy }"
               draggable="false"
             />
-            <span v-else class="aura-name">{{ auraCard(n - 1).name }}</span>
+            <span v-else class="aura-name">{{ card.name }}</span>
             <!-- Animated: an oversized minion. Its power and wounds read here,
                  since it is drawn as an aura rather than a card token. -->
-            <template v-if="isOversized(auraCard(n - 1).id)">
+            <template v-if="isOversized(card.id)">
               <span class="oversized-tag" aria-hidden="true">
-                ANIM {{ effectivePower(auraCard(n - 1).id) }}
+                ANIM {{ effectivePower(card.id) }}
               </span>
-              <span v-if="damageOf(auraCard(n - 1).id)" class="oversized-dmg" aria-hidden="true">
-                {{ damageOf(auraCard(n - 1).id) }}
+              <span v-if="damageOf(card.id)" class="oversized-dmg" aria-hidden="true">
+                {{ damageOf(card.id) }}
               </span>
             </template>
             <span
-              v-if="carriedBy(auraCard(n - 1).id).length"
+              v-if="carriedBy(card.id).length"
               class="site-badge carry-badge"
-              :title="`Carrying ${carriedBy(auraCard(n - 1).id).length} card(s)`"
+              :title="`Carrying ${carriedBy(card.id).length} card(s)`"
             >
-              ✋ {{ carriedBy(auraCard(n - 1).id).length }}
+              ✋ {{ carriedBy(card.id).length }}
             </span>
           </div>
         </DropZone>
@@ -389,7 +424,7 @@ function nodeStyle(idx) {
   );
 }
 /* Animated water treatment under a water/flooded site. Confined to the lower
-   band (matching `.cell-half.bot`'s 26%) so it marks the underwater region
+   band (matching `.cell-half.bot`'s 50%) so it marks the underwater region
    rather than washing over the whole square. Sits under the site art, and never
    takes the pointer (the global `.site-strip > *` rule would otherwise make it
    swallow clicks, so it is overridden back here). */
@@ -398,7 +433,7 @@ function nodeStyle(idx) {
   left: 0;
   right: 0;
   bottom: 0;
-  height: 26%;
+  height: 50%;
   z-index: 0;
   pointer-events: none;
   border-radius: 0 0 6px 6px;

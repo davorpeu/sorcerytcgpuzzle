@@ -1,106 +1,120 @@
 <script setup>
-import {
-  ZONE_CATEGORIES,
-  TARGET_FILTERS,
-  TARGET_MODES,
-  GRID_ORIGINS,
-  GRID_SHAPES,
-  TARGET_WITHIN,
-  TARGET_SIDES,
-} from '../store.js'
+import AreaPicker from './AreaPicker.vue'
+import { ZONE_CATEGORIES, TARGET_FILTERS, FILTER_LABELS, FILTER_PLURALS, GRID_SHAPES, TARGET_WITHIN } from '../store.js'
 
-// A compact editor for one target spec (the shape normalizeAbility gives an
-// ability's `target`) -- used for each mode of a modal ability, whose modes may
-// aim differently.
-defineProps({ t: { type: Object, required: true } })
+// The "choose" step of an ability: nothing, a card, or a square/area on the
+// realm. Edits one target spec (the shape normalizeAbility gives an ability's
+// `target`) in place -- used for the ability itself and for each mode of a
+// modal ability. `triggered` hides grid targets (a trigger aims at a card) and
+// names what happens with no pick. Emits `pick` (true/false) when the player
+// starts/stops picking a card, so a trigger can re-point its effects.
+const props = defineProps({
+  t: { type: Object, required: true },
+  triggered: { type: Boolean, default: false },
+})
+const emit = defineEmits(['pick'])
+
+const PROJECTILE_HINT =
+  'Fired in a cardinal direction: it flies in a straight line (same region, ' +
+  'Stealth units are skipped) and hits the first unit in its path. The player ' +
+  'picks the direction by clicking the unit it would hit.'
+
+const choice = () => (props.t.mode === 'grid' ? 'grid' : props.t.required ? 'card' : 'none')
+function setChoice(c) {
+  const wasPick = props.t.mode === 'card' && props.t.required
+  props.t.mode = c === 'grid' ? 'grid' : 'card'
+  props.t.required = c === 'card'
+  const isPick = c === 'card'
+  if (wasPick !== isPick) emit('pick', isPick)
+}
+const choices = () => [
+  ['none', props.triggered ? 'nothing — use the trigger’s cards' : 'nothing'],
+  ['card', 'a card'],
+  ...(props.triggered && props.t.mode !== 'grid' ? [] : [['grid', 'a square / area on the realm']]),
+]
 </script>
 
 <template>
   <div class="tgt">
-    <label class="field-label">
-      Target
-      <select v-model="t.mode" class="text-input">
-        <option v-for="m in TARGET_MODES" :key="m" :value="m">{{ m }}</option>
+    <label class="choose span2">
+      <span class="step-word">Choose</span>
+      <select :value="choice()" class="text-input" @change="setChoice($event.target.value)">
+        <option v-for="[v, l] in choices()" :key="v" :value="v">{{ l }}</option>
       </select>
     </label>
-    <template v-if="t.mode === 'card'">
+
+    <template v-if="choice() === 'card'">
+      <div class="row span2">
+        <input v-model.number="t.count" type="number" min="1" class="text-input num" title="How many different cards the player picks" />
+        <select v-model="t.filter" class="text-input" title="What kind of card">
+          <option v-for="f in TARGET_FILTERS" :key="f" :value="f">{{ FILTER_LABELS[f] }}</option>
+        </select>
+        <span class="hint">in</span>
+        <select v-model="t.from" class="text-input" title="Which zone it is picked from">
+          <option v-for="z in ZONE_CATEGORIES" :key="z" :value="z">{{ z }}</option>
+        </select>
+      </div>
+      <div v-if="t.from === 'realm'" class="row span2">
+        <span class="hint">whose / where</span>
+        <AreaPicker v-model:shape="t.within" v-model:side="t.side" :shapes="TARGET_WITHIN" />
+        <input
+          v-if="t.within === 'projectile'"
+          v-model.number="t.range"
+          type="number"
+          min="0"
+          class="text-input num"
+          title="Squares it flies; 0 = unlimited"
+        />
+      </div>
+      <div v-else class="row span2">
+        <span class="hint">whose</span>
+        <select v-model="t.side" class="text-input">
+          <option value="any">anyone's</option>
+          <option value="friendly">yours</option>
+          <option value="enemy">the opponent's</option>
+        </select>
+      </div>
+      <p v-if="t.from === 'realm' && t.within === 'projectile'" class="hint span2">{{ PROJECTILE_HINT }}</p>
       <label class="chk">
-        <input v-model="t.required" type="checkbox" />
-        Requires a target
+        <input v-model="t.optional" type="checkbox" />
+        optional (&ldquo;you may&rdquo;)
       </label>
-      <template v-if="t.required">
-        <label class="chk">
-          <input v-model="t.optional" type="checkbox" />
-          Optional (&ldquo;may&rdquo;)
-        </label>
-        <label class="field-label">
-          Zone
-          <select v-model="t.from" class="text-input">
-            <option v-for="z in ZONE_CATEGORIES" :key="z" :value="z">{{ z }}</option>
-          </select>
-        </label>
-        <label class="field-label">
-          Kind
-          <select v-model="t.filter" class="text-input">
-            <option v-for="f in TARGET_FILTERS" :key="f" :value="f">{{ f }}</option>
-          </select>
-        </label>
-        <label class="field-label">
-          Within
-          <select v-model="t.within" class="text-input">
-            <option v-for="w in TARGET_WITHIN" :key="w" :value="w">{{ w }}</option>
-          </select>
-        </label>
-        <label class="field-label">
-          Side
-          <select v-model="t.side" class="text-input">
-            <option v-for="s in TARGET_SIDES" :key="s" :value="s">{{ s }}</option>
-          </select>
-        </label>
-        <label v-if="t.within === 'projectile'" class="field-label">
-          Projectile range
-          <input v-model.number="t.range" type="number" min="0" class="text-input" title="Squares it flies; 0 = unlimited" />
-        </label>
-        <label class="field-label">
-          How many
-          <input v-model.number="t.count" type="number" min="1" class="text-input" />
-        </label>
-        <label v-if="t.count > 1" class="chk">
-          <input v-model="t.upTo" type="checkbox" />
-          Up to that many
-        </label>
-        <label class="field-label span2">
-          Prompt
-          <input v-model="t.prompt" class="text-input" placeholder="Choose a minion" />
-        </label>
-      </template>
+      <label v-if="t.count > 1" class="chk">
+        <input v-model="t.upTo" type="checkbox" />
+        up to that many
+      </label>
+      <label class="field-label span2">
+        Prompt
+        <input v-model="t.prompt" class="text-input" placeholder="e.g. Choose a minion" />
+      </label>
     </template>
-    <template v-else>
-      <label class="field-label">
-        Origin
-        <select v-model="t.origin" class="text-input">
-          <option v-for="o in GRID_ORIGINS" :key="o" :value="o">{{ o }}</option>
+
+    <template v-else-if="choice() === 'grid'">
+      <div class="row span2">
+        <select v-model="t.origin" class="text-input" title="Where the area is centred">
+          <option value="self">around this card</option>
+          <option value="pick">around a square the player picks</option>
         </select>
-      </label>
-      <label v-if="t.origin === 'pick'" class="field-label">
-        Range (steps)
-        <input v-model.number="t.range" type="number" min="0" class="text-input" />
-      </label>
-      <label class="field-label">
-        Area
-        <select v-model="t.shape" class="text-input">
-          <option v-for="s in GRID_SHAPES" :key="s" :value="s">{{ s }}</option>
+        <input
+          v-if="t.origin === 'pick'"
+          v-model.number="t.range"
+          type="number"
+          min="0"
+          class="text-input num"
+          title="How many steps away the player may pick (0 = anywhere)"
+        />
+      </div>
+      <div class="row span2">
+        <span class="hint">covering</span>
+        <AreaPicker v-model:shape="t.shape" :shapes="GRID_SHAPES" />
+        <span class="hint">hits</span>
+        <select v-model="t.filter" class="text-input" title="What kind of card in the area">
+          <option v-for="f in TARGET_FILTERS" :key="f" :value="f">{{ FILTER_PLURALS[f] }}</option>
         </select>
-      </label>
-      <label class="field-label">
-        Affects
-        <select v-model="t.filter" class="text-input">
-          <option v-for="f in TARGET_FILTERS" :key="f" :value="f">{{ f }}</option>
-        </select>
-      </label>
-      <label class="chk">
+      </div>
+      <label class="chk span2">
         <input v-model="t.throughLayers" type="checkbox" />
-        Through both layers
+        both layers (surface and below)
       </label>
     </template>
   </div>
@@ -110,11 +124,37 @@ defineProps({ t: { type: Object, required: true } })
 .tgt {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 0.5rem;
-  margin: 0.4rem 0;
+  gap: 0.4rem;
+  margin: 0.3rem 0;
 }
 .tgt .span2 {
   grid-column: 1 / -1;
+}
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+.row .text-input {
+  flex: 1 1 6rem;
+  min-width: 5rem;
+}
+.row .num {
+  flex: 0 0 4rem;
+  min-width: 0;
+}
+.choose {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.choose .text-input {
+  flex: 1 1 auto;
+}
+.step-word {
+  font-weight: 700;
+  font-size: 0.9rem;
 }
 .field-label {
   display: flex;

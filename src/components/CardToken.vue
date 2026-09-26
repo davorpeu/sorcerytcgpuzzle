@@ -4,6 +4,7 @@ import {
   state,
   ui,
   isTapped,
+  zoneRegion,
   selectCard,
   targetAttack,
   targetStrike,
@@ -32,12 +33,12 @@ import {
   isDisabled,
   cantAttack,
   cantMove,
+  cantDefend,
   cantBeTargeted,
   effectiveStrengthMod,
   grantedKeywordsOf,
   countersOf,
   SHIELD_COUNTER,
-  cardTypeLabel,
   isAnimated,
   wardTokenArt,
   beginDrag,
@@ -52,6 +53,10 @@ const props = defineProps({
 
 const card = computed(() => state.cards[props.cardId])
 const isUnder = computed(() => props.from.endsWith(':bot'))
+// Under a water site a card is submerged; under a land site, buried.
+const underWord = computed(() =>
+  zoneRegion(props.from) === 'underwater' ? 'submerged' : 'buried'
+)
 const onBoard = computed(() => /^cell:\d+:(top|bot)$/.test(props.from))
 const tapped = computed(() => isTapped(props.cardId))
 // Strike is unenforced (any on-board target); attack highlights only legal
@@ -83,6 +88,7 @@ const restrictions = computed(() => {
   const out = []
   if (cantAttack(props.cardId)) out.push({ tag: 'NA', title: "Can't attack" })
   if (cantMove(props.cardId)) out.push({ tag: 'NM', title: "Can't move" })
+  if (cantDefend(props.cardId)) out.push({ tag: 'ND', title: "Can't move to defend" })
   if (cantBeTargeted(props.cardId)) out.push({ tag: 'NT', title: "Can't be targeted by opponents" })
   return out
 })
@@ -97,11 +103,6 @@ const counterTag = ([name, n]) =>
 const signedStr = computed(() =>
   strengthMod.value > 0 ? `+${strengthMod.value}` : `${strengthMod.value}`
 )
-// Short type tag (MIN/SITE/…) so a card's assigned type reads on the board.
-const typeTag = computed(() => {
-  const t = cardTypeLabel(props.cardId)
-  return t === 'Minion' ? 'MIN' : t === 'Avatar' ? 'AVA' : t.slice(0, 4).toUpperCase()
-})
 // Only the formal Move action makes a click on a unit mean "move here". A
 // plain selection leaves other units clickable to select instead, so you can
 // switch between cards without moving. So clicking a unit standing in a square
@@ -139,7 +140,7 @@ const label = computed(() => {
   if (c.site) bits.push('site')
   if (c.aura) bits.push('aura')
   bits.push(c.enemy ? "opponent's" : 'yours')
-  if (isUnder.value) bits.push('below')
+  if (isUnder.value) bits.push(underWord.value)
   if (tapped.value) bits.push('tapped')
   if (disabled.value) bits.push('disabled')
   else if (silenced.value) bits.push('silenced')
@@ -283,8 +284,7 @@ function onClick() {
     </span>
     <!-- Card type reads from the coloured ring around the art (see the type
          border rules in the stylesheet), not a text badge. -->
-    <span v-if="isUnder" class="site-badge under-badge">BELOW</span>
-    <span class="type-tag" aria-hidden="true">{{ typeTag }}</span>
+    <span v-if="isUnder" class="site-badge under-badge">{{ underWord.toUpperCase() }}</span>
     <!-- Damage counters on the card, a small red pip so a wounded unit reads at
          a glance. The count is also in the token's aria-label above. -->
     <span v-if="dmg" class="dmg-badge" aria-hidden="true">{{ dmg }}</span>
@@ -415,22 +415,6 @@ function onClick() {
   letter-spacing: 0.03em;
   color: #fff;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
-  pointer-events: none;
-}
-.type-tag {
-  position: absolute;
-  bottom: 1px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 2;
-  padding: 0 0.25em;
-  border-radius: 3px 3px 0 0;
-  background: rgba(0, 0, 0, 0.55);
-  color: rgba(255, 255, 255, 0.85);
-  font-size: 0.5em;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  line-height: 1.4;
   pointer-events: none;
 }
 .silenced-badge {

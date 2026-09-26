@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Sorcery Puzzle
  * Description: Embeds the Sorcery TCG puzzle app via the [sorcery_puzzle] shortcode and stores puzzles site-wide through a REST API. Shortcode attributes: src (URL to a puzzle JSON), puzzle (stored puzzle id), daily="1", fullwidth="0".
- * Version: 2.2.0
+ * Version: 2.5.0
  * Author: davorpeu
  */
 
@@ -57,11 +57,11 @@ function sorcery_puzzle_visible_posts()
  */
 add_action('init', function () {
     register_post_type(SORCERY_PUZZLE_CPT, array(
-        'label'               => 'Sorcery Puzzles',
-        'public'              => false,
-        'show_ui'             => false,
+        'label' => 'Sorcery Puzzles',
+        'public' => false,
+        'show_ui' => false,
         'exclude_from_search' => true,
-        'supports'            => array('title'),
+        'supports' => array('title'),
     ));
 });
 
@@ -82,9 +82,9 @@ function sorcery_puzzle_summary($post)
 {
     $date = get_post_meta($post->ID, 'puzzle_date', true);
     return array(
-        'id'      => (string) $post->ID,
-        'name'    => $post->post_title,
-        'date'    => $date ? $date : null,
+        'id' => (string) $post->ID,
+        'name' => $post->post_title,
+        'date' => $date ? $date : null,
         'savedAt' => get_post_modified_time('c', true, $post),
     );
 }
@@ -100,9 +100,9 @@ function sorcery_puzzle_image_exts()
 {
     return array(
         'image/jpeg' => 'jpg',
-        'image/png'  => 'png',
+        'image/png' => 'png',
         'image/webp' => 'webp',
-        'image/gif'  => 'gif',
+        'image/gif' => 'gif',
     );
 }
 
@@ -127,7 +127,7 @@ function sorcery_puzzle_intern_image($src)
     }
 
     $header = substr($src, 0, strpos($src, ','));
-    $bytes  = stripos($header, 'base64') !== false
+    $bytes = stripos($header, 'base64') !== false
         ? base64_decode($m[2])
         : rawurldecode($m[2]);
     if (empty($bytes)) {
@@ -138,27 +138,27 @@ function sorcery_puzzle_intern_image($src)
 
     // Dedup: have we stored these exact bytes before?
     $existing = get_posts(array(
-        'post_type'   => 'attachment',
+        'post_type' => 'attachment',
         'post_status' => 'inherit',
         'numberposts' => 1,
-        'fields'      => 'ids',
-        'meta_key'    => '_sorcery_img_hash',
-        'meta_value'  => $hash,
+        'fields' => 'ids',
+        'meta_key' => '_sorcery_img_hash',
+        'meta_value' => $hash,
     ));
     if ($existing) {
         return (int) $existing[0];
     }
 
     $filename = 'sorcery-' . substr($hash, 0, 16) . '.' . $exts[$mime];
-    $upload   = wp_upload_bits($filename, null, $bytes);
+    $upload = wp_upload_bits($filename, null, $bytes);
     if (!empty($upload['error'])) {
         return 0;
     }
 
     $attach_id = wp_insert_attachment(array(
         'post_mime_type' => $mime,
-        'post_title'     => $filename,
-        'post_status'    => 'inherit',
+        'post_title' => $filename,
+        'post_status' => 'inherit',
     ), $upload['file']);
     if (is_wp_error($attach_id) || !$attach_id) {
         return 0;
@@ -258,7 +258,7 @@ function sorcery_puzzle_full($post)
     }
     // The post is the source of truth for identity and metadata.
     $summary = sorcery_puzzle_summary($post);
-    $data['id']   = $summary['id'];
+    $data['id'] = $summary['id'];
     $data['name'] = $summary['name'];
     $data['date'] = $summary['date'];
     // Card images are stored as Media Library references; resolve each back
@@ -270,47 +270,47 @@ function sorcery_puzzle_full($post)
 function sorcery_puzzle_all_posts()
 {
     return get_posts(array(
-        'post_type'   => SORCERY_PUZZLE_CPT,
+        'post_type' => SORCERY_PUZZLE_CPT,
         'post_status' => 'publish',
         'numberposts' => -1,
-        'orderby'     => 'modified',
-        'order'       => 'DESC',
+        'orderby' => 'modified',
+        'order' => 'DESC',
     ));
 }
 
 add_action('rest_api_init', function () {
     register_rest_route(SORCERY_PUZZLE_REST_NS, '/puzzles', array(
         array(
-            'methods'             => 'GET',
-            'callback'            => 'sorcery_puzzle_rest_list',
+            'methods' => 'GET',
+            'callback' => 'sorcery_puzzle_rest_list',
             'permission_callback' => '__return_true',
         ),
         array(
-            'methods'             => 'POST',
-            'callback'            => 'sorcery_puzzle_rest_save',
+            'methods' => 'POST',
+            'callback' => 'sorcery_puzzle_rest_save',
             'permission_callback' => 'sorcery_puzzle_can_edit',
         ),
     ));
     register_rest_route(SORCERY_PUZZLE_REST_NS, '/puzzles/(?P<id>\d+)', array(
         array(
-            'methods'             => 'GET',
-            'callback'            => 'sorcery_puzzle_rest_get',
+            'methods' => 'GET',
+            'callback' => 'sorcery_puzzle_rest_get',
             'permission_callback' => '__return_true',
         ),
         array(
-            'methods'             => 'DELETE',
-            'callback'            => 'sorcery_puzzle_rest_delete',
+            'methods' => 'DELETE',
+            'callback' => 'sorcery_puzzle_rest_delete',
             'permission_callback' => 'sorcery_puzzle_can_edit',
         ),
     ));
     register_rest_route(SORCERY_PUZZLE_REST_NS, '/media', array(
-        'methods'             => 'GET',
-        'callback'            => 'sorcery_puzzle_rest_media',
+        'methods' => 'GET',
+        'callback' => 'sorcery_puzzle_rest_media',
         'permission_callback' => 'sorcery_puzzle_can_edit',
     ));
     register_rest_route(SORCERY_PUZZLE_REST_NS, '/daily', array(
-        'methods'             => 'GET',
-        'callback'            => 'sorcery_puzzle_rest_daily',
+        'methods' => 'GET',
+        'callback' => 'sorcery_puzzle_rest_daily',
         'permission_callback' => '__return_true',
     ));
 });
@@ -360,9 +360,9 @@ function sorcery_puzzle_rest_save($req)
     sorcery_puzzle_pack_images($data);
 
     $postarr = array(
-        'post_type'    => SORCERY_PUZZLE_CPT,
-        'post_status'  => 'publish',
-        'post_title'   => $name,
+        'post_type' => SORCERY_PUZZLE_CPT,
+        'post_status' => 'publish',
+        'post_title' => $name,
         'post_content' => wp_slash(wp_json_encode($data)),
     );
     // A numeric id that matches an existing puzzle post means update;
@@ -407,8 +407,8 @@ function sorcery_puzzle_rest_delete($req)
  */
 function sorcery_puzzle_rest_media($req)
 {
-    $search   = sanitize_text_field((string) $req->get_param('search'));
-    $page     = max(1, (int) $req->get_param('page'));
+    $search = sanitize_text_field((string) $req->get_param('search'));
+    $page = max(1, (int) $req->get_param('page'));
     $per_page = (int) $req->get_param('per_page');
     $per_page = $per_page > 0 ? min(100, $per_page) : 40;
 
@@ -418,14 +418,14 @@ function sorcery_puzzle_rest_media($req)
     $by_filename = '__return_true';
     add_filter('wp_allow_query_attachment_by_filename', $by_filename);
     $query = new WP_Query(array(
-        'post_type'      => 'attachment',
-        'post_status'    => 'inherit',
+        'post_type' => 'attachment',
+        'post_status' => 'inherit',
         'post_mime_type' => array_keys(sorcery_puzzle_image_exts()),
-        's'              => $search,
+        's' => $search,
         'posts_per_page' => $per_page,
-        'paged'          => $page,
-        'orderby'        => $search !== '' ? 'relevance' : 'date',
-        'order'          => 'DESC',
+        'paged' => $page,
+        'orderby' => $search !== '' ? 'relevance' : 'date',
+        'order' => 'DESC',
     ));
     remove_filter('wp_allow_query_attachment_by_filename', $by_filename);
 
@@ -440,9 +440,9 @@ function sorcery_puzzle_rest_media($req)
         // A smaller size keeps the picker grid light.
         $thumb = wp_get_attachment_image_url($post->ID, 'medium');
         $items[] = array(
-            'id'    => (string) $post->ID,
-            'name'  => $post->post_title,
-            'url'   => $url,
+            'id' => (string) $post->ID,
+            'name' => $post->post_title,
+            'url' => $url,
             'thumb' => $thumb ? $thumb : $url,
         );
     }
@@ -451,7 +451,7 @@ function sorcery_puzzle_rest_media($req)
         'items' => $items,
         'total' => (int) $query->found_posts,
         'pages' => (int) $query->max_num_pages,
-        'page'  => $page,
+        'page' => $page,
     );
 }
 
@@ -504,7 +504,7 @@ function sorcery_puzzle_migrate_inline_images()
         $content = wp_json_encode($data);
         if ($content !== $post->post_content) {
             wp_update_post(array(
-                'ID'           => $post->ID,
+                'ID' => $post->ID,
                 'post_content' => wp_slash($content),
             ));
             $changed++;
@@ -517,9 +517,9 @@ function sorcery_puzzle_shortcode($atts)
 {
     $atts = shortcode_atts(
         array(
-            'src'    => '',
+            'src' => '',
             'puzzle' => '',
-            'daily'  => '',
+            'daily' => '',
             // The embed widens past the theme's content column by default,
             // because the board is sized from the space it is given. Pass
             // fullwidth="0" to leave it inside the column instead.
@@ -543,7 +543,7 @@ function sorcery_puzzle_shortcode($atts)
 
     $can_edit = sorcery_puzzle_can_edit();
 
-    $attrs  = ' data-editor="' . ($can_edit ? '1' : '0') . '"';
+    $attrs = ' data-editor="' . ($can_edit ? '1' : '0') . '"';
     $attrs .= ' data-api="' . esc_attr(esc_url_raw(rest_url(SORCERY_PUZZLE_REST_NS))) . '"';
     if ($can_edit) {
         // Lets the app authenticate its REST writes as the logged-in editor.

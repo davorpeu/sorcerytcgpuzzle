@@ -13,7 +13,9 @@ const STORAGE_KEY = 'sorceryPuzzles.v1'
 // Per-puzzle, per-day play progress (mistakes + solved/failed lock) for limited
 // players. Soft: clearing localStorage resets it.
 const ATTEMPTS_KEY = 'sorceryAttempts.v1'
-const FORMAT_VERSION = 1
+// 2: adjacent/nearby include the source's own square (rulebook glossary). Older
+// files are not supported.
+const FORMAT_VERSION = 2
 
 // A self-contained ?data= share link longer than this is treated as too big to
 // be usable (browsers and chat apps truncate very long URLs). Past it we steer
@@ -158,6 +160,9 @@ export const ui = reactive({
   // this is true or while a card is armed for a click-move; the rest of the
   // time they step aside so the site art underneath them stays clickable.
   dragging: false,
+  // The card in flight, so a drop zone can refuse (and not light up for) a
+  // drop moveCard would reject anyway -- e.g. a realm card over the hand.
+  dragCard: null,
   // Card whose actions are offered in the docked action bar. Selecting is
   // also how a card is picked up without dragging: click the card, then
   // click the zone it should go to.
@@ -347,7 +352,10 @@ export function zoneLabel(zone) {
   m = /^cell:(\d+):top$/.exec(zone)
   if (m) return `${squareLabel(m[1])} (surface)`
   m = /^cell:(\d+):bot$/.exec(zone)
-  if (m) return `${squareLabel(m[1])} (below)`
+  if (m)
+    return `${squareLabel(m[1])} (${
+      regionOf(Number(m[1]), 'bot') === 'underwater' ? 'submerged' : 'buried'
+    })`
   m = /^cell:(\d+)$/.exec(zone)
   if (m) return squareLabel(m[1])
   m = /^aura:(\d+)$/.exec(zone)
@@ -406,13 +414,33 @@ function siteOn(square) {
   return id ? state.cards[id] : null
 }
 
-// A site's water type is derived from its authored threshold and the transient
-// Flood state. Other elemental thresholds do not turn off water; the presence
-// of a positive water affinity is enough.
+// A site's water type is derived from its authored threshold, the transient
+// Flood state, and any passive ability of its own that grants water affinity.
+// Other elemental thresholds do not turn off water; the presence of a positive
+// water affinity is enough. A granted affinity is an ability, so silencing the
+// site takes it -- and with it the water -- away; its printed affinity stays.
 export function isWaterSite(square) {
   const site = siteOn(square)
   if (!site) return false
-  return Number(site.affinity?.water) > 0 || !!state.floodedSites[String(square)]
+  if (Number(site.affinity?.water) > 0 || !!state.floodedSites[String(square)]) return true
+  return grantsWater(site)
+}
+
+// Guards: a passive's own condition may ask whether its site is water (onWater),
+// and silence is derived from passives whose reach can depend on regions -- so
+// while the passive traits are being resolved (resolvingPassives) silence isn't
+// consulted, and a site's water grant never re-enters itself.
+let resolvingPassives = false
+const resolvingWater = new Set()
+function grantsWater(site) {
+  if (resolvingWater.has(site.id)) return false
+  resolvingWater.add(site.id)
+  try {
+    if (!passivesOf(site).some((a) => Number(a.passive?.affinity?.water) > 0)) return false
+    return resolvingPassives || !isSilenced(site.id)
+  } finally {
+    resolvingWater.delete(site.id)
+  }
 }
 
 export function isLandSite(square) {
@@ -580,11 +608,35 @@ function unitCell(cardId) {
   return { square: Number(m[1]), region: regionOf(Number(m[1]), m[2]) }
 }
 
+// A card's authored abilities, including those it has gained. A grant (an
+// assumed form) hands every ability of the granted card to its carrier: the
+// carrier holds its triggers, activated abilities and passives, and the granted
+// card -- carried only so the player can see what was gained -- holds none of
+// its own. The basics every unit/avatar has (move, attack, draw) aren't
+// authored abilities, so they never double up.
+function abilitiesOf(cardId) {
+  if (state.grants[cardId]) return []
+  const out = [...(state.cards[cardId]?.abilities || [])]
+  const seen = new Set([cardId])
+  const walk = (id) => {
+    for (const t of Object.keys(state.grants)) {
+      if (state.grants[t].carrierId !== id || seen.has(t)) continue
+      seen.add(t)
+      out.push(...(state.cards[t]?.abilities || []))
+      walk(t)
+    }
+  }
+  walk(cardId)
+  return out
+}
+
 // A passive applies only while its condition holds (always, by default).
 const passivesOf = (card) =>
-  (card?.abilities || []).filter(
-    (a) => a.kind === 'passive' && passiveConditionMet(card.id, a.condition)
-  )
+  card
+    ? abilitiesOf(card.id).filter(
+        (a) => a.kind === 'passive' && passiveConditionMet(card.id, a.condition)
+      )
+    : []
 
 // Is a passive's "only while" condition true for its source right now? Reads
 // only the raw board and stats -- never `effective` or a passive animation --
@@ -599,6 +651,7 @@ function passiveConditionMet(sourceId, cond) {
 function conditionSubject(cond, ctx) {
   if (cond.subject === 'target') return ctx.targetId ?? null
   if (cond.subject === 'triggering') return ctx.triggeringId ?? null
+  if (cond.subject === 'other') return ctx.otherId ?? null
   return ctx.sourceId ?? null
 }
 
@@ -629,7 +682,6 @@ function testCondition(cond, ctx) {
   if (type === 'lifeAtMost') return (stats.life || 0) <= n
   if (type === 'lifeAtLeast') return (stats.life || 0) >= n
   if (type === 'manaAtLeast') return (stats.mana || 0) >= n
-  if (type === 'thresholdAtLeast') return (stats[cond.element || 'fire'] || 0) >= n
   if (type === 'affinityAtLeast') {
     const el = cond.element || 'fire'
     return (ctx.raw ? rawThreshold(side, el) : effectiveThreshold(side, el)) >= n
@@ -653,25 +705,6 @@ function testCondition(cond, ctx) {
   if (type === 'onWater') return isWaterSite(node.sq)
   if (type === 'onLand') return isLandSite(node.sq)
   if (type === 'onFlooded') return isFloodedSite(node.sq)
-  if (type === 'unitsNearby') {
-    // At least N units (by side) on this square or the 8 around it.
-    let count = 0
-    for (let i = 0; i < GRID_SIZE; i++) {
-      if (i !== node.sq && !areNearby(node.sq, i)) continue
-      for (const layer of ['top', 'bot']) {
-        for (const uid of state.zones[`cell:${i}:${layer}`] || []) {
-          if (uid === sourceId) continue
-          const c = state.cards[uid]
-          if (!c || !(c.unit || c.avatar || state.animated[uid])) continue
-          const same = !!c.enemy === !!card.enemy
-          if (cond.side === 'friendly' && !same) continue
-          if (cond.side === 'enemy' && same) continue
-          count++
-        }
-      }
-    }
-    return count >= Math.max(1, n)
-  }
   return true
 }
 
@@ -679,7 +712,7 @@ function testCondition(cond, ctx) {
 // passives and keywords gained in play (not those lent by other cards).
 function ownKeywords(id) {
   const out = new Set(state.grantedKeywords[id] || [])
-  for (const a of state.cards[id]?.abilities || []) {
+  for (const a of abilitiesOf(id)) {
     if (a.kind !== 'passive' || a.scope !== 'self' || (a.condition?.type || 'always') !== 'always') continue
     for (const k of a.passive?.keywords || []) out.add(k)
   }
@@ -1060,9 +1093,10 @@ function oversizedOnSquare(idx) {
 }
 
 // The units a passive on `sourceId` reaches. Area scopes are region-aware (same
-// region as the source) and drop the source itself; side suffixes filter by
-// controller. A site projects from its square's surface.
-function unitsInScope(sourceId, scope) {
+// region as the source); as in the rulebook, adjacent/nearby include the source's
+// own square. The source itself is left out unless `includeSelf`. Side suffixes
+// filter by controller. A site projects from its square's surface.
+function unitsInScope(sourceId, scope, includeSelf = false) {
   if (scope === 'self') return [sourceId]
   const siteSq = squareOfSite(sourceId)
   const src = unitCell(sourceId) || (siteSq == null ? null : { square: siteSq, region: 'surface' })
@@ -1073,12 +1107,12 @@ function unitsInScope(sourceId, scope) {
   const wantEnemy = scope.endsWith('enemy')
   const out = []
   for (const u of boardUnits()) {
-    if (u.id === sourceId) continue
+    if (u.id === sourceId && !includeSelf) continue
     if (u.region !== src.region) continue
     // Oversized units cover four squares: in range if any pair of squares is.
     const inRange = (src.squares || [src.square]).some((a) =>
-      (u.squares || [u.square]).some((b) =>
-        near ? areNearby(a, b) : areAdjacent(a, b) && a !== b
+      (u.squares || [u.square]).some(
+        (b) => a === b || (near ? areNearby(a, b) : areAdjacent(a, b))
       )
     )
     if (!inRange) continue
@@ -1110,14 +1144,16 @@ function cardSquare(id) {
 
 // Every card a passive on `sourceId` reaches, by its scope and `affects` kinds.
 // Units use the region-aware unit scopes; sites and artifacts are matched by
-// square (the aura's area, or the ring around the source). Side suffixes filter
-// by controller. Never includes the source itself.
+// square (the aura's area, or the source's square and those around it). Side
+// suffixes filter by controller. The source itself only with `includeSelf`.
 function passiveTargets(sourceId, a) {
   const scope = a.scope
   if (scope === 'self') return [sourceId]
   const srcCard = state.cards[sourceId]
   if (!srcCard) return []
   const affects = a.passive?.affects || ['units']
+  const includeSelf = !!a.passive?.includeSelf
+  const other = (id) => includeSelf || id !== sourceId
   const wantFriendly = scope.endsWith('friendly')
   const wantEnemy = scope.endsWith('enemy')
   const sideOk = (id) => {
@@ -1138,15 +1174,15 @@ function passiveTargets(sourceId, a) {
       return [...out]
     }
     if (affects.includes('units'))
-      for (const u of boardUnits()) if (u.id !== sourceId && sideOk(u.id)) out.add(u.id)
+      for (const u of boardUnits()) if (other(u.id) && sideOk(u.id)) out.add(u.id)
     if (affects.includes('sites'))
       for (let sq = 0; sq < GRID_SIZE; sq++) {
         const id = state.zones[`site:${sq}`]?.[0]
-        if (id && id !== sourceId && sideOk(id)) out.add(id)
+        if (id && other(id) && sideOk(id)) out.add(id)
       }
     if (affects.includes('artifacts'))
       for (const c of Object.values(state.cards)) {
-        if (!c.artifact || c.id === sourceId || isUnit(c) || !sideOk(c.id)) continue
+        if (!c.artifact || !other(c.id) || isUnit(c) || !sideOk(c.id)) continue
         if (cardSquare(c.id) != null) out.add(c.id)
       }
     return [...out]
@@ -1161,8 +1197,7 @@ function passiveTargets(sourceId, a) {
     const near = scope.startsWith('nearby')
     squares = []
     for (let s = 0; s < GRID_SIZE; s++) {
-      if (srcSquares.includes(s)) continue
-      if (srcSquares.some((q) => (near ? areNearby(q, s) : areAdjacent(q, s)))) squares.push(s)
+      if (srcSquares.some((q) => q === s || (near ? areNearby(q, s) : areAdjacent(q, s)))) squares.push(s)
     }
   }
   const out = new Set()
@@ -1172,25 +1207,25 @@ function passiveTargets(sourceId, a) {
       // on the surface -- if any of their squares overlap).
       const layers = a.passive?.unitLayers || 'surface'
       for (const u of boardUnits()) {
-        if (u.id === sourceId || !sideOk(u.id)) continue
+        if (!other(u.id) || !sideOk(u.id)) continue
         const below = /:bot$/.test(zoneOf(u.id) || '')
         if (layers === 'surface' && below) continue
         if (layers === 'below' && !below) continue
         if ((u.squares || [u.square]).some((s) => squares.includes(s))) out.add(u.id)
       }
     } else {
-      for (const id of unitsInScope(sourceId, scope)) out.add(id)
+      for (const id of unitsInScope(sourceId, scope, includeSelf)) out.add(id)
     }
   }
   if (affects.includes('sites')) {
     for (const s of squares) {
       const id = state.zones[`site:${s}`]?.[0]
-      if (id && id !== sourceId && sideOk(id)) out.add(id)
+      if (id && other(id) && sideOk(id)) out.add(id)
     }
   }
   if (affects.includes('artifacts')) {
     for (const c of Object.values(state.cards)) {
-      if (!c.artifact || c.id === sourceId || isUnit(c) || !sideOk(c.id)) continue
+      if (!c.artifact || !other(c.id) || isUnit(c) || !sideOk(c.id)) continue
       const sq = cardSquare(c.id)
       if (sq != null && squares.includes(sq)) out.add(c.id)
     }
@@ -1210,6 +1245,7 @@ function accumPassive(p, acc) {
   if (p.cantAttack) acc.cantAttack = true
   if (p.cantBeTargeted) acc.cantBeTargeted = true
   if (p.cantMove) acc.cantMove = true
+  if (p.cantDefend) acc.cantDefend = true
 }
 
 // spellCost is a list of { amount, filter }: each passive discount/tax and the
@@ -1243,6 +1279,15 @@ function scopeSides(sourceId, scope) {
 // the basics, so the unit can't act at all. Auras from a silenced/disabled
 // source stop applying (resolved in one pass; mutual silence isn't chased).
 const passiveState = computed(() => {
+  resolvingPassives = true
+  try {
+    return resolvePassives()
+  } finally {
+    resolvingPassives = false
+  }
+})
+
+function resolvePassives() {
   const cards = state.cards
   const silenced = new Set()
   const disabled = new Set()
@@ -1294,6 +1339,7 @@ const passiveState = computed(() => {
       cantAttack: false,
       cantBeTargeted: false,
       cantMove: false,
+      cantDefend: false,
     }
     if (!silencedHere) {
       for (const a of passivesOf(cards[id])) {
@@ -1316,10 +1362,11 @@ const passiveState = computed(() => {
       cantAttack: acc.cantAttack,
       cantBeTargeted: acc.cantBeTargeted,
       cantMove: acc.cantMove,
+      cantDefend: acc.cantDefend,
     }
   }
   return { map, sides }
-})
+}
 
 export const effective = computed(() => passiveState.value.map)
 
@@ -1396,6 +1443,7 @@ export const isDisabled = (id) => !!traits(id)?.disabled
 export const cantAttack = (id) => !!traits(id)?.cantAttack
 export const cantBeTargeted = (id) => !!traits(id)?.cantBeTargeted
 export const cantMove = (id) => !!traits(id)?.cantMove
+export const cantDefend = (id) => !!traits(id)?.cantDefend
 
 // Keywords added during play (not the base ones on the card art), for badging.
 export const grantedKeywordsOf = (id) => state.grantedKeywords[id] || []
@@ -1986,7 +2034,6 @@ export function cardZoneCategory(cardId) {
 // around the table.
 export const ZONE_CATEGORIES = [
   'realm',
-  'aura',
   'storyline',
   'hand',
   'cemetery',
@@ -1995,6 +2042,11 @@ export const ZONE_CATEGORIES = [
   'atlas',
   'spellbook',
 ]
+
+// Auras are in the realm (rulebook): an ability's 'realm' zone covers the aura
+// intersections too.
+const catMatches = (want, cat) => want === cat || (want === 'realm' && cat === 'aura')
+const zoneListHas = (list, cat) => (list || []).some((want) => catMatches(want, cat))
 
 // The actions a triggered ability can watch. Mirrors the logged entry `type`s
 // (a plain move logs no type, so it is spelled out here as 'move').
@@ -2007,6 +2059,9 @@ export const TRIGGER_ACTIONS = [
   'ability',
   'cast',
   'damage',
+  // Convenience: a card comes into the realm from outside it -- cast, summoned,
+  // conjured, reanimated (Genesis).
+  'enter',
   // Convenience: a unit goes from the realm to a cemetery (dies).
   'death',
 ]
@@ -2028,7 +2083,6 @@ export const EFFECT_OPS = [
   'adjustStat',
   'tap',
   'dealDamage',
-  'gridDamage',
   'strike',
   'modifyStrength',
   'grantKeyword',
@@ -2048,7 +2102,6 @@ export const EFFECT_OPS = [
   'draw',
   'discard',
   'search',
-  'returnToHand',
   'reanimate',
   'gainControl',
   'swap',
@@ -2068,6 +2121,18 @@ export const DISCARD_PICKS = ['chosen', 'count']
 // Where a reanimated card may be summoned, relative to the source: a picked
 // location anywhere, or one adjacent/nearby.
 export const REANIMATE_REACH = ['any', 'nearby', 'adjacent']
+
+// Where a granted card goes when the grant ends: back where it was taken from
+// (a banished avatar assumed as a form simply returns to banishment), or to its
+// owner's banished zone / cemetery / hand.
+export const GRANT_RELEASE = ['origin', 'banished', 'cemetery', 'hand']
+export const GRANT_RELEASE_LABELS = {
+  origin: 'back where it came from',
+  banished: 'to banishment',
+  cemetery: 'to the cemetery',
+  hand: 'to hand',
+}
+
 // An activated ability's sacrifice cost: nothing, the card itself, or the
 // ability's chosen target (which must then be a friendly card in play).
 export const SACRIFICE_COSTS = ['none', 'self', 'target']
@@ -2108,7 +2173,9 @@ export const MOVE_REACH = ['adjacent', 'nearby', 'any']
 // Tokens an ability can generate. Minion tokens enter the realm like a summon
 // (not movement); a lance is a carriable artifact; a ward is a Ward granted to a
 // unit.
-export const TOKEN_KINDS = ['soldier', 'skeleton', 'frog', 'lance', 'ward']
+// (A Ward is granted with grantKeyword; 'ward' only remains a template kind for
+// the Ward token's art.)
+export const TOKEN_KINDS = ['soldier', 'skeleton', 'frog', 'lance']
 const TOKEN_DEFS = {
   soldier: { name: 'Foot Soldier', unit: true, power: 1 },
   skeleton: { name: 'Skeleton', unit: true, power: 1 },
@@ -2120,7 +2187,7 @@ const TOKEN_DEFS = {
 }
 // Every kind a card can be designated as the template of (Rubble included: it
 // is generated by animating a site).
-export const TOKEN_TEMPLATE_KINDS = [...TOKEN_KINDS, 'rubble']
+export const TOKEN_TEMPLATE_KINDS = [...TOKEN_KINDS, 'ward', 'rubble']
 export const TOKEN_NAMES = {
   soldier: 'Foot Soldier',
   skeleton: 'Skeleton',
@@ -2189,7 +2256,6 @@ export const TOKEN_LOCATIONS = [
 ]
 // The locations that make sense for each token kind, for the editor.
 export function tokenLocationsFor(kind) {
-  if (kind === 'ward') return ['self', 'target']
   if (kind === 'lance') return TOKEN_LOCATIONS
   return TOKEN_LOCATIONS.filter((l) => l !== 'self' && l !== 'target')
 }
@@ -2213,11 +2279,13 @@ export const AMOUNT_REFS = ['literal', 'power', 'carriedCount', 'waterBodySize',
 //   area       -- a set of cards (`area`): the ability's grid target ('grid'),
 //                 or a region-aware area around the source, filtered by card
 //                 kind (TARGET_FILTERS) and side (TARGET_SIDES)
-export const EFFECT_WHO = ['self', 'target', 'triggering', 'avatar', 'carrier', 'area']
+//   other      -- a triggered ability's other party (the attacker, for "when
+//                 this is attacked"); shielded by Stealth / "can't be targeted"
+export const EFFECT_WHO = ['self', 'target', 'triggering', 'other', 'avatar', 'carrier', 'area']
 export const AVATAR_SIDES = ['self', 'enemy']
-// A relative area's reach: the source's own location, or the ring of squares
+// A relative area's reach: the source's own location, or that plus the squares
 // adjacent (4 cardinal) or nearby (8 around) it -- the same shapes as passive
-// scopes, so the ring excludes the source's own square.
+// scopes.
 // 'realm' is every card in play, any region (still minus the source) -- "if you
 // control a Knight".
 export const AREA_SHAPES = ['grid', 'location', 'adjacent', 'nearby', 'realm']
@@ -2238,7 +2306,6 @@ const WHO_OPS = new Set([
   'unflood',
   'untap',
   'discard',
-  'returnToHand',
   'reanimate',
   'gainControl',
   'swap',
@@ -2249,7 +2316,6 @@ const WHO_OPS = new Set([
 // Ops whose number is an amount (and so take an amountRef).
 const AMOUNT_OPS = new Set([
   'dealDamage',
-  'gridDamage',
   'modifyStrength',
   'addCounter',
   'removeCounter',
@@ -2264,7 +2330,9 @@ export const TRIGGER_SUBJECTS = ['self', 'any', 'enemy', 'friendly']
 export const LOSE_CONDITIONS = ['never', 'damaged', 'dies', 'leaves-realm', 'taps']
 
 // Card-kind filter for a target picker. 'unit' = avatar or minion; 'minion' =
-// non-avatar unit; 'monument' = an artifact that can't be carried.
+// non-avatar unit; 'monument' = an artifact that can't be carried. As in the
+// rulebook, 'spell' is any Spellbook card -- magic, minion, artifact or aura --
+// and 'magic' just the one-shot kind.
 export const TARGET_FILTERS = [
   'any',
   'unit',
@@ -2274,8 +2342,34 @@ export const TARGET_FILTERS = [
   'aura',
   'artifact',
   'monument',
+  'magic',
   'spell',
 ]
+// How the editor names each kind (singular, and plural for areas / counts).
+export const FILTER_LABELS = {
+  any: 'any card',
+  unit: 'unit',
+  minion: 'minion',
+  avatar: 'avatar',
+  site: 'site',
+  aura: 'aura',
+  artifact: 'artifact',
+  monument: 'monument',
+  magic: 'magic',
+  spell: 'spell (magic, minion, artifact or aura)',
+}
+export const FILTER_PLURALS = {
+  any: 'cards',
+  unit: 'units',
+  minion: 'minions',
+  avatar: 'avatars',
+  site: 'sites',
+  aura: 'auras',
+  artifact: 'artifacts',
+  monument: 'monuments',
+  magic: 'magics',
+  spell: 'spells (any)',
+}
 
 // Boolean keyword abilities a passive can grant. Base ones live on the card art
 // (authored here only so the engine can enforce them); granted ones are badged.
@@ -2341,7 +2435,6 @@ export const PASSIVE_COST_FILTERS = [
 ]
 
 function matchesCostFilter(card, filter) {
-  if (filter === 'magic') return !!card?.magic
   if (filter === 'permanent') return !!card && !card.magic
   return matchesFilter(card, filter)
 }
@@ -2363,11 +2456,9 @@ export const PASSIVE_CONDITIONS = [
   'onWater',
   'onLand',
   'onFlooded',
-  'unitsNearby',
   'lifeAtMost',
   'lifeAtLeast',
   'manaAtLeast',
-  'thresholdAtLeast',
   'affinityAtLeast',
   'untapped',
   'tapped',
@@ -2379,7 +2470,7 @@ export const PASSIVE_CONDITIONS = [
   'any',
 ]
 export const CONDITION_TYPES = PASSIVE_CONDITIONS
-export const CONDITION_SUBJECTS = ['self', 'target', 'triggering']
+export const CONDITION_SUBJECTS = ['self', 'target', 'triggering', 'other']
 // Types that test a card (`subject`), and types that read a side's stats (`whose`).
 export const SUBJECT_CONDITIONS = [
   'onWater',
@@ -2395,23 +2486,21 @@ export const STAT_CONDITIONS = [
   'lifeAtMost',
   'lifeAtLeast',
   'manaAtLeast',
-  'thresholdAtLeast',
   'affinityAtLeast',
 ]
 
-// A condition's full shape. The four fields every older file has are always
-// present; the newer ones only when set, so saved puzzles stay small.
+// A condition's full shape: type, amount and element always; the rest only when
+// set, so saved puzzles stay small.
 export function normalizeCondition(c) {
   const type = PASSIVE_CONDITIONS.includes(c?.type) ? c.type : 'always'
   const out = {
     type,
     amount: Number(c?.amount) || 0,
     element: ELEMENTS.includes(c?.element) ? c.element : 'fire',
-    side: TARGET_SIDES.includes(c?.side) ? c.side : 'any',
   }
   if (type === 'always') return out
   if (c.not) out.not = true
-  if (SUBJECT_CONDITIONS.includes(type) && ['target', 'triggering'].includes(c.subject))
+  if (SUBJECT_CONDITIONS.includes(type) && ['target', 'triggering', 'other'].includes(c.subject))
     out.subject = c.subject
   if (STAT_CONDITIONS.includes(type) && c.whose === 'enemy') out.whose = 'enemy'
   if (type === 'hasKeyword') out.keyword = KEYWORDS.includes(c.keyword) ? c.keyword : KEYWORDS[0]
@@ -2434,7 +2523,6 @@ export function setConditionType(cond, type) {
     not: cond.not,
     subject: cond.subject,
     whose: cond.whose,
-    side: cond.side,
     element: cond.element,
     amount: cond.amount,
   })
@@ -2468,6 +2556,40 @@ export function removeSubCondition(cond, i) {
 // expect, so older files and hand-edited JSON never surface an undefined nested
 // field. Also used to build a fresh ability (pass just { kind }).
 export function normalizeAbility(a = {}) {
+  return pointTriggerRefs(buildAbility(a))
+}
+
+// A triggered ability that doesn't ask the player for a target has no separate
+// "target": its effects name the trigger's cards as 'triggering' / 'other', so
+// one card has one name in the editor. Point any `target` there at the card the
+// trigger names (trigger.targets). Idempotent; run on every new or retyped
+// effect, since fresh effects default to `target`.
+function pointTriggerRefs(ab) {
+  if (ab.kind !== 'triggered' || ab.target.mode === 'grid' || ab.target.required) return ab
+  const ref = ab.trigger.targets === 'other' ? 'other' : 'triggering'
+  const fixCond = (c) => {
+    if (!c) return
+    if (c.subject === 'target') c.subject = ref
+    if (c.selector) fixSel(c.selector)
+    ;(c.of || []).forEach(fixCond)
+  }
+  const fixSel = (sel) => {
+    if (sel?.who === 'target') sel.who = ref
+  }
+  const fixEffects = (list) =>
+    (list || []).forEach((e) => {
+      if (e.op !== 'banishAndCast') fixSel(e)
+      if (e.countOf) fixSel(e.countOf)
+      fixCond(e.condition)
+      fixEffects(e.else)
+    })
+  fixCond(ab.condition)
+  fixEffects(ab.effects)
+  for (const m of ab.modes || []) fixEffects(m.effects)
+  return ab
+}
+
+function buildAbility(a) {
   const kind = ['triggered', 'passive'].includes(a.kind) ? a.kind : 'activated'
   return {
     id: a.id || uid(),
@@ -2487,6 +2609,8 @@ export function normalizeAbility(a = {}) {
       // May be summoned onto an opponent-controlled site. A trait rather than a
       // card flag so a future aura scope can lend it to other cards.
       summonOnEnemySites: !!a.passive?.summonOnEnemySites,
+      // Area scopes: the source itself counts too.
+      includeSelf: !!a.passive?.includeSelf,
       // Which kinds of card an area passive reaches (units only, by default).
       affects: Array.isArray(a.passive?.affects)
         ? a.passive.affects.filter((k) => PASSIVE_AFFECTS.includes(k))
@@ -2527,6 +2651,7 @@ export function normalizeAbility(a = {}) {
       cantAttack: !!a.passive?.cantAttack,
       cantBeTargeted: !!a.passive?.cantBeTargeted,
       cantMove: !!a.passive?.cantMove,
+      cantDefend: !!a.passive?.cantDefend,
     },
 
     // Passive-only: the passive applies only while this holds.
@@ -2678,13 +2803,84 @@ export function removeMode(ability, i) {
   } else ability.chooseCount = Math.min(ability.chooseCount || 1, ability.modes.length)
 }
 
-export function addAbility(cardId, kind = 'activated') {
+// ---------- presets ----------
+
+// A trigger's full default shape; presets override parts of it.
+const TRIGGER_BASE = {
+  action: 'move',
+  from: 'any',
+  to: 'any',
+  subject: 'self',
+  role: 'actor',
+  filter: 'any',
+  within: 'any',
+  targets: 'subject',
+}
+// The common triggers, named as the rulebook / card text words them. Picking one
+// fills in the raw trigger fields (still editable under "advanced").
+export const TRIGGER_PRESETS = {
+  genesis: { label: 'Genesis — when this enters the realm', name: 'Genesis', trigger: { action: 'enter' } },
+  deathrite: { label: 'Deathrite — when this dies', name: 'Deathrite', trigger: { action: 'death' } },
+  attacked: {
+    label: 'When this is attacked',
+    trigger: { action: 'attack', role: 'target', targets: 'other' },
+  },
+  attacks: { label: 'When this attacks', trigger: { action: 'attack', targets: 'other' } },
+  damaged: { label: 'When this takes damage', trigger: { action: 'damage', role: 'target' } },
+  moves: { label: 'When this moves', trigger: { action: 'move', from: 'realm', to: 'realm' } },
+  nearbyEnemyDies: {
+    label: 'When a nearby enemy dies',
+    trigger: { action: 'death', subject: 'enemy', within: 'nearby' },
+  },
+  allyDies: { label: 'When an ally dies', trigger: { action: 'death', subject: 'friendly' } },
+  enemyEnters: {
+    label: 'When an enemy enters the realm',
+    trigger: { action: 'enter', subject: 'enemy' },
+  },
+}
+
+// Which preset a trigger currently is, or 'custom'.
+export function triggerPresetOf(trigger) {
+  for (const [key, p] of Object.entries(TRIGGER_PRESETS)) {
+    const full = { ...TRIGGER_BASE, ...p.trigger }
+    if (Object.keys(full).every((k) => trigger[k] === full[k])) return key
+  }
+  return 'custom'
+}
+
+export function applyTriggerPreset(ability, key) {
+  const p = TRIGGER_PRESETS[key]
+  if (!p) return
+  Object.assign(ability.trigger, TRIGGER_BASE, p.trigger)
+  if (!ability.name) ability.name = p.name || ''
+}
+
+// The "+ add ability" menu: trigger presets, then activated and passive starts.
+export const ABILITY_STARTERS = [
+  ...Object.entries(TRIGGER_PRESETS).map(([key, p]) => ({ key, kind: 'triggered', label: p.label })),
+  { key: 'triggered', kind: 'triggered', label: 'Other trigger (custom)…' },
+  { key: 'tap', kind: 'activated', label: 'Tap: … (activated)' },
+  { key: 'activated', kind: 'activated', label: 'Activated, other cost…' },
+  { key: 'passive', kind: 'passive', label: 'Passive — always on while in play' },
+]
+
+export function addAbility(cardId, kind = 'activated', preset = null) {
   const card = state.cards[cardId]
   if (!card) return
   if (!Array.isArray(card.abilities)) card.abilities = []
   const ability = normalizeAbility({ kind })
+  if (kind === 'triggered' && preset) applyTriggerPreset(ability, preset)
+  if (kind === 'activated' && preset === 'tap') ability.cost.tap = true
   card.abilities.push(ability)
   return ability.id
+}
+
+// Point a triggered ability's effects at a player-picked target (or back at the
+// trigger's cards). Turning the pick off hands `target` effects back to the
+// card the trigger names, as a load would.
+export function setTriggerPick(ability, on) {
+  ability.target.required = !!on
+  if (!on) pointTriggerRefs(ability)
 }
 
 export function removeAbility(cardId, abilityId) {
@@ -2715,7 +2911,6 @@ function newEffect(op = 'adjustStat') {
   if (op === 'adjustStat') Object.assign(e, { side: 'self', key: 'mana', delta: 0 })
   if (op === 'tap') e.who = 'self'
   if (op === 'dealDamage') Object.assign(e, { who: 'target', amount: 1, amountRef: 'literal' })
-  if (op === 'gridDamage') Object.assign(e, { amount: 1, amountRef: 'literal' })
   if (op === 'strike') e.who = 'target'
   if (op === 'modifyStrength') Object.assign(e, { who: 'target', amount: 1, amountRef: 'literal' })
   if (op === 'grantKeyword') Object.assign(e, { who: 'target', keyword: 'airborne' })
@@ -2732,6 +2927,7 @@ function newEffect(op = 'adjustStat') {
   if (op === 'destroy' || op === 'banish' || op === 'bounce') e.who = 'target'
   if (op === 'heal') e.who = 'self'
   if (op === 'banishAndCast') Object.assign(e, { who: 'target', free: false })
+  if (op === 'grantFrom') e.releaseTo = 'origin'
   if (op === 'animate')
     Object.assign(e, {
       who: 'target',
@@ -2747,7 +2943,7 @@ function newEffect(op = 'adjustStat') {
   if (op === 'draw') Object.assign(e, { side: 'self', count: 1, deck: 'spellbook' })
   if (op === 'discard') Object.assign(e, { who: 'target', pick: 'chosen', side: 'enemy', count: 1 })
   if (op === 'search') Object.assign(e, { side: 'self', deck: 'spellbook', filter: 'any' })
-  if (op === 'returnToHand' || op === 'reanimate' || op === 'gainControl' || op === 'swap')
+  if (op === 'reanimate' || op === 'gainControl' || op === 'swap')
     e.who = 'target'
   if (op === 'addCounter' || op === 'removeCounter')
     Object.assign(e, { who: 'self', name: 'charge', amount: 1, amountRef: 'literal' })
@@ -2758,6 +2954,7 @@ function newEffect(op = 'adjustStat') {
 export function addEffect(ability, op = 'adjustStat') {
   if (!Array.isArray(ability.effects)) ability.effects = []
   ability.effects.push(newEffect(op))
+  pointTriggerRefs(ability)
 }
 
 export function removeEffect(ability, i) {
@@ -2765,12 +2962,15 @@ export function removeEffect(ability, i) {
 }
 
 // An area selector's shape, with defaults.
+// `includeSelf` (the source counts too) is only saved while set.
 function normalizeArea(a = {}) {
-  return {
+  const out = {
     shape: AREA_SHAPES.includes(a.shape) ? a.shape : 'nearby',
     filter: TARGET_FILTERS.includes(a.filter) ? a.filter : 'unit',
     side: TARGET_SIDES.includes(a.side) ? a.side : 'enemy',
   }
+  if (a.includeSelf) out.includeSelf = true
+  return out
 }
 
 // A selector's shape: `who`, plus `avatarSide` / `area` only when that `who`
@@ -2843,6 +3043,7 @@ function normalizeEffect(eff) {
     e.count = Math.max(1, Number(e.count) || 1)
   }
   if (e.op === 'reanimate') e.reach = REANIMATE_REACH.includes(e.reach) ? e.reach : 'any'
+  if (e.op === 'grantFrom') e.releaseTo = GRANT_RELEASE.includes(e.releaseTo) ? e.releaseTo : 'origin'
   if (e.op === 'addCounter' || e.op === 'removeCounter') e.name = String(e.name || 'charge')
   if (e.op === 'animate') {
     if (!ANIMATE_POWER_REFS.includes(e.powerRef)) e.powerRef = 'literal'
@@ -2882,6 +3083,7 @@ export function setTokenKind(eff, kind) {
 // param from the previous op doesn't linger.
 export function retypeEffect(ability, i, op) {
   ability.effects.splice(i, 1, newEffect(op))
+  pointTriggerRefs(ability)
 }
 
 // ---------- damage counters ----------
@@ -2898,13 +3100,21 @@ export function adjustDamage(cardId, delta) {
 
 // Every dragstart in the app goes through here: it arms the drag flag the
 // board reads to decide whether its zones are listening, then sets the ghost.
+// Callers set the card payload before calling, and dragstart is the one moment
+// the payload is readable, so the dragged card is picked up from it here.
 export function beginDrag(e, imgEl, width) {
   ui.dragging = true
+  try {
+    ui.dragCard = JSON.parse(e.dataTransfer.getData('text/plain')).cardId || null
+  } catch {
+    ui.dragCard = null
+  }
   setDragGhost(e, imgEl, width)
 }
 
 export function endDrag() {
   ui.dragging = false
+  ui.dragCard = null
 }
 
 // Use the card's artwork as the drag image: the default ghost is a snapshot
@@ -3000,15 +3210,12 @@ function findSitePlayerUnit(side, siteZone) {
 
 // Whether a card may land in `to` (already routed). Enforces the per-zone
 // limits: no dropping into the pool while playing, one site per square, and
-// only aura cards on an intersection, one per crossing.
+// only aura cards on an intersection (any number may share a crossing).
 function canPlace(cardId, to) {
   if (!state.zones[to]) return false
   if (state.mode === 'play' && to === 'pool') return false
   if (to.startsWith('site:') && state.zones[to].length) return false
-  if (to.startsWith('aura:')) {
-    const card = state.cards[cardId]
-    if (!card?.aura || state.zones[to].length) return false
-  }
+  if (to.startsWith('aura:') && !state.cards[cardId]?.aura) return false
   return true
 }
 
@@ -3097,16 +3304,36 @@ function shedInPlayState(cardId, toZone, entry) {
   delete state.counters[cardId]
 }
 
+const inRealm = (zone) => ['realm', 'aura'].includes(zoneCategory(zone))
+
+// Whether the player may move a card by hand (drag, or select-then-click) to
+// `to`. While solving, a manual move always ends in the realm: an off-board card
+// may only be played into it, and a realm card moves within it only through the
+// armed Move action (ui.moving; Move & Attack's attack moves via targetAttack),
+// subject to canMoveUnit. Nothing -- the avatar included -- goes to a hand,
+// cemetery, collection, the storyline, etc. by hand; only abilities, triggers
+// and effects (death, bounce, banish, draw, ...) do that, and those relocate
+// cards without going through this check. The editor, recording included, is free.
+export function manualMoveAllowed(cardId, to) {
+  if (state.mode !== 'play') return true
+  if (!inRealm(routeZone(cardId, to))) return false
+  return !inRealm(zoneOf(cardId)) || ui.moving === cardId
+}
+
+// moveCard is the manual move -- every drag/click/keyboard relocation in the UI
+// lands here; effects use forceMove/relocateCard instead. `draw` marks the one
+// rules action routed through here that leaves the realm out (deck -> hand).
 export function moveCard(cardId, from, to, opts = {}) {
   return withEditorSiteMana(() => moveCardImpl(cardId, from, to, opts))
 }
 
-function moveCardImpl(cardId, from, to, { tapOnMove } = {}) {
+function moveCardImpl(cardId, from, to, { tapOnMove, draw } = {}) {
   // A carried card has no zone of its own, so it cannot be moved out of one:
   // it has to be put down first. Bailing here rather than letting the splice
   // below fail also keeps it out of the pool branch, which would otherwise
   // answer a move request by placing a *copy* of it.
   if (state.carry[cardId]) return
+  if (!draw && !manualMoveAllowed(cardId, to)) return
   to = routeZone(cardId, to)
   if (from === to || !canPlace(cardId, to)) return
   // When enforcing, a unit can only step cell-to-cell within its reach. Other
@@ -3426,7 +3653,7 @@ export function legalDefenders(attackerId, targetId) {
   for (const u of boardUnits()) {
     if (u.id === targetId || u.id === attackerId) continue
     if (!!u.card.enemy !== !!target.enemy) continue // same side as the target
-    if (!reachableNodes(u.id).has(nodeKey(tnode.sq, tnode.layer))) continue
+    if (!canDefendAt(u.id, targetId)) continue
     if (attackerAirborne && !(hasKeyword(u.id, 'airborne') || effectiveRanged(u.id) > 0))
       continue
     out.push(u.id)
@@ -3446,10 +3673,29 @@ function oppAvatarUnit() {
   return null
 }
 
+// Every node a card stands on: its one square and layer, or all four squares of
+// an oversized unit (which stands on the surface).
+function occupiedNodes(cardId) {
+  const n = nodeOf(cardId)
+  if (!n) return []
+  return squaresOf(cardId).map((sq) => nodeKey(sq, n.layer))
+}
+
+// Could this unit defend the given card? It must be able to reach it; a passive
+// "can't move to defend" limits it to defending where it already stands -- any
+// square it occupies shared with any square the defended card occupies.
+function canDefendAt(unitId, targetId) {
+  if (cantDefend(unitId)) {
+    const here = new Set(occupiedNodes(unitId))
+    return occupiedNodes(targetId).some((k) => here.has(k))
+  }
+  const node = nodeOf(targetId)
+  return !!node && reachableNodes(unitId).has(nodeKey(node.sq, node.layer))
+}
+
 // Could this unit reach the given avatar's square (i.e. defend it)?
 function canReachAvatar(unitId, avatarUnit) {
-  const a = avatarUnit && nodeOf(avatarUnit.id)
-  return !!a && reachableNodes(unitId).has(nodeKey(a.sq, a.layer))
+  return !!avatarUnit && canDefendAt(unitId, avatarUnit.id)
 }
 
 function defenderValue(id, avatarUnit) {
@@ -3552,13 +3798,13 @@ function wouldCycle(carrierId, targetId) {
 }
 
 // Where a dropped card lands. Normally the carrier's own zone, but an
-// intersection holds one aura and nothing else, so anything else dropped by an
+// intersection holds auras and nothing else, so anything else dropped by an
 // aura goes to the square up and left of the crossing.
 function dropTarget(itemId, zone) {
   const card = state.cards[itemId]
   const auraMatch = /^aura:(\d+)$/.exec(zone)
   if (auraMatch) {
-    if (card?.aura && !state.zones[zone].length) return zone
+    if (card?.aura) return zone
     const i = Number(auraMatch[1])
     const r = Math.floor(i / INTERSECTION_COLS)
     const c = i % INTERSECTION_COLS
@@ -3673,6 +3919,12 @@ function actionMatches(action, entry) {
       zoneCategory(entry.to) === 'cemetery' &&
       isUnit(entry.cardId)
     )
+  if (action === 'enter')
+    return (
+      type === 'move' &&
+      !['realm', 'aura'].includes(zoneCategory(entry.from)) &&
+      ['realm', 'aura'].includes(zoneCategory(entry.to))
+    )
   if (action !== type) return false
   if (type === 'damage' && !((entry.amount || 0) > 0)) return false
   return true
@@ -3713,9 +3965,9 @@ function triggerWithin(ownerId, subjectId, within, entry) {
 // (an attack has neither from nor to, for instance).
 function triggerMatches(trigger, owner, entry) {
   if (!actionMatches(trigger.action, entry)) return null
-  if (trigger.from !== 'any' && zoneCategory(entry.from) !== trigger.from)
+  if (trigger.from !== 'any' && !catMatches(trigger.from, zoneCategory(entry.from)))
     return null
-  if (trigger.to !== 'any' && zoneCategory(entry.to) !== trigger.to)
+  if (trigger.to !== 'any' && !catMatches(trigger.to, zoneCategory(entry.to)))
     return null
   for (const party of triggerParties(trigger, entry)) {
     if (!party.subject) continue
@@ -3758,14 +4010,15 @@ function triggerLive(owner, ability) {
   const cat = cardZoneCategory(owner.id)
   // On-board reactors (a unit/site in the realm, or an aura on the mat) are live.
   // A card in the pool/hand/cemetery is not, unless its ability lists that zone.
-  return cat === 'realm' || cat === 'aura' || (ability.zones || []).includes(cat)
+  return cat === 'realm' || cat === 'aura' || zoneListHas(ability.zones, cat)
 }
 
 function collectTriggers(entry) {
   const out = []
   for (const owner of Object.values(state.cards)) {
-    if (!owner.abilities?.length) continue
-    for (const a of owner.abilities) {
+    // A gained trigger is the carrier's: "when this attacks" watches the unit
+    // that assumed the form, not the carried card.
+    for (const a of abilitiesOf(owner.id)) {
       if (a.kind !== 'triggered') continue
       const party = triggerMatches(a.trigger, owner, entry)
       if (!party) continue
@@ -3781,6 +4034,7 @@ function collectTriggers(entry) {
         sourceId: owner.id,
         targetId: (a.trigger?.targets === 'other' ? party.other : party.subject) || null,
         triggeringId: party.subject,
+        otherId: party.other || null,
       }
       if (!conditionHolds(a.condition, cctx)) continue
       // A consequence event (damage, a death's replayed move) snapshots onto the
@@ -3973,6 +4227,7 @@ function resolveStory() {
     if (!ignored)
       runEffects(ev.ability, ev.ownerId, autoTarget(ev), ev.entry, null, null, {
         triggeringId: ev.triggeringId,
+        otherId: ev.otherId,
         ownerAt: ev.ownerAt,
       })
   }
@@ -3983,7 +4238,12 @@ function resolveStory() {
 // "if" no longer holds as it resolves.
 function storyIgnored(ev) {
   if (sourceGone(ev)) return true
-  const ctx = { sourceId: ev.ownerId, targetId: triggerRef(ev), triggeringId: ev.triggeringId }
+  const ctx = {
+    sourceId: ev.ownerId,
+    targetId: triggerRef(ev),
+    triggeringId: ev.triggeringId,
+    otherId: ev.otherId,
+  }
   return !conditionHolds(ev.ability.condition, ctx)
 }
 
@@ -4074,6 +4334,7 @@ function finishStoryChoice(c, targetId, gridSquare, destZone, ids = null) {
   if (!ignored)
     runAbilityEffects(c.ability, c.ownerId, targetId, c.entry, ids, gridSquare, destZone, {
       triggeringId: c.triggeringId,
+      otherId: c.otherId,
       ownerAt: c.ownerAt,
     })
   resolveStory() // resume the rest of the storyline
@@ -4223,6 +4484,7 @@ function matchesFilter(card, filter) {
   if (filter === 'aura') return !!card.aura
   if (filter === 'artifact') return !!card.artifact
   if (filter === 'monument') return !!card.monument
+  if (filter === 'magic') return !!card.magic
   if (filter === 'spell') return isSpell(card.id)
   return true // 'any'
 }
@@ -4247,9 +4509,10 @@ function findAbility(cardId, abilityId) {
   return walk(cardId)
 }
 
-// The activated abilities a card can use right now: its own plus those of every
-// card it carries (gained via a grant), filtered to the ones live in the card's
-// current zone category.
+// The activated abilities a card can use right now: its own (including those
+// gained via a grant, see abilitiesOf) plus those of every card it carries,
+// filtered to the ones live in the card's current zone category. A granted card
+// offers none -- its abilities are its carrier's now.
 export function activatedAbilities(cardId) {
   // Silence (and Disable) strip non-basic abilities, so a silenced unit offers
   // none -- including any it gained from a carried card.
@@ -4260,11 +4523,10 @@ export function activatedAbilities(cardId) {
   const collect = (id) => {
     if (!id || seen.has(id)) return
     seen.add(id)
-    const c = state.cards[id]
-    for (const a of c?.abilities || []) {
-      if (a.kind === 'activated' && a.zones.includes(cat)) out.push(a)
+    for (const a of abilitiesOf(id)) {
+      if (a.kind === 'activated' && zoneListHas(a.zones, cat)) out.push(a)
     }
-    for (const held of carriedBy(id)) collect(held)
+    for (const held of carriedBy(id)) if (!state.grants[held]) collect(held)
   }
   collect(cardId)
   return out
@@ -4314,14 +4576,17 @@ export function pickGridSquare(sq) {
 // card-target ability that is a second pick, after the target. A grid ability
 // already has its picked square, which these effects use instead. One pick per
 // ability: the first effect that needs one sets the rules for it.
+// In a triggered ability without a pick, the card its trigger names is the
+// resolving target, whichever of target / triggering / other spells it.
+const namesTarget = (eff) => ['target', 'triggering', 'other'].includes(eff.who)
 function destSpec(ability) {
   if (!ability || ability.target?.mode === 'grid') return null
   for (const eff of ability.effects || []) {
     if (eff.op === 'move' && eff.to === 'picked') {
       const reach = eff.reach || 'nearby'
       return {
-        anchor: eff.who === 'target' ? 'target' : 'source',
-        mover: eff.who === 'target' ? 'target' : 'source',
+        anchor: namesTarget(eff) ? 'target' : 'source',
+        mover: namesTarget(eff) ? 'target' : 'source',
         reach,
         needSite: false,
         layers: ['top', 'bot'],
@@ -4337,7 +4602,7 @@ function destSpec(ability) {
       return {
         anchor: 'source',
         mover: null,
-        summon: eff.who === 'target' ? 'target' : eff.who === 'self' ? 'source' : null,
+        summon: namesTarget(eff) ? 'target' : eff.who === 'self' ? 'source' : null,
         reach: eff.reach || 'any',
         needSite: false,
         layers: ['top', 'bot'],
@@ -4539,7 +4804,7 @@ function withinTargetRange(sourceId, targetId, within, range) {
 // Does a card satisfy an ability's full card-target spec (zone, kind, side,
 // range, stealth)? `sourceId` is the card whose ability it is.
 function satisfiesTarget(sourceId, targetId, t) {
-  if (cardZoneCategory(targetId) !== t.from) return false
+  if (!catMatches(t.from, cardZoneCategory(targetId))) return false
   if (!matchesFilter(state.cards[targetId], t.filter)) return false
   // With cemeteries swapped, "your" cemetery is the opponent's and vice versa,
   // so the side restriction flips for cemetery cards.
@@ -4619,6 +4884,11 @@ function selectCards(sel, ctx) {
       return one(ctx.targetId)
     case 'triggering':
       return one(ctx.triggeringId)
+    case 'other': {
+      const id = ctx.otherId
+      if (!id || blockedByStealth(src, id) || (cantBeTargeted(id) && oppositeSides(src, id))) return []
+      return one(id)
+    }
     case 'carrier':
       return one(carrierOf(src))
     case 'avatar': {
@@ -4655,11 +4925,14 @@ function areaOrigin(ctx) {
 
 // An area selector's cards. 'grid' reuses the ability's own grid target (and so
 // its origin/shape/layers and target filter); the relative shapes look around
-// the source within its own region, like passive scopes, and leave the source
-// out. Sites are only picked up by a 'site' filter -- an area of "any" cards
-// means what stands in it, not the ground.
+// the source within its own region, like passive scopes. As in the rulebook,
+// adjacent/nearby include the source's own square. The source itself is left
+// out unless
+// `includeSelf`. Sites are only picked up by a 'site' filter -- an area of "any"
+// cards means what stands in it, not the ground.
 function selectArea(area, ctx) {
   const src = ctx.sourceId
+  const other = (id) => area.includeSelf || id !== src
   let ids = []
   if (area.shape === 'grid') {
     const t = ctx.ability?.target
@@ -4667,7 +4940,7 @@ function selectArea(area, ctx) {
   } else if (area.shape === 'realm') {
     // Everything in play, any region. Sites only for a 'site' filter, as below.
     ids = Object.keys(state.cards).filter(
-      (id) => id !== src && inPlay(id) && (area.filter === 'site' || !state.cards[id].site)
+      (id) => other(id) && inPlay(id) && (area.filter === 'site' || !state.cards[id].site)
     )
   } else {
     const s = areaOrigin(ctx)
@@ -4676,7 +4949,7 @@ function selectArea(area, ctx) {
     const squares =
       area.shape === 'location'
         ? [s.sq]
-        : squaresInShape(s.sq, area.shape).filter((sq) => sq !== s.sq)
+        : squaresInShape(s.sq, area.shape)
     for (const sq of squares) {
       for (const layer of ['top', 'bot']) {
         if (regionOf(sq, layer) !== region) continue
@@ -4688,7 +4961,7 @@ function selectArea(area, ctx) {
     if (!ctx.raw && (region === 'surface' || region === 'void')) {
       for (const sq of squares) for (const id of oversizedOnSquare(sq)) if (!ids.includes(id)) ids.push(id)
     }
-    ids = ids.filter((id) => id !== src)
+    ids = ids.filter(other)
   }
   // Read raw inside the passive computation (see conditionHolds).
   const kindOk = ctx.raw
@@ -4759,9 +5032,9 @@ function snapshotStructural(entry) {
 }
 
 // Grant: carry the target so the carrier gains its abilities, remembering where
-// it came from for release. A pseudo-pickup, so cycles are refused like a real
-// one.
-function grantFrom(carrierId, targetId, ability, entry) {
+// it came from and where it goes on release. A pseudo-pickup, so cycles are
+// refused like a real one.
+function grantFrom(carrierId, targetId, ability, entry, eff) {
   if (!targetId || state.carry[targetId] || wouldCycle(carrierId, targetId)) return
   const from = zoneOf(targetId)
   const arr = state.zones[from]
@@ -4770,12 +5043,32 @@ function grantFrom(carrierId, targetId, ability, entry) {
   snapshotStructural(entry)
   arr.splice(i, 1)
   state.carry[targetId] = carrierId
-  state.grants[targetId] = { carrierId, from, abilityId: ability.id }
+  state.grants[targetId] = {
+    carrierId,
+    from,
+    abilityId: ability.id,
+    releaseTo: eff?.releaseTo || 'origin',
+  }
 }
 
-// Release every grant a carrier holds, returning each card to where it was
-// taken from (its square may be gone; fall back to the pool rather than lose
-// it). Used by an explicit `release` effect and by the loseWhen watcher.
+// The zone a released grant's card lands in (see GRANT_RELEASE). Its origin
+// square may be gone; fall back to the pool rather than lose it.
+function grantReleaseZone(cardId, g) {
+  const side = sideOf(cardId)
+  const to =
+    g.releaseTo === 'banished'
+      ? `banished:${side}`
+      : g.releaseTo === 'cemetery'
+      ? `grave:${side}`
+      : g.releaseTo === 'hand'
+      ? `hand:${side}`
+      : g.from
+  return state.zones[to] ? to : 'pool'
+}
+
+// Release every grant a carrier holds: the carried card is removed from the
+// carrier and put where its grant says (grantReleaseZone). Used by an explicit
+// `release` effect and by the loseWhen watcher.
 function releaseGrant(carrierId, entry) {
   for (const t of Object.keys(state.grants)) {
     const g = state.grants[t]
@@ -4783,8 +5076,7 @@ function releaseGrant(carrierId, entry) {
     snapshotStructural(entry)
     delete state.carry[t]
     delete state.grants[t]
-    const to = state.zones[g.from] ? g.from : 'pool'
-    state.zones[to].push(t)
+    state.zones[grantReleaseZone(t, g)].push(t)
   }
 }
 
@@ -5046,21 +5338,6 @@ function summonTokens(eff, cardId, targetId, entry, destZone, pickSquare) {
   const enemy = eff.side === 'enemy' ? !source.enemy : !!source.enemy
   const onUnit = eff.at === 'self' ? cardId : eff.at === 'target' ? targetId : null
 
-  // A ward is a Ward on a unit: grant (or restore) the keyword.
-  if (kind === 'ward') {
-    if (!onUnit || !isUnit(onUnit)) return
-    const list = state.grantedKeywords[onUnit] || (state.grantedKeywords[onUnit] = [])
-    if (!list.includes('ward')) list.push('ward')
-    delete state.wardBroken[onUnit]
-    state.events.push({
-      id: uid(),
-      seq: entry?.seq,
-      cardId: onUnit,
-      name: 'Ward',
-      text: `${cardName(onUnit)} gains a Ward.`,
-    })
-    return
-  }
   if (!TOKEN_DEFS[kind]) return
 
   const count = Math.max(1, Number(eff.count) || 1)
@@ -5200,10 +5477,6 @@ function runEffects(ability, cardId, targetId, entry, gridSquare, destZone, extr
   // A chosen destination (teleport / token placement): passed in by a paused
   // trigger, or carried on an activation's own entry.
   const dest = destZone || (entry?.type === 'ability' || entry?.type === 'cast' ? entry.destZone : null)
-  const gridArea =
-    ability.target?.mode === 'grid'
-      ? resolveGridArea(cardId, pickSquare, ability.target)
-      : null
   // A cast spell's drop square (a grid spell's is its picked square), for areas
   // measured around a spell that has no board position of its own.
   // Only the spell being cast measures an area from its caster as a last resort.
@@ -5214,6 +5487,7 @@ function runEffects(ability, cardId, targetId, entry, gridSquare, destZone, extr
     sourceId: cardId,
     targetId,
     triggeringId: extra.triggeringId ?? null,
+    otherId: extra.otherId ?? null,
     ownerAt: extra.ownerAt ?? null,
     isSpellCast,
     pickSquare,
@@ -5224,18 +5498,6 @@ function runEffects(ability, cardId, targetId, entry, gridSquare, destZone, extr
   const recipients = (sel) => selectCards(sel, ctx).filter((id) => !wardStops(id))
   for (const eff of conditionalEffects(ability.effects, ctx)) {
     if (wardedTarget && (eff.who === 'target' || eff.op === 'grantFrom')) continue
-    if (eff.op === 'gridDamage') {
-      // Damage to the minions in the ability's grid area (as resolved when the
-      // ability began). Area damage never causes life loss to an avatar or a
-      // site's controller (unlike an attack); a Ward spares its card.
-      const amt = effectAmount(eff, cardId, ctx)
-      const hits = newHits()
-      for (const id of gridArea || []) {
-        if (isUnit(id) && !state.cards[id].avatar && !wardStops(id)) applyHit(cardId, id, amt, hits)
-      }
-      settleHits(entry, hits)
-      continue
-    }
 
     if (eff.op === 'adjustStat') {
       const s =
@@ -5286,6 +5548,11 @@ function runEffects(ability, cardId, targetId, entry, gridSquare, destZone, extr
       for (const t of recipients(eff)) {
         const list = state.grantedKeywords[t] || (state.grantedKeywords[t] = [])
         if (!list.includes(eff.keyword)) list.push(eff.keyword)
+        // Granting a Ward also restores a broken one.
+        if (eff.keyword === 'ward' && state.wardBroken[t]) {
+          delete state.wardBroken[t]
+          state.events.push({ id: uid(), seq: entry?.seq, cardId: t, name: 'Ward', text: `${cardName(t)} gains a Ward.` })
+        }
       }
     } else if (eff.op === 'move') {
       const to = resolveLocation(eff.to, cardId, targetId, dest, pickSquare)
@@ -5314,7 +5581,7 @@ function runEffects(ability, cardId, targetId, entry, gridSquare, destZone, extr
     } else if (eff.op === 'animate') {
       for (const who of recipients(eff)) animateCard(who, eff, entry, cardId)
     } else if (eff.op === 'grantFrom') {
-      grantFrom(cardId, targetId, ability, entry)
+      grantFrom(cardId, targetId, ability, entry, eff)
     } else if (eff.op === 'release') {
       releaseGrant(cardId, entry)
     } else if (eff.op === 'flood' || eff.op === 'unflood') {
@@ -5359,8 +5626,6 @@ function runEffects(ability, cardId, targetId, entry, gridSquare, destZone, extr
       effectDiscard(eff.pick === 'count' ? [] : recipients(eff), eff, cardId, entry)
     } else if (eff.op === 'search') {
       effectSearch(eff, cardId, entry)
-    } else if (eff.op === 'returnToHand') {
-      for (const who of recipients(eff)) effectReturnToHand(who, entry)
     } else if (eff.op === 'reanimate') {
       const to = dest || (typeof pickSquare === 'number' ? `cell:${pickSquare}:top` : null)
       for (const who of recipients(eff)) effectReanimate(who, to, entry)
@@ -5450,13 +5715,6 @@ function effectSearch(eff, sourceId, entry) {
     return
   }
   effectMove(found, `hand:${side}`, entry, 'Search', `${cardName(found)} is searched out of the ${eff.deck} into hand.`)
-}
-
-// Return a card from a cemetery to that side's hand.
-function effectReturnToHand(id, entry) {
-  const z = zoneOf(id)
-  if (zoneCategory(z) !== 'cemetery') return
-  effectMove(id, `hand:${zoneSide(z)}`, entry, 'Returned', `${cardName(id)} returns from the cemetery to hand.`)
 }
 
 // Reanimate: summon a card from a cemetery onto a location. A real summon (not
@@ -5565,7 +5823,7 @@ function checkGrantLoss(entry) {
   const carriers = new Set(Object.values(state.grants).map((g) => g.carrierId))
   for (const carrierId of carriers) {
     const g = Object.values(state.grants).find((x) => x.carrierId === carrierId)
-    const ability = state.cards[carrierId]?.abilities?.find((a) => a.id === g.abilityId)
+    const ability = findAbility(carrierId, g.abilityId)
     if (matchesLoseWhen(ability?.loseWhen, carrierId, entry)) {
       releaseGrant(carrierId, entry.root || entry)
     }
@@ -6131,7 +6389,7 @@ export function drawFromDeck(avatarId, kind) {
   const from = `${kind}:${side}`
   const deck = state.zones[from]
   if (!deck?.length) return
-  moveCard(deck[deck.length - 1], from, `hand:${side}`)
+  moveCard(deck[deck.length - 1], from, `hand:${side}`, { draw: true })
 }
 
 // Charge: a unit summoned this turn may tap to pay for costs. Modelled as
@@ -7392,7 +7650,7 @@ export function loadPuzzle(data, { play = true } = {}) {
     // into the full shape the editor and runtime read, so no nested field is
     // ever undefined.
     c.abilities = Array.isArray(c.abilities)
-      ? c.abilities.map(normalizeAbility)
+      ? c.abilities.map((a) => normalizeAbility(a))
       : []
     // Enemy-site summoning used to be a per-card flag; it is now a passive
     // ability trait. Carry an old flag over as a self passive.

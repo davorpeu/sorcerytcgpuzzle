@@ -4,21 +4,21 @@ A Vue 3 web app for building and playing puzzles for the Sorcery: Contested Real
 
 ## Features
 
-- 5×4 grid of squares; each square holds one **site** card plus minions on the **surface** or **below** (underground/undersea).
-- Per-player hands, cemeteries, collections, and life, mana + elemental threshold trackers (air 🜁, earth 🜃, fire 🜂, water 🜄), plus a shared storyline zone.
+- 5×4 grid of squares; each square holds one **site** card plus minions on the **surface** or **below** (underground/undersea). Auras sit on the grid intersections.
+- Per-player hands, cemeteries, collections, Atlas/Spellbook draw decks, and life, mana + elemental threshold trackers (air 🜁, earth 🜃, fire 🜂, water 🜄), plus a shared storyline zone.
 - Life totals start at 20; at 0 the readout says **Death's Door** rather than a bare zero, matching the game's own term for that state.
-- The shared storyline and the player's own side (life/mana, hand, cemetery, collection) are docked to the bottom of the viewport, so they stay in reach however far the board is scrolled. The dock folds away when the board needs the room.
+- **A small rules engine**: the player actually plays the turn. Casting costs mana and threshold, movement and attacks obey reach, regions and keywords (*Enforce movement & attacks*), combat deals damage and kills (*Resolve combat damage*), and cards carry authored abilities — activated, triggered and passive — edited per card in the editor's *Abilities* modal. The opponent's side is played automatically (e.g. it chooses its own defenders).
 - Every puzzle carries a **title** and a short **brief** saying what kind of puzzle it is and what the solver has to achieve; players see both before they start.
-- Build the card pool by **searching the site's Media Library** (WordPress) for art already uploaded there, or by uploading images from disk. Mark a card as a site with the ⛰ toggle in the pool — sites dropped on a square fill its site slot (one per square) and render as the square's background.
-- Drag-and-drop cards between all zones — or click a card and then click the zone it should go to, which also works on a touch screen where HTML5 drag-and-drop does not fire.
-- Clicking a card selects it and puts everything it can do (attack, send underground/surface, change control, mark as site/aura, remove) in a docked action bar just above the storyline, at a size that stays usable when the card itself is 40px wide.
+- Build the card pool by **searching the site's Media Library** (WordPress) for art already uploaded there, or by uploading images from disk. Mark each card's type (minion, avatar, site, aura, artifact, magic) in the pool; sites dropped on a square fill its site slot (one per square) and render as the square's background.
+- Drag-and-drop cards between zones — or click a card and then click the zone it should go to, which also works on a touch screen where HTML5 drag-and-drop does not fire.
+- Clicking a card selects it and puts everything it can do (cast, move, attack, shoot, abilities, pick up/drop, draw for an avatar) in an action bar under the board, at a size that stays usable when the card itself is 40px wide.
 - Hold **Alt** while hovering a card to see it enlarged.
 - Responsive down to tablet size: the layout goes single-column on portrait tablets, the player row wraps instead of overflowing, and touch screens get larger controls.
 - **Editor mode**: set up the board, then *Record solution* — every move you make becomes the answer sequence. Record additional lines for puzzles with more than one valid solution; each recording restarts from the same start position.
-- **Play mode**: the solver makes moves; *Submit solution* passes if the sequence matches any recorded solution line, and otherwise points at the first wrong step against the closest line.
-- Wordle-style attempt limit: regular players get 3 submits per puzzle per day, tracked in the browser's localStorage (soft enforcement — clearing site data resets it). Editors are exempt so they can test freely.
+- **Play mode**: there is no submit button — the solve is detected automatically after every move. Matching a recorded line exactly is reported as the optimal solution; reaching it with harmless extra moves (ones that never touch the solution's cards) counts as solved but not optimal.
+- **Mistakes**: a move that makes every solution line unreachable is snapped back and counted as a mistake. Regular players get 5 mistakes per puzzle per day before it locks (tracked in the browser's localStorage — soft enforcement, clearing site data resets it); a solved puzzle stays locked for the day too. Editors are exempt so they can test freely.
 - Puzzles are saved site-wide through the WordPress plugin's REST API when embedded (localStorage when running standalone), exportable/importable as JSON, and shareable as a self-contained link.
-- Daily puzzle support.
+- Daily puzzle support, plus an archive calendar of past puzzles for players.
 - Role gating in WordPress: only Editors/Admins see the puzzle editor; everyone else gets a play-only app.
 
 ## Getting started
@@ -32,10 +32,11 @@ npm run build    # production bundle in dist/
 ## Creating a puzzle
 
 1. In **Editor** mode, fill the card pool: type a card name into the pool's search box to find art already in the site's Media Library and click a result to add it, or click *Upload cards* to add images from disk. (The search only appears when the app runs inside WordPress.)
-2. Drag cards from the pool onto the board, hands, or cemeteries to set the starting position (or click a card, then click its destination). Click a card to select it — its actions appear in the bar above the storyline.
-3. Click *Record solution* and perform the correct sequence of moves, then *Stop recording*. If the puzzle can be solved more than one way (e.g. a unit may approach from two directions), click *Record another solution* and play the alternative — the board snaps back to the start position for each line, and a player passes by matching any of them.
-4. Give the puzzle a title and a brief (what kind of puzzle it is and what to achieve), then *Save* (site-wide in WordPress, this browser when standalone), *Export* (JSON file), or *Copy link*.
-5. *Play* to test it yourself.
+2. Drag cards from the pool onto the board, hands, or cemeteries to set the starting position (or click a card, then click its destination). Click a card to select it — its type toggles, Power/Defense, costs and *Abilities* appear in the bar under the board.
+3. Tick *Enforce movement & attacks* and/or *Resolve combat damage* if the puzzle should follow the rules (leave them off for free-form puzzles).
+4. Click *Record solution* and perform the correct sequence of moves, then *Stop recording*. If the puzzle can be solved more than one way (e.g. a unit may approach from two directions), click *Record another solution* and play the alternative — the board snaps back to the start position for each line, and a player passes by matching any of them.
+5. Give the puzzle a title and a brief (what kind of puzzle it is and what to achieve), then *Save* (site-wide in WordPress, this browser when standalone), *Export* (JSON file), or *Copy link*.
+6. *Play* to test it yourself.
 
 ## Loading puzzles by URL
 
@@ -134,26 +135,28 @@ When the app runs standalone (`npm run dev`, or any page without `data-api`), al
 
 ```json
 {
-  "version": 0.2.2,
+  "version": 2,
   "id": "abc123",
   "name": "Puzzle title",
   "desc": "Lethal: put the opponent at Death's Door this turn.",
   "date": "2026-07-08",
   "cards": { "cardId": { "id": "cardId", "name": "Wolf", "img": "data:image/jpeg;base64,..." } },
   "//": "when stored in WordPress, img is externalized to the Media Library and replaced by an imgId reference; the API resolves imgId back to a URL on read",
-  "initial": { "hand:player": ["cardId"], "cell:0": [], "...": [] },
+  "enforce": true,
+  "combat": true,
+  "initial": { "hand:player": ["cardId"], "cell:0:top": [], "...": [] },
   "solutions": [
-    [{ "cardId": "cardId", "from": "hand:player", "to": "cell:7" }],
-    [{ "cardId": "cardId", "from": "hand:player", "to": "cell:12" }]
+    [{ "cardId": "cardId", "from": "hand:player", "to": "cell:7:top" }],
+    [{ "cardId": "cardId", "from": "hand:player", "to": "cell:12:top" }]
   ]
 }
 ```
 
-`solutions` is an array of solution lines; an attempt is correct when it fully matches any one line. Attack entries look like `{ "type": "attack", "cardId": "a", "targetId": "b" }` and can be interleaved with moves.
+`solutions` is an array of solution lines; an attempt solves the puzzle when it reaches any one line (exactly = optimal, or with extra moves that never touch that line's cards = solved, not optimal). Besides plain moves, entries carry a `type` — e.g. `attack`, `strike`, `shoot`, `intercept`, `pickup`, `drop`, `cast`, `ability`, `charge` — and can be interleaved with moves.
 
-Zones per grid square `N` (0–19, row-major, 5 per row): `site:N` (the site card, max 1), `cell:N:top` (surface), `cell:N:bot` (below). Other zones: `hand:player`, `hand:opponent`, `grave:player`, `grave:opponent`, `collection:player`, `collection:opponent`, `storyline` (shared), `pool` (editor-only staging area). Legacy `cell:N` zones load as `cell:N:top`.
+Zones per grid square `N` (0–19, row-major, 5 per row): `site:N` (the site card, max 1), `cell:N:top` (surface), `cell:N:bot` (below). Intersections: `aura:M`. Other zones: `hand:player`, `hand:opponent`, `grave:player`, `grave:opponent`, `collection:player`, `collection:opponent`, `atlas:player`, `atlas:opponent`, `spellbook:player`, `spellbook:opponent`, `storyline` (shared), `pool` (editor-only staging area). Legacy `cell:N` zones load as `cell:N:top`.
 
-The puzzle's `stats` object stores each player's starting life, mana and thresholds: `{ "player": { "life": 20, "mana": 3, "air": 0, "earth": 0, "fire": 1, "water": 1 }, "opponent": { ... } }`. Missing `life` defaults to 20, so older puzzle files load unchanged. Counters are adjustable during play and reset with the board, but they are informational — only card moves are part of the checked solution sequence.
+The puzzle's `stats` object stores each player's starting life, mana and thresholds: `{ "player": { "life": 20, "mana": 3, "air": 0, "earth": 0, "fire": 1, "water": 1 }, "opponent": { ... } }`. Missing `life` defaults to 20, so older puzzle files load unchanged. Counters are adjustable during play and reset with the board, but only card actions are part of the checked solution sequence (mana and threshold still gate what can be cast when rules are enforced).
 
 `hideAtlas` / `hideSpellbook` (optional booleans, default `false`) hide both players' Atlas or Spellbook zones for puzzles that don't use the draw decks. A hidden deck still shows while it holds cards.
 
@@ -167,7 +170,7 @@ Every field below is back-filled on load, so older puzzle files load unchanged a
 
 **Effect selectors.** Every effect that acts on cards picks them with `who`: `self`, `target`, `triggering` (the card that set a triggered ability off), `avatar` (with `avatarSide`: `self`/`enemy`; an Avatar kept off the board as a life stat still counts), `carrier`, or `area` with `area: { shape, filter, side }` — `shape` is `grid` (the ability's grid target), `location`, `adjacent` or `nearby` (around the source, in its own region; a spell cast from hand measures from the square it was dropped on, recorded as `dropSquare` on its `cast` entry). Amounts (`dealDamage`, `gridDamage`, `modifyStrength`) may use `amountRef: "count"` with a nested `countOf` selector. `avatarSide`, `area` and `countOf` are only saved when used.
 
-**Passives.** Besides the existing scopes, a passive may reach `bearer` (whoever carries the card) and board-wide `all`/`all-friendly`/`all-enemy` (every card of the kinds in `affects`) or `avatar-friendly`/`avatar-enemy`. `passive` also takes `costMod` with `costOn` (`own` — the affected card's own cast cost — `spells`, every spell the affected side casts, narrowed by `costFilter`, or `abilities`, the mana cost of the affected cards' activated abilities), `affinity` (extra elemental threshold for the affected side) and the restrictions `cantAttack`, `cantMove` and `cantBeTargeted` (by opponents). Silence and Disable switch these off like any other passive trait, and a passive's `condition` applies to them too.
+**Passives.** Besides the existing scopes, a passive may reach `bearer` (whoever carries the card) and board-wide `all`/`all-friendly`/`all-enemy` (every card of the kinds in `affects`) or `avatar-friendly`/`avatar-enemy`. `passive` also takes `costMod` with `costOn` (`own` — the affected card's own cast cost — `spells`, every spell the affected side casts, narrowed by `costFilter`, or `abilities`, the mana cost of the affected cards' activated abilities), `affinity` (extra elemental threshold for the affected side) and the restrictions `cantAttack`, `cantMove`, `cantDefend` (can't move to defend) and `cantBeTargeted` (by opponents). Silence and Disable switch these off like any other passive trait, and a passive's `condition` applies to them too.
 
 **Conditions.** The `condition` object a passive already had (`{ type, amount, element, side }`) now also works on triggered abilities (an intervening "if": tested as it triggers and again as it resolves) and on single effects (`effect.condition`, with an optional `else: [effects]` run instead when it is false; saved only when set). New `type`s: `onFlooded`, `affinityAtLeast` (board and passive affinity, where `thresholdAtLeast` keeps reading the base stat), `hasKeyword` (`keyword`), `region` (`region`), `controlsCard` (at least `amount` cards picked by a `selector`, e.g. `{ who: "area", area: { shape: "realm", filter: "minion", side: "friendly" } }`), and `all`/`any` over `of: [conditions]`. Optional fields: `not`, `subject` (`target`/`triggering` instead of the card itself, for card tests) and `whose: "enemy"` (for life/mana/threshold/affinity tests). A passive's condition is read from the raw board so passives can't switch each other on: there, a keyword counts only if the card has it itself (its own passives or gained in play).
 
@@ -176,11 +179,8 @@ Every field below is back-filled on load, so older puzzle files load unchanged a
 **More effects and costs.** New ops: `untap`; `draw` (`side`, `count`, `deck`: `spellbook`/`atlas`, from the top); `discard` (`pick: "chosen"` — the selector's cards in a hand — or `"count"`, the first `count` cards of a `side`'s hand); `search` (the first card from the top of a deck matching `filter`, into hand; no shuffle yet); `returnToHand` (from a cemetery); `reanimate` (summon from a cemetery onto a picked location within `reach`, with its genesis and the survival check); `gainControl` (the card joins the ability's side — undo, a reset and a save hand it back); `swap` (this unit with the selected one); `addCounter`/`removeCounter` (named counters, `name`, shown on the card; `amountRef: "counter"` totals one); and `preventDamage` (`shield` counters, each absorbing one damage). Activated abilities may also cost `life`, `discard` N and `banish` N (the first cards of your hand / cemetery — there is no choice UI for costs yet) and `sacrifice` (`self`, or the chosen `target`, which must then be your own card in play); all are refunded by undo. Counters are shed when a card leaves the realm.
 
 *Changed:*
-- `nearby`/`adjacent` passives on a site
-
- now reach the units around the site (they used to reach only sites and artifacts there, never units). An older puzzle that put such a passive on a site will see it apply.
-- A Ward is now checked
- for every card an effect hits, not only the chosen target, so `gridDamage` over an enemy with an intact Ward spares it (and breaks the Ward) instead of damaging through it, as the rules require.
+- `nearby`/`adjacent` passives on a site now reach the units around the site (they used to reach only sites and artifacts there, never units). An older puzzle that put such a passive on a site will see it apply.
+- A Ward is now checked for every card an effect hits, not only the chosen target, so `gridDamage` over an enemy with an intact Ward spares it (and breaks the Ward) instead of damaging through it, as the rules require.
 - Every hit (combat, strike, shoot, damage effects, `gridDamage`) is now a damage event, so an older `damage` trigger — which keyed off manual damage marks only — also fires on combat and effect damage, and so does a `loseWhen: "damaged"` grant. Older damage triggers load with `role: "target"` (the damaged card), which is what they meant.
 - Removing a damage counter by hand (a −1 mark) no longer fires `damage` triggers: only damage actually dealt does.
 - A card that has already left the mat can no longer be hit by combat damage (it could not be damaged there anyway); an Avatar kept off the board as a life stat still loses life.
@@ -190,3 +190,13 @@ Every field below is back-filled on load, so older puzzle files load unchanged a
 - `destroy` no longer does anything to a card that is already in a cemetery or banished (it used to move it to the cemetery again and replay its death).
 - An area around a triggered ability's card that has left the board (a Deathrite) is measured from where the card died, not from its side's Avatar.
 
+### Format version 2
+
+Version 2 is a clean break: version-1 puzzle files are not migrated and should be re-authored.
+
+- **Adjacent / nearby include the card's own square**, as the rulebook glossary defines them, for effect areas (`area.shape`) and passive scopes alike. The source card itself is left out unless `area.includeSelf` / `passive.includeSelf` is set ("other than this card" unticked).
+- **Zones**: ability `zones`, `trigger.from`/`to` and `target.from` have no separate `aura` category — auras are in the realm, and `realm` covers the intersections.
+- **Card kinds**: `filter` takes `magic` as well as `spell`. As in the rulebook, `spell` is any Spellbook card (magic, minion, artifact or aura); `magic` is only the one-shot kind.
+- **Trigger action `enter`**: a card comes into the realm from outside it (Genesis). The editor offers presets (Genesis, Deathrite, "when this is attacked", "when a nearby enemy dies", …) that fill in the raw trigger fields.
+- **Selector `who: "other"`**: a trigger's other party (the attacker of "when this is attacked"), shielded by Stealth and "can't be targeted". A triggered ability without a player-picked target names its cards `triggering` / `other`, never `target`.
+- **Removed**: the `gridDamage` op (use `dealDamage` to `{ who: "area", area: { shape: "grid", … } }`), `returnToHand` (use `bounce`, which works from a cemetery too), the Ward token (use `grantKeyword` `ward`, which also restores a broken Ward), and the `unitsNearby` / `thresholdAtLeast` conditions (use `controlsCard` / `affinityAtLeast`). Conditions no longer carry `side`. The editor shows `destroy` / `banish` / `bounce` as one "send to a zone" effect.

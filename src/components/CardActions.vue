@@ -6,7 +6,6 @@ import {
   state,
   ui,
   zoneOf,
-  zoneLabel,
   clearSelection,
   removeCard,
   toggleSite,
@@ -33,7 +32,6 @@ import {
   finishPicks,
   beginCast,
   isSpell,
-  cardTypeLabel,
   toggleUnit,
   toggleAvatar,
   isUnit,
@@ -231,19 +229,8 @@ function onRemove() {
          to the full width of the bar. The card itself is highlighted on the
          board, and its name is right here, so the thumbnail earned nothing. -->
     <div class="ca-id">
-      <div class="ca-name">
-        {{ card.name }}
-        <span
-          style="font-size: 0.72em; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.7; margin-left: 0.4em; padding: 0.05em 0.4em; border: 1px solid currentColor; border-radius: 4px"
-        >{{ cardTypeLabel(ui.selected) }}</span>
-      </div>
-      <div class="ca-zone">
-        {{ zone ? zoneLabel(zone) : 'Nowhere' }}
-        <template v-if="heldBy">
-          · carried by {{ state.cards[heldBy]?.name }}
-        </template>
-        <template v-if="providesText"> · provides {{ providesText }}</template>
-      </div>
+      <div class="ca-name">{{ card.name }}</div>
+      <div v-if="providesText" class="ca-zone">provides {{ providesText }}</div>
     </div>
 
     <div class="ca-buttons">
@@ -292,7 +279,7 @@ function onRemove() {
         :class="{ active: moving }"
         @click="beginMove(ui.selected)"
       >
-        {{ moving ? ' Cancel move' : ' Move' }}
+        {{ moving ? 'Cancel move' : 'Move' }}
       </button>
       <button
         v-if="canFight"
@@ -349,7 +336,7 @@ function onRemove() {
         :class="{ danger: carrying }"
         @click="beginPickup(ui.selected)"
       >
-        {{ carrying ? ' Cancel pick up' : ' Pick up' }}
+        {{ carrying ? 'Cancel pick up' : 'Pick up' }}
       </button>
       <button
         v-if="(logging || editing) && heldBy && !enemyLocked"
@@ -392,7 +379,7 @@ function onRemove() {
         :class="{ active: card.avatar }"
         @click="toggleAvatar(ui.selected)"
       >
-       {{ card.avatar ? 'Not an avatar' : 'Mark as avatar' }}
+        {{ card.avatar ? 'Not an avatar' : 'Mark as avatar' }}
       </button>
       <button
         v-if="editing && inPool"
@@ -484,24 +471,22 @@ function onRemove() {
          (the card art shows them to players). Avatars use the side's life. -->
     <div
       v-if="editing && isUnit(ui.selected)"
-      style="display: flex; gap: 0.8rem; padding: 0.35rem 0.1rem; font-size: 0.85rem"
+      class="ca-num-row"
     >
-      <label style="display: flex; align-items: center; gap: 0.3rem">
+      <label>
         Power
-        <input v-model.number="card.power" type="number" class="text-input" style="width: 3.4rem" />
+        <input v-model.number="card.power" type="number" class="text-input ca-num" />
       </label>
       <label
         v-if="!card.avatar"
-        style="display: flex; align-items: center; gap: 0.3rem"
         title="Defense power (toughness). Leave blank to use Power."
       >
         Defense
         <input
           v-model.number="card.defense"
           type="number"
-          placeholder="=Power"
-          class="text-input"
-          style="width: 3.4rem"
+          placeholder="=Pow"
+          class="text-input ca-num"
         />
       </label>
     </div>
@@ -510,15 +495,15 @@ function onRemove() {
          thresholds (required). Shown in the editor for spell cards. -->
     <div
       v-if="editing && isSpell(ui.selected) && card.spellCost"
-      style="display: flex; flex-wrap: wrap; gap: 0.6rem; padding: 0.35rem 0.1rem; font-size: 0.85rem"
+      class="ca-num-row"
     >
-      <label style="display: flex; align-items: center; gap: 0.3rem">
+      <label>
         Cost ◇
-        <input v-model.number="card.spellCost.mana" type="number" min="0" title="mana cost" class="text-input" style="width: 3rem" />
+        <input v-model.number="card.spellCost.mana" type="number" min="0" title="mana cost" class="text-input ca-num" />
       </label>
-      <label v-for="el in ['air','earth','fire','water']" :key="el" style="display: flex; align-items: center; gap: 0.25rem">
+      <label v-for="el in ['air','earth','fire','water']" :key="el">
         <ThresholdIcon :element="el" />
-        <input v-model.number="card.spellCost[el]" type="number" min="0" :title="`${el} threshold required`" class="text-input" style="width: 2.6rem" />
+        <input v-model.number="card.spellCost[el]" type="number" min="0" :title="`${el} threshold required`" class="text-input ca-num" />
       </label>
     </div>
 
@@ -527,16 +512,16 @@ function onRemove() {
          Affinity is the threshold spells are checked against. -->
     <div
       v-if="editing && card.site && card.affinity"
-      style="display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; padding: 0.35rem 0.1rem; font-size: 0.85rem"
+      class="ca-num-row"
     >
       <span style="opacity: 0.7">Provides</span>
-      <label style="display: flex; align-items: center; gap: 0.3rem">
+      <label>
         ◇
-        <input v-model.number="card.manaProvided" type="number" min="0" title="mana provided" class="text-input" style="width: 3rem" />
+        <input v-model.number="card.manaProvided" type="number" min="0" title="mana provided" class="text-input ca-num" />
       </label>
-      <label v-for="el in ['air','earth','fire','water']" :key="el" style="display: flex; align-items: center; gap: 0.25rem">
+      <label v-for="el in ['air','earth','fire','water']" :key="el">
         <ThresholdIcon :element="el" />
-        <input v-model.number="card.affinity[el]" type="number" min="0" :title="`${el} affinity provided`" class="text-input" style="width: 2.6rem" />
+        <input v-model.number="card.affinity[el]" type="number" min="0" :title="`${el} affinity provided`" class="text-input ca-num" />
       </label>
     </div>
 
@@ -561,7 +546,6 @@ function onRemove() {
       Done picking
     </button>
     <!-- An optional ("may") target can be resolved with nothing chosen: the
-
          target effects are skipped, the rest of the ability still runs. -->
     <button
       v-if="canDeclineActivate()"
@@ -589,7 +573,6 @@ function onRemove() {
       This is your opponent's card — you can't act with it. The puzzle plays the
       opponent's side automatically.
     </p>
-    <p v-else class="ca-hint">Click any zone to move without tapping, or choose an action above.</p>
 
     <button
       class="ca-close"

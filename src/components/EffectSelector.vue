@@ -1,60 +1,52 @@
 <script setup>
-import {
-  EFFECT_WHO,
-  AVATAR_SIDES,
-  AREA_SHAPES,
-  TARGET_FILTERS,
-  TARGET_SIDES,
-  setSelectorWho,
-} from '../store.js'
+import AreaPicker from './AreaPicker.vue'
+import { EFFECT_WHO, AVATAR_SIDES, AREA_SHAPES, TARGET_FILTERS, FILTER_PLURALS, setSelectorWho } from '../store.js'
 
 // Who an effect hits (or, for a 'count' amount, what it counts). `sel` is the
 // effect itself or its `countOf` -- both carry who/avatarSide/area -- and is
 // edited in place. `grid` says whether the ability has a grid target to reuse;
-// `triggered` whether there is a triggering card to pick. `suffix` is appended
-// to each `who` label (e.g. "'s site" for flood).
+// `triggered` whether there are trigger cards to name; `pick` whether the player
+// picks a target. `suffix` is appended to each `who` label (e.g. "'s site").
 const props = defineProps({
   sel: { type: Object, required: true },
   grid: { type: Boolean, default: false },
   triggered: { type: Boolean, default: false },
+  pick: { type: Boolean, default: false },
   suffix: { type: String, default: '' },
 })
 
 const WHO_LABELS = {
-  self: 'self',
-  target: 'target',
-  triggering: 'triggering card',
-  avatar: 'avatar',
-  carrier: 'carrier',
-  area: 'area…',
+  self: 'this card',
+  target: 'the picked target',
+  triggering: 'the triggering card',
+  other: 'the other card involved',
+  avatar: 'an Avatar',
+  carrier: 'whoever carries this',
+  area: 'cards in an area…',
 }
-const AREA_SIDE_LABELS = { any: "anyone's", friendly: 'your', enemy: "opponent's" }
-const FILTER_LABELS = {
-  any: 'cards',
-  unit: 'units',
-  minion: 'minions',
-  avatar: 'avatars',
-  site: 'sites',
-  aura: 'auras',
-  artifact: 'artifacts',
-  monument: 'monuments',
-  spell: 'spells',
+const WHO_TITLES = {
+  triggering: 'The card the trigger is about: the one that entered, died, attacked, was attacked…',
+  other: 'The other party of the action: the attacker for "when this is attacked", the defender for "when this attacks", the damage source for "when this takes damage"',
+  target: 'The card the player picks when this resolves',
 }
-const SHAPE_LABELS = {
-  grid: 'in the grid target',
-  location: 'at its location',
-  adjacent: 'adjacent',
-  nearby: 'nearby',
-  realm: 'anywhere in play',
-}
-// Options that can't resolve here are hidden, but kept if already chosen so a
-// saved value still shows.
+// Each card gets exactly one name: in a trigger with no pick there is no
+// separate "target" -- it is the triggering or the other card. Options that
+// can't resolve here are hidden, but kept if already chosen.
 const whos = () =>
-  EFFECT_WHO.filter((w) => w !== 'triggering' || props.triggered || props.sel.who === 'triggering')
-const shapes = () =>
-  AREA_SHAPES.filter((s) => s !== 'grid' || props.grid || props.sel.area?.shape === 'grid')
+  EFFECT_WHO.filter((w) => {
+    if (w === props.sel.who) return true
+    if (w === 'target') return !props.triggered || props.pick || props.grid
+    if (w === 'triggering' || w === 'other') return props.triggered
+    return true
+  })
+const shapes = () => AREA_SHAPES.filter((s) => s !== 'grid' || props.grid || props.sel.area?.shape === 'grid')
 const whoLabel = (w) =>
-  props.suffix && (w === 'self' || w === 'target') ? `${WHO_LABELS[w]}${props.suffix}` : WHO_LABELS[w]
+  props.suffix && ['self', 'target', 'triggering', 'other'].includes(w) ? `${WHO_LABELS[w]}${props.suffix}` : WHO_LABELS[w]
+// includeSelf is only saved while set.
+function setIncludeSelf(on) {
+  if (on) props.sel.area.includeSelf = true
+  else delete props.sel.area.includeSelf
+}
 </script>
 
 <template>
@@ -62,10 +54,10 @@ const whoLabel = (w) =>
     <select
       :value="sel.who"
       class="text-input"
-      title="Who this effect hits"
+      :title="WHO_TITLES[sel.who] || 'Who this effect hits'"
       @change="setSelectorWho(sel, $event.target.value)"
     >
-      <option v-for="w in whos()" :key="w" :value="w">{{ whoLabel(w) }}</option>
+      <option v-for="w in whos()" :key="w" :value="w" :title="WHO_TITLES[w]">{{ whoLabel(w) }}</option>
     </select>
     <select
       v-if="sel.who === 'avatar'"
@@ -76,23 +68,21 @@ const whoLabel = (w) =>
       <option v-for="s in AVATAR_SIDES" :key="s" :value="s">{{ s === 'self' ? 'yours' : "opponent's" }}</option>
     </select>
     <template v-if="sel.who === 'area' && sel.area">
-      <select v-model="sel.area.side" class="text-input" title="Whose cards, relative to this card">
-        <option v-for="s in TARGET_SIDES" :key="s" :value="s">{{ AREA_SIDE_LABELS[s] }}</option>
-      </select>
-      <select
-        v-model="sel.area.filter"
-        class="text-input"
-        title="What kind of card. Units and cards include avatars; sites are only picked by 'sites'"
+      <AreaPicker
+        v-model:shape="sel.area.shape"
+        v-model:side="sel.area.side"
+        :include-self="!!sel.area.includeSelf"
+        :shapes="shapes()"
+        @update:include-self="setIncludeSelf($event)"
       >
-        <option v-for="f in TARGET_FILTERS" :key="f" :value="f">{{ FILTER_LABELS[f] || f }}</option>
-      </select>
-      <select
-        v-model="sel.area.shape"
-        class="text-input"
-        title="The ability's grid target, or around this card in its own region. Adjacent/nearby are the ring around its square and leave out its own location; use 'at its location' for that"
-      >
-        <option v-for="s in shapes()" :key="s" :value="s">{{ SHAPE_LABELS[s] || s }}</option>
-      </select>
+        <select
+          v-model="sel.area.filter"
+          class="text-input"
+          title="What kind of card. Units and cards include avatars; sites are only picked by 'sites'"
+        >
+          <option v-for="f in TARGET_FILTERS" :key="f" :value="f">{{ FILTER_PLURALS[f] }}</option>
+        </select>
+      </AreaPicker>
     </template>
   </span>
 </template>

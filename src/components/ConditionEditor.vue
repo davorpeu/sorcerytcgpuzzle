@@ -5,7 +5,6 @@ import {
   CONDITION_SUBJECTS,
   SUBJECT_CONDITIONS,
   STAT_CONDITIONS,
-  TARGET_SIDES,
   REGIONS,
   KEYWORDS,
   ELEMENTS,
@@ -16,11 +15,13 @@ import {
 
 // A condition (see conditionHolds in the store), edited in place. Recursive for
 // all/any. `passive` tests only the card itself (a passive has no target or
-// triggering card); `triggered` offers the triggering card as a subject.
+// triggering card); `triggered` offers the trigger's cards as subjects; `pick`
+// says the player picks a target (else a trigger has no separate "target").
 const props = defineProps({
   cond: { type: Object, required: true },
   passive: { type: Boolean, default: false },
   triggered: { type: Boolean, default: false },
+  pick: { type: Boolean, default: false },
   depth: { type: Number, default: 0 },
 })
 
@@ -29,31 +30,32 @@ const TYPE_LABELS = {
   onWater: 'stands on a water site',
   onLand: 'stands on a land site',
   onFlooded: 'stands on a flooded site',
-  unitsNearby: 'at least N units are here or nearby',
   lifeAtMost: 'life is N or less',
   lifeAtLeast: 'life is N or more',
   manaAtLeast: 'mana is N or more',
-  thresholdAtLeast: 'base threshold in an element is N or more',
-  affinityAtLeast: 'affinity (board + passives) in an element is N or more',
+  affinityAtLeast: 'threshold in an element is N or more',
   untapped: 'is untapped',
   tapped: 'is tapped',
   damaged: 'is damaged',
   hasKeyword: 'has a keyword',
   region: 'is in a region',
-  controlsCard: 'at least N cards…',
+  controlsCard: 'at least N cards in an area…',
   all: 'all of…',
   any: 'any of…',
 }
 const AMOUNT_TYPES = [
-  'unitsNearby',
   'lifeAtMost',
   'lifeAtLeast',
   'manaAtLeast',
-  'thresholdAtLeast',
   'affinityAtLeast',
   'controlsCard',
 ]
-const SUBJECT_LABELS = { self: 'this card', target: 'the target', triggering: 'the triggering card' }
+const SUBJECT_LABELS = {
+  self: 'this card',
+  target: 'the picked target',
+  triggering: 'the triggering card',
+  other: 'the other card involved',
+}
 // Nesting past a couple of levels is never needed and gets unreadable.
 // Set an optional field, dropping it at its default so saved files stay small.
 function setOpt(obj, key, value, dflt) {
@@ -63,12 +65,12 @@ function setOpt(obj, key, value, dflt) {
 const types = () =>
   PASSIVE_CONDITIONS.filter((t) => props.depth < 2 || (t !== 'all' && t !== 'any'))
 const subjects = () =>
-  CONDITION_SUBJECTS.filter(
-    (s) =>
-      s === 'self' ||
-      props.cond.subject === s ||
-      (!props.passive && (s === 'target' || props.triggered))
-  )
+  CONDITION_SUBJECTS.filter((s) => {
+    if (s === 'self' || props.cond.subject === s) return true
+    if (props.passive) return false
+    if (s === 'target') return !props.triggered || props.pick
+    return props.triggered
+  })
 </script>
 
 <template>
@@ -117,14 +119,11 @@ const subjects = () =>
       title="N"
     />
     <select
-      v-if="cond.type === 'thresholdAtLeast' || cond.type === 'affinityAtLeast'"
+      v-if="cond.type === 'affinityAtLeast'"
       v-model="cond.element"
       class="text-input"
     >
       <option v-for="el in ELEMENTS" :key="el" :value="el">{{ el }}</option>
-    </select>
-    <select v-if="cond.type === 'unitsNearby'" v-model="cond.side" class="text-input" title="Whose units">
-      <option v-for="s in TARGET_SIDES" :key="s" :value="s">{{ s }}</option>
     </select>
     <select v-if="cond.type === 'hasKeyword'" v-model="cond.keyword" class="text-input">
       <option v-for="k in KEYWORDS" :key="k" :value="k">{{ k }}</option>
@@ -136,11 +135,12 @@ const subjects = () =>
       v-if="cond.type === 'controlsCard' && cond.selector"
       :sel="cond.selector"
       :triggered="triggered"
+      :pick="pick"
     />
 
     <span v-if="cond.type === 'all' || cond.type === 'any'" class="cond-list">
       <span v-for="(sub, i) in cond.of" :key="i" class="cond-sub">
-        <ConditionEditor :cond="sub" :passive="passive" :triggered="triggered" :depth="depth + 1" />
+        <ConditionEditor :cond="sub" :passive="passive" :triggered="triggered" :pick="pick" :depth="depth + 1" />
         <button class="btn small danger" title="Remove" @click="removeSubCondition(cond, i)">🗑</button>
       </span>
       <button class="btn small" @click="addSubCondition(cond)">+ test</button>

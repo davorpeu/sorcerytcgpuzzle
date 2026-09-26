@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import {
   state,
   ui,
@@ -177,6 +177,18 @@ const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
 const previewCard = computed(() =>
   ui.alt && ui.hoverCard ? state.cards[ui.hoverCard] : null
 )
+
+// Site art may be a portrait scan of the upright card (see the board's
+// .site-bg.portrait); the preview turns those to lie landscape so the text
+// reads. Keyed by image URL: its height/width ratio, once loaded.
+const previewRatio = reactive({})
+const notePreviewRatio = (e, src) => {
+  previewRatio[src] = e.target.naturalHeight / e.target.naturalWidth
+}
+const previewSideways = computed(() => {
+  const c = previewCard.value
+  return !!c?.site && previewRatio[c.img] > 1
+})
 
 function onKeyDown(e) {
   if (e.key === 'Alt') {
@@ -452,7 +464,7 @@ watch(
             </ul>
             <p v-if="!state.solutions.length && !state.recording" class="hint warn">
               No solution recorded yet — until you record one, players can move
-              cards but <em>Submit solution</em> has nothing to check.
+              cards but the puzzle can never be detected as solved.
             </p>
             <div class="btn-row">
               <button class="btn" @click="onSave">Save</button>
@@ -586,7 +598,7 @@ watch(
             </li>
             <li>
               <span class="legend-swatch unit"></span>
-              Minion (blue border) — can move (taps), strike, attack (taps), or tap
+              Minion (blue border) — can move, attack or shoot (each taps it), and use its abilities
             </li>
             <li>
               <span class="legend-swatch avatar"></span>
@@ -605,14 +617,15 @@ watch(
               Upside-down card — controlled by the opponent
             </li>
             <li>
-              <span class="legend-badge under">BELOW</span>
-              Underground card — darkened; drag or move it onto the lower strip
+              <span class="legend-badge under">BURIED</span> /
+              <span class="legend-badge under">SUBMERGED</span>
+              Card under a land / water site — darkened; drag or move it onto the lower strip
               of a square to send it below, the upper part to surface it
             </li>
             <li>
               <span class="legend-icon">☞</span>
-              Click a card to select it — its actions (move, attack, strike, send below,
-              control) appear above the storyline
+              Click a card to select it — its actions (cast, move, attack,
+              abilities, pick up) appear under the board
             </li>
             <li>
               <span class="legend-icon">✋</span>
@@ -764,6 +777,9 @@ watch(
         v-if="previewCard.img"
         :src="previewCard.img"
         :alt="previewCard.name"
+        :class="{ sideways: previewSideways }"
+        :style="previewSideways ? { '--r': previewRatio[previewCard.img] } : null"
+        @load="notePreviewRatio($event, previewCard.img)"
       />
       <div v-else class="card-preview-name">{{ previewCard.name }}</div>
       <div class="card-preview-caption">{{ previewCard.name }}</div>

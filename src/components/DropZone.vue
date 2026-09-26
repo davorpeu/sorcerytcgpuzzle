@@ -21,6 +21,7 @@ import {
   castByDrop,
   playerControls,
   castControlled,
+  manualMoveAllowed,
 } from '../store.js'
 
 const props = defineProps({
@@ -29,15 +30,36 @@ const props = defineProps({
   // three zones on top of each other (site slot, surface, below) and every
   // one of them would be a Tab stop, so the board offers only the surface
   // zone to the keyboard: moveCard routes a site card dropped there into the
-  // site slot anyway, and "send below" is a button on the action bar.
+  // site slot anyway, and a mouse can drop onto a square's lower band to go below.
   keyboard: { type: Boolean, default: true },
 })
 const over = ref(false)
 
+// Whether this zone turns the card away outright: while solving, a manual move
+// must end in the realm, so hands, cemeteries and the other off-board zones
+// refuse every card, and a realm card is refused everywhere unless its Move
+// action is armed (moveCard enforces it; this just keeps the zone from
+// advertising a move that would do nothing). A castable spell is cast, not
+// moved, so it is never refused here.
+function refuses(cardId) {
+  if (!cardId || spellCastable(cardId)) return false
+  return !manualMoveAllowed(cardId, props.zone)
+}
+
 // A zone is "armed" while a card is selected: clicking it moves that card
 // here. This is the touch-friendly counterpart to dragging, and the only way
 // to play on a tablet, where HTML5 drag-and-drop does not fire at all.
-const armed = computed(() => !!ui.selected && !ui.attacker && !ui.striker)
+const armed = computed(
+  () => !!ui.selected && !ui.attacker && !ui.striker && !refuses(ui.selected)
+)
+
+// Not cancelling dragover is what tells the browser the drop is not allowed
+// (no-drop cursor, and no drop event), so a refused zone also stays unlit.
+function onDragOver(e) {
+  if (refuses(ui.dragCard)) return
+  e.preventDefault()
+  over.value = true
+}
 
 // While a Move is armed under enforcement, mark whether this zone is reachable.
 // null means no highlight (not moving, or free-form puzzle).
@@ -121,7 +143,7 @@ function onClick() {
     :role="tabbable ? 'button' : null"
     :tabindex="tabbable ? 0 : null"
     :aria-label="tabbable ? `Move here: ${zoneLabel(zone)}` : null"
-    @dragover.prevent="over = true"
+    @dragover="onDragOver"
     @dragleave="over = false"
     @drop.prevent="onDrop"
     @click="onClick"

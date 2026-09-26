@@ -4,17 +4,24 @@ import { state, zoneLabel, cardName } from '../store.js'
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
 
-// The label an ability entry shows: the ability's own name if it can still be
-// found on the card, else a neutral fallback (the card may have been edited).
+// The ability an entry used: on the card itself, else on any card -- a gained
+// ability (an assumed form) lives on the granted card, which may since have
+// been released. Null if it's gone (the card may have been edited).
+function abilityOf(m) {
+  const find = (c) => c?.abilities?.find((x) => x.id === m.abilityId)
+  return find(state.cards[m.cardId]) || Object.values(state.cards).map(find).find(Boolean) || null
+}
+
+// The label an ability entry shows: the ability's own name, else a neutral
+// fallback.
 function abilityName(m) {
-  const a = state.cards[m.cardId]?.abilities?.find((x) => x.id === m.abilityId)
-  return a?.name || 'ability'
+  return abilityOf(m)?.name || 'ability'
 }
 
 // A modal ability's chosen modes, by name ("Bolt + Growth"), or ''.
 function modeNames(m) {
   if (!m.modes?.length) return ''
-  const a = state.cards[m.cardId]?.abilities?.find((x) => x.id === m.abilityId)
+  const a = abilityOf(m)
   return m.modes.map((i) => a?.modes?.[i]?.name || `mode ${i + 1}`).join(' + ')
 }
 
