@@ -119,7 +119,8 @@ See `wordpress/AGENTS.md` (plugin PHP, REST endpoints, and the `scripts/build-wp
   power). Card art is the card; the UI shows only game state and changes (damage, tapped,
   buried, counters...). Names may appear in `aria-label` only. Exceptions the user approved:
   card names in the storyline/ability prompts ("Choose a target for …"), in the play-mode move
-  log, and the editor's Power/Defense inputs (there is no card database).
+  log, the editor's Power/Defense inputs (there is no card database), and the name chip on a
+  card that has no art (otherwise it would be blank).
 - Use the design tokens (CSS custom properties in `:root` of `src/style.css`); no hard-coded
   colours for anything that carries meaning or repeats. Two exceptions: black shadows
   (`rgba(0, 0, 0, a)` in a box-shadow), and illustration colours that are art rather than
