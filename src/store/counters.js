@@ -2,7 +2,7 @@
 // and damage counters. Part of the store split: import from src/store.js, never
 // from this file directly.
 
-import { adjustStat, isUnit, removeFromZones } from '../store.js'
+import { removeFromZones } from '../store.js'
 import { ELEMENTS, clone, emitFx, state, ui, uid, zoneOf } from './state.js'
 import {
   ANIMATE_DURATIONS,
@@ -24,6 +24,7 @@ import {
 import { carriedBy, shedInPlayState } from './moves.js'
 import { fireTriggers, matchesFilter } from './abilities.js'
 import { checkGrantLoss, snapshotStructural } from './effects.js'
+import { adjustStat, isUnit } from './session.js'
 
 // ---------- counters & damage prevention ----------
 

@@ -2,7 +2,7 @@
 // action, draw decks and mode choice. Part of the store split: import from
 // src/store.js, never from this file directly.
 
-import { adjustStat, isAvatar, isTapped, removeFromZones } from '../store.js'
+import { removeFromZones } from '../store.js'
 import { ELEMENTS, clone, emitFx, state, ui, uid, zoneOf } from './state.js'
 import {
   abilityCostBlocked,
@@ -64,6 +64,7 @@ import {
   snapshotStructural,
   spellAbility,
 } from './effects.js'
+import { adjustStat, isAvatar, isTapped } from './session.js'
 
 // ---------- affinity & mana provided by cards in play ----------
 

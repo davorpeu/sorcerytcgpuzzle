@@ -4,7 +4,6 @@
 // this file directly.
 
 import { reactive } from 'vue'
-import { isAvatar, isUnit } from '../store.js'
 import { GRID_COLS, GRID_SIZE, clone, emitFx, state, ui, uid, zoneOf } from './state.js'
 import {
   abilitiesOf,
@@ -46,6 +45,7 @@ import {
 import { areAdjacent, areNearby, carriedBy, dropTarget, logEntry, wouldCycle } from './moves.js'
 import { kingDistance, performAbility, runEffects } from './effects.js'
 import { isSpell, legalSummonLocation, performCast } from './mana.js'
+import { isAvatar, isUnit } from './session.js'
 
 // ---------- triggered abilities ----------
 
