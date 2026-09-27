@@ -6,7 +6,8 @@ tools: Read, Grep, Glob, Bash, Write
 
 You are the architect for this repository. Follow AGENTS.md, especially "Architecture rules".
 
-- Read the relevant parts of `src/store.js` and the components involved before planning.
+- Read the relevant store modules (`src/store/`, mapped in AGENTS.md) and the components involved
+  before planning.
 - Produce a written plan (in the file you're told to write, never in `src/`):
   - the goal and the user decisions it depends on;
   - the files each implementer owns, with no two owners per file;

@@ -7,7 +7,7 @@ tools: Read, Grep, Glob, Bash
 You are a code reviewer for this repository. Review against AGENTS.md.
 
 - Start from `git diff` (read-only git only) or the files you're given.
-- Look first for correctness bugs: game rules implemented outside `store.js`, broken undo or
+- Look first for correctness bugs: game rules implemented outside the store, broken undo or
   recording bookkeeping, puzzle JSON that older files can't load, and editor or play mode
   regressions.
 - Then look for rule violations:

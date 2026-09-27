@@ -24,11 +24,25 @@ A Vue 3 (SFC, `<script setup>`) single-page app for building and solving puzzles
 - **Standalone** (`npm run dev`, or any page without `data-api`): persistence is `localStorage`, editor enabled.
 - **Embedded in WordPress**: the plugin's shortcode mounts the same bundle, passing `data-api`/`data-nonce`/`data-editor` attributes that flip persistence to a REST API and gate the editor by user role.
 
-The same code path serves both; the only switch is `config.apiUrl` being set (see `remote()` in `store.js`).
+The same code path serves both; the only switch is `config.apiUrl` being set (see `remote()` in `src/store/state.js`).
 
-### `src/store.js` is the whole application state and logic
+### The store (`src/store.js` + `src/store/`) is the whole application state and logic
 
-Nearly everything lives here — a single `reactive()` `state` object plus exported mutator functions. Components are thin views over it. Before touching game behavior, read `store.js`; the components mostly render `state` and call its functions. Three reactive objects:
+Nearly everything lives here — a single `reactive()` `state` object plus exported mutator functions. Components are thin views over it. `src/store.js` is the only entry point: components and tests import from it, never from `src/store/*` directly. It re-exports the public API of the modules:
+
+| Module | Holds |
+|---|---|
+| `state.js` | constants, `config`/`ui`/`state`, shared helpers; imports no other store module, so it always loads first |
+| `board.js` | zone labels/categories, regions, passive traits, oversized minions, reach, line of fire, combat |
+| `counters.js` | counters, damage prevention, ability modes, presets |
+| `moves.js` | moving cards, attacks, strikes, carrying |
+| `abilities.js` | triggers, the storyline stack, activated abilities, destination picks |
+| `effects.js` | effect ops, tokens, card-flow effects, casting |
+| `mana.js` | affinity and mana, draw decks, mode choice |
+| `session.js` | editor session, recording, undo, solve / mistake detection |
+| `persistence.js` | uploads, `serialize`/`loadPuzzle`, save/load, share links, URL loading |
+
+The modules import each other in a cycle, which is fine for functions. Two rules keep it working: code that runs when a module loads (top-level `watch()`, constants built from other values) may only use `state.js` or its own module; and a module can't assign another module's `let` variable, so export a setter instead (e.g. `clearStoryStack()`). Before touching game behavior, read the relevant module; the components mostly render `state` and call its functions. Three reactive objects:
 
 - **`config`** — host-page wiring, NOT puzzle data: `canEdit`, `apiUrl`, `nonce`. Set once at mount from the mount element's `data-*` attributes.
 - **`ui`** — transient interaction state, NOT puzzle data: which card is `selected`, `dragging`, and the mutually-exclusive "armed action" slots `attacker`/`striker`/`carrier`/`moving`. Only one action is ever armed at a time (arming one clears the others).
@@ -69,7 +83,7 @@ See `wordpress/AGENTS.md` (plugin PHP, REST endpoints, and the `scripts/build-wp
 
 ## Architecture rules
 
-- `src/store.js` owns all state and game logic. Components render `state`/`ui` and call store
+- The store (`src/store.js` + `src/store/`) owns all state and game logic. Components render `state`/`ui` and call store
   functions; they don't reimplement rules. Derived UI values belong in a component `computed`,
   game rules belong in the store.
 - `config` (host wiring), `ui` (transient interaction) and `state` (puzzle + session) stay separate.
@@ -84,7 +98,7 @@ See `wordpress/AGENTS.md` (plugin PHP, REST endpoints, and the `scripts/build-wp
 
 ## Working rules
 
-- Read the code you are changing, and the relevant part of `store.js`, before editing.
+- Read the code you are changing, and the relevant store module, before editing.
 - Match the surrounding code: `<script setup>`, naming, comment density. Comments explain *why*.
 - Keep changes scoped to the task; no drive-by refactors or reformatting of files you weren't asked
   to touch.

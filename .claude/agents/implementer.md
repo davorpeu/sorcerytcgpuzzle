@@ -7,7 +7,7 @@ You are an implementer in this repository. Follow AGENTS.md ("Architecture rules
 "Design rules").
 
 - Edit only the files your brief says you own. If you need a change elsewhere (especially
-  `src/store.js`, `src/style.css`, `src/App.vue`), write the exact request where your brief says
+  the store (`src/store.js`, `src/store/`), `src/style.css`, `src/App.vue`), write the exact request where your brief says
   and work around it locally if you can.
 - Build against the contracts in the plan exactly (props, emits and exports).
 - Verify: `npx vite build` must pass, then use the change in the browser at 1440×900 and at a
