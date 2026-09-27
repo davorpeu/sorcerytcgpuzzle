@@ -47,6 +47,7 @@ import {
   moveBlockedByPassive,
   attackBlockedByPassive,
   isAssumedForm,
+  cellSquare,
 } from "../store.js";
 
 // 'mat': the floating bar under the board (play). 'column': the same actions
@@ -71,7 +72,7 @@ const zone = computed(() => (ui.selected ? zoneOf(ui.selected) : null));
 // on the board too, and gets the same unit actions (move, attack, ...).
 const onBoard = computed(
   () =>
-    /^cell:\d+:(top|bot)$/.test(zone.value || "") ||
+    cellSquare(zone.value) != null ||
     (!!ui.selected && isOversized(ui.selected))
 );
 const oversizedSelected = computed(() => !!ui.selected && isOversized(ui.selected));

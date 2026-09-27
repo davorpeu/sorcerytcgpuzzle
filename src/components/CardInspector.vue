@@ -22,6 +22,7 @@ import {
   squareCue,
   playerControls,
   GRID_SIZE,
+  cellLayer,
 } from '../store.js'
 import CardThumb from './CardThumb.vue'
 
@@ -41,13 +42,16 @@ const kicker = computed(() => {
   if (zone.startsWith('hand:')) return mine ? 'In your hand' : "In the opponent's hand"
   if (zone.startsWith('grave:')) return mine ? 'In your cemetery' : "In the opponent's cemetery"
   if (zone.startsWith('collection:')) return mine ? 'In your collection' : "In the opponent's collection"
+  if (zone.startsWith('banished:')) return mine ? 'Banished, yours' : "Banished, the opponent's"
+  if (zone.startsWith('atlas:')) return mine ? 'In your Atlas' : "In the opponent's Atlas"
+  if (zone.startsWith('spellbook:')) return mine ? 'In your Spellbook' : "In the opponent's Spellbook"
   if (zone === 'storyline') return 'On the storyline'
   if (zone === 'pool') return 'In the pool'
   if (zone.startsWith('aura:')) return `${who} aura`
   if (zone.startsWith('site:')) return `${who} site`
   // The Buried/Submerged chip says how; the kicker just says where.
-  if (/^cell:\d+:bot$/.test(zone)) return `${who} card, below the surface`
-  if (zone.startsWith('cell:')) return `${who} card on the realm`
+  if (cellLayer(zone) === 'bot') return `${who} card, below the surface`
+  if (cellLayer(zone)) return `${who} card on the realm`
   return `${who} card`
 })
 
@@ -56,7 +60,7 @@ const changes = computed(() => {
   if (!cid) return []
   const out = []
   const zone = zoneOf(cid) || ''
-  if (/^cell:\d+:bot$/.test(zone))
+  if (cellLayer(zone) === 'bot')
     out.push({ text: zoneRegion(zone) === 'underwater' ? 'Submerged' : 'Buried' })
   if (isTapped(cid)) out.push({ text: 'Tapped' })
   if (tapBlockedBySickness(cid)) out.push({ text: "Summoned this turn — can't tap yet" })

@@ -25,6 +25,9 @@ import {
   cancelArmed,
   removeCard,
   isDirty,
+  cellSquare,
+  cellLayer,
+  crossingIndex,
   markSaved,
   startRecording,
   stopRecording,
@@ -104,6 +107,17 @@ describe('lineOutcome (how an attempt lines up with one solution line)', () => {
 
 describe('zone helpers', () => {
   beforeEach(loadFixture)
+
+  it('reads squares, layers and crossings out of zone ids', () => {
+    expect(cellSquare('cell:12:top')).toBe(12)
+    expect(cellSquare('cell:0:bot')).toBe(0)
+    expect(cellSquare('site:12')).toBe(null)
+    expect(cellSquare(undefined)).toBe(null)
+    expect(cellLayer('cell:7:bot')).toBe('bot')
+    expect(cellLayer('hand:player')).toBe(null)
+    expect(crossingIndex('aura:5')).toBe(5)
+    expect(crossingIndex('cell:5:top')).toBe(null)
+  })
 
   it('routeZone sends sites to the site slot and everything else to the surface', () => {
     expect(routeZone('s7', 'cell:3:top')).toBe('site:3')

@@ -24,6 +24,8 @@ import {
   manualMoveAllowed,
   attackCrossingPickable,
   pickAttackCrossing,
+  cellSquare,
+  crossingIndex,
 } from '../store.js'
 
 const props = defineProps({
@@ -117,10 +119,7 @@ const refuseReason = computed(() => {
 const moveLegal = computed(() => armedMoveLegal(props.zone))
 
 // While a grid-target ability is armed, this zone's square may be a legal pick.
-const square = computed(() => {
-  const m = /^cell:(\d+):/.exec(props.zone)
-  return m ? Number(m[1]) : null
-})
+const square = computed(() => cellSquare(props.zone))
 const gridPickable = computed(
   () =>
     square.value != null &&
@@ -131,10 +130,7 @@ const gridPickable = computed(
 
 // While an oversized unit's attack is armed, a crossing it can step to is a
 // pick for where it attacks from; `chosen` marks the one picked.
-const crossing = computed(() => {
-  const m = /^aura:(\d+)$/.exec(props.zone)
-  return m ? Number(m[1]) : null
-})
+const crossing = computed(() => crossingIndex(props.zone))
 const crossingPick = computed(
   () => crossing.value != null && attackCrossingPickable(crossing.value)
 )

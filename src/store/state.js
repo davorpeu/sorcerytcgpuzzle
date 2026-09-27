@@ -342,3 +342,26 @@ export const state = reactive({
   hideAtlas: false,
   hideSpellbook: false,
 })
+
+// ---------- zone ids ----------
+// Board zones are `site:N` (a square's site slot), `cell:N:top|bot` (its
+// surface and below) and `aura:M` (a grid crossing). These read them, so
+// components don't each carry the regexes.
+
+// The square of a surface/below zone, or null for any other zone.
+export function cellSquare(zone) {
+  const m = /^cell:(\d+):(top|bot)$/.exec(zone || '')
+  return m ? Number(m[1]) : null
+}
+
+// 'top' (surface) or 'bot' (below) for a cell zone, else null.
+export function cellLayer(zone) {
+  const m = /^cell:\d+:(top|bot)$/.exec(zone || '')
+  return m ? m[1] : null
+}
+
+// The crossing index of an aura zone, or null.
+export function crossingIndex(zone) {
+  const m = /^aura:(\d+)$/.exec(zone || '')
+  return m ? Number(m[1]) : null
+}

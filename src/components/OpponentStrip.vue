@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
-import { state, ui, isStoryChoiceTarget, canActivateTarget } from '../store.js'
+import { state, ui, isStoryChoiceTarget, canActivateTarget, cellSquare, playerControls } from '../store.js'
 import Hand from './Hand.vue'
 import StatsBar from './StatsBar.vue'
 
@@ -33,8 +33,8 @@ const pileLook = (zone, faceUp) => {
 const avatarInPlay = computed(() =>
   Object.entries(state.zones).some(
     ([zone, ids]) =>
-      zone.startsWith('cell:') &&
-      ids.some((id) => state.cards[id]?.avatar && state.cards[id]?.enemy)
+      cellSquare(zone) != null &&
+      ids.some((id) => state.cards[id]?.avatar && !playerControls(id))
   )
 )
 

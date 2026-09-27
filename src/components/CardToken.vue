@@ -46,6 +46,7 @@ import {
   zoneOf,
   canCast,
   castShortfall,
+  cellSquare,
 } from '../store.js'
 
 const props = defineProps({
@@ -62,7 +63,7 @@ const underWord = computed(() =>
 // Buried or submerged, said in words on a strip across the foot of the card.
 // The name is left off: the art right above it already shows which card it is.
 const underText = computed(() => (underWord.value === 'submerged' ? 'Submerged' : 'Buried'))
-const onBoard = computed(() => /^cell:\d+:(top|bot)$/.test(props.from))
+const onBoard = computed(() => cellSquare(props.from) != null)
 const tapped = computed(() => isTapped(props.cardId))
 // A spell you may cast from outside your hand -- out of a swapped cemetery, or
 // from banishment by a cast permit -- glows so it isn't missed.
