@@ -1120,6 +1120,20 @@ const SURVIVAL = {
   void: { keyword: 'voidwalk', verb: 'was banished', name: 'Banished', banish: true },
 }
 
+// Units set up where they can't survive: the survival check only runs after a
+// move, so the start position shows them alive and the first move of any card
+// kills them. The editor warns about these but allows them.
+// Each: { id, region, keyword } -- e.g. region 'underground', keyword 'burrowing'.
+export function survivalRisks() {
+  const out = []
+  for (const u of boardUnits()) {
+    if (!zoneOf(u.id)?.startsWith('cell:')) continue
+    const rule = SURVIVAL[u.region]
+    if (rule && !hasKeyword(u.id, rule.keyword)) out.push({ id: u.id, region: u.region, keyword: rule.keyword })
+  }
+  return out
+}
+
 // After a placement, any unit sitting in a region it can't survive (underwater
 // without Submerge, underground without Burrowing, the void without Voidwalk)
 // dies to its cemetery or is banished. A consequence of the causing entry, not a

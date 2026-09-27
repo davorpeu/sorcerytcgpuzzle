@@ -33,6 +33,7 @@ import {
   clickZone,
   zoneRefuses,
   zoneArmed,
+  survivalRisks,
   markSaved,
   startRecording,
   stopRecording,
@@ -122,6 +123,11 @@ describe('zone helpers', () => {
     expect(cellLayer('hand:player')).toBe(null)
     expect(crossingIndex('aura:5')).toBe(5)
     expect(crossingIndex('cell:5:top')).toBe(null)
+  })
+
+  it('flags a unit set up where it cannot survive (allowed, but it dies on the first move)', () => {
+    // The fixture buries a Skeleton (no Burrowing) under square 12.
+    expect(survivalRisks()).toEqual([{ id: 'sk2', region: 'underground', keyword: 'burrowing' }])
   })
 
   it('routeZone sends sites to the site slot and everything else to the surface', () => {

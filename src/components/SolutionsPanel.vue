@@ -4,10 +4,11 @@
 // inline confirm before a line is deleted. While recording it is the live list
 // of the line being recorded.
 import { computed, nextTick, reactive, ref, watch } from 'vue'
-import { state, startRecording, removeSolutionLine, shortestLine } from '../store.js'
+import { state, startRecording, removeSolutionLine, shortestLine, survivalRisks } from '../store.js'
 import MoveEntry from './MoveEntry.vue'
 import ConfirmInline from './ConfirmInline.vue'
-import { plural } from '../format.js'
+import { plural, survivalReason } from '../format.js'
+import CardThumb from './CardThumb.vue'
 
 
 const root = ref(null)
@@ -52,6 +53,10 @@ watch(
 const count = computed(() => state.solutions.length)
 
 const shortestLen = shortestLine
+
+// Units set up where they can't survive: the first move of any card kills them,
+// so every recorded line starts by losing them. Allowed; said here once.
+const risks = computed(() => (state.recording ? [] : survivalRisks()))
 
 const countWord = computed(() => {
   if (state.recording) return count.value ? `${count.value} saved, 1 recording` : 'Recording'
@@ -177,6 +182,16 @@ function confirmDelete() {
         No solution recorded yet — until you record one, players can move cards but the puzzle can
         never be detected as solved.
       </p>
+      <!-- Allowed, but worth knowing before recording: these don't survive the
+           first move. The card is shown by its art; the reason in words. -->
+      <div v-if="risks.length" class="warnline risks" role="note">
+        <span>Won't survive the first move:</span>
+        <ul>
+          <li v-for="r in risks" :key="r.id">
+            <CardThumb :id="r.id" size="sm" /> {{ survivalReason(r.region) }}
+          </li>
+        </ul>
+      </div>
       <button type="button" class="btn rec" @click="startRecording">
         <span class="dot" aria-hidden="true"></span>
         {{ count ? `Record solution ${count + 1}` : 'Record solution' }}
@@ -336,6 +351,24 @@ function confirmDelete() {
   justify-content: center;
   font-size: 11px;
   font-weight: 700;
+}
+/* The list of units at risk sits under the warning line's text. */
+.warnline.risks {
+  flex-wrap: wrap;
+}
+.warnline.risks ul {
+  flex-basis: 100%;
+  margin: 4px 0 0;
+  padding: 0 0 0 22px;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.warnline.risks li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 .btn.rec {
   display: flex;

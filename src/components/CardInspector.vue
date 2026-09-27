@@ -23,8 +23,10 @@ import {
   playerControls,
   GRID_SIZE,
   cellLayer,
+  survivalRisks,
 } from '../store.js'
 import CardThumb from './CardThumb.vue'
+import { survivalWarning } from '../format.js'
 
 // The selected card, large. Everything printed on it -- name, type, cost,
 // threshold, power, rules text -- is already in the art, so the list under it
@@ -62,6 +64,11 @@ const changes = computed(() => {
   const zone = zoneOf(cid) || ''
   if (cellLayer(zone) === 'bot')
     out.push({ text: zoneRegion(zone) === 'underwater' ? 'Submerged' : 'Buried' })
+  // Set up where it can't survive: allowed, but it won't last past the first move.
+  if (state.mode === 'editor') {
+    const risk = survivalRisks().find((r) => r.id === cid)
+    if (risk) out.push({ text: survivalWarning(risk.region), tone: 'bad' })
+  }
   if (isTapped(cid)) out.push({ text: 'Tapped' })
   if (tapBlockedBySickness(cid)) out.push({ text: "Summoned this turn — can't tap yet" })
   const dmg = damageOf(cid)

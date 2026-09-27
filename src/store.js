@@ -247,6 +247,7 @@ export {
 } from './store/abilities.js'
 export {
   spellAbility,
+  survivalRisks,
   wardTokenArt,
 } from './store/effects.js'
 export {
