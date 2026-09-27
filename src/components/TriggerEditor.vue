@@ -883,6 +883,7 @@ const ids = { name: `ab-name-${++uid}`, text: `ab-text-${uid}`, add: `ab-add-${u
                             <span class="group-label">{{ grp.label }}</span>
                             <span v-if="!isOpen(current, `fx:${grp.key}`)" class="lo group-recap">{{ effectsRecap(grp.view.effects) }}</span>
                           </button>
+                          <!-- eslint-disable-next-line vue/valid-v-for -- a 0/1-item list used as a local alias; keyed by its group -->
                           <template v-for="view in isOpen(current, `fx:${grp.key}`) ? [grp.view] : []" :key="grp.key">
                             <div v-for="(eff, i) in view.effects" :key="i" class="fx">
                               <select :value="opValue(eff)" class="text-input op" aria-label="Effect" @change="onOpChange(view, i, $event.target.value)">

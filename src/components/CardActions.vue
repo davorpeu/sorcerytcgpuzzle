@@ -77,8 +77,6 @@ const onBoard = computed(
 const oversizedSelected = computed(() => !!ui.selected && isOversized(ui.selected));
 const editing = computed(() => state.mode === "editor" && !state.recording);
 const inPool = computed(() => zone.value === "pool");
-const inHand = computed(() => zone.value?.startsWith("hand:"));
-const inGrave = computed(() => zone.value?.startsWith("grave:"));
 // Where a spell can be cast from: the hand, or the cemetery if the card grants
 // it. Drives the Cast button / drag hint so a graveyard-castable spell is playable.
 // A cast permit (banishAndCast) makes a spell castable from where it lies too.

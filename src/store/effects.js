@@ -86,8 +86,6 @@ import { removeFromZones } from './persistence.js'
 
 // ---------- effect ops ----------
 
-const STRUCTURAL_OPS = new Set(['grantFrom', 'release'])
-
 export const otherSide = (side) => (side === 'player' ? 'opponent' : 'player')
 
 // The cards a selector picks (see EFFECT_WHO). `ctx` is the resolving

@@ -4,7 +4,7 @@
 // thumbnail's aria-label for screen readers. (A card with no art still shows
 // its name, as the board does: then the name is the only way to tell it.)
 import { computed } from 'vue'
-import { state, zoneLabel, cardName } from '../store.js'
+import { state, zoneLabel } from '../store.js'
 import CardThumb from './CardThumb.vue'
 
 const props = defineProps({

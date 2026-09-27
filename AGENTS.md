@@ -13,9 +13,10 @@ npm run build     # production IIFE bundle -> dist/sorcery-puzzle.js
 npm run build:wp  # build + copy bundle into the plugin + produce sorcery-puzzle.zip at repo root
 npm run preview   # serve the production build
 npm test          # Vitest: solve logic + puzzle file format (tests/store.test.js)
+npm run lint      # ESLint: bugs only (recommended + vue/essential), no style rules
 ```
 
-Tests live in `tests/` and reach store internals through the `__test` export at the end of `src/store.js` (tests only). `tests/fixtures/` holds real puzzle files, including an old version-1 file — keep them loading. `it.fails` marks a known bug; turn it into `it` when the bug is fixed. There is no linter or type checker; don't invent `npm run lint`.
+Tests live in `tests/` and reach store internals through the `__test` export at the end of `src/store.js` (tests only). `tests/fixtures/` holds real puzzle files, including an old version-1 file — keep them loading. `it.fails` marks a known bug; turn it into `it` when the bug is fixed. There is no formatter (the code mixes two styles; don't reformat files you aren't changing) and no type checker. CI runs lint, tests and the build; all three must pass.
 
 ## Big picture
 
