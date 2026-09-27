@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
-import { state } from '../store.js'
+import { state, ui, isStoryChoiceTarget, canActivateTarget } from '../store.js'
 import Hand from './Hand.vue'
 import StatsBar from './StatsBar.vue'
 
@@ -52,6 +52,20 @@ watch(
   },
   { immediate: true }
 )
+
+// A trigger or ability waiting on a card in one of the opponent's piles opens
+// the drawer, or the pick would be unreachable (the hand tray does the same
+// for your piles).
+const pileHasTarget = computed(
+  () =>
+    !!(ui.storyChoice || ui.activating) &&
+    piles.some(([zone]) =>
+      (state.zones[zone] || []).some((id) => isStoryChoiceTarget(id) || canActivateTarget(id))
+    )
+)
+watch(pileHasTarget, (has) => {
+  if (has) open.value = true
+})
 </script>
 
 <template>
