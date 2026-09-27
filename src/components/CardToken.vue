@@ -317,7 +317,10 @@ function onClick() {
     </span>
     <!-- Card type reads from the coloured ring around the art (see the type
          border rules in the stylesheet), not a text badge. -->
-    <span v-if="isUnder" class="under-strip" aria-hidden="true">{{ underText }}</span>
+    <span v-if="isUnder" class="under-strip" aria-hidden="true"
+      ><span class="under-word">{{ underText }}</span
+      ><span class="under-glyph">{{ underWord === 'submerged' ? '≈' : '▾' }}</span></span
+    >
     <!-- Can't be cast yet: the art greys out and this names the gap. -->
     <span v-if="shortText" class="short-strip" aria-hidden="true">{{ shortText }}</span>
     <!-- Damage counters on the card, a small red pip so a wounded unit reads at
@@ -549,6 +552,20 @@ function onClick() {
 .under-strip {
   background: color-mix(in srgb, var(--c-felt-deep) 88%, transparent);
   border: 1px solid var(--c-line-strong);
+  /* Too narrow for the word (small cards on a phone): a glyph instead, rather
+     than a clipped "B…". The legend explains it; the card is darkened too. */
+  container-type: inline-size;
+}
+.under-glyph {
+  display: none;
+}
+@container (max-width: 40px) {
+  .under-word {
+    display: none;
+  }
+  .under-glyph {
+    display: inline;
+  }
 }
 .short-strip {
   background: var(--c-danger-deep);

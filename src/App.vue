@@ -274,7 +274,7 @@ watch(
           <li>
             <span class="legend-badge under">Buried</span> /
             <span class="legend-badge under">Submerged</span>
-            Card under a land / water site — darkened; drag or move it onto the lower strip
+            (▾ / ≈ on small cards) Card under a land / water site — darkened; drag or move it onto the lower strip
             of a square to send it below, the upper part to surface it
           </li>
           <li>
@@ -586,14 +586,13 @@ watch(
   color: var(--c-gold);
 }
 
+/* The strip wraps on phones (StatsBar), so the row grows with it rather than
+   clipping or scrolling sideways. */
 .you-stats {
   min-width: 0;
-  height: 48px;
+  min-height: 48px;
   display: flex;
   align-items: center;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: thin;
 }
 
 .area-right :deep(.stat-side) {

@@ -322,8 +322,8 @@ watch(pileHasTarget, (has) => {
   }
 }
 
-/* Phone (.mockup/phone.html): identity and stats share the first row (the
-   stats scroll sideways inside it); the pile counters wrap as "Hand 3"
+/* Phone (.mockup/phone.html): identity, then the stats on a row of their own
+   (wrapping, never scrolling sideways); the pile counters wrap as "Hand 3"
    pairs under them, still one button opening the drawer. */
 @media (max-width: 700px) {
   .opp-strip {
@@ -340,8 +340,11 @@ watch(pileHasTarget, (has) => {
     font-size: 17px;
   }
 
+  /* The stats get a row of their own, so they wrap in the full width. */
   .opp-stats {
-    height: 48px;
+    grid-column: 1 / -1;
+    height: auto;
+    overflow: visible;
   }
 
   .opp-piles {

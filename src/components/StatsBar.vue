@@ -623,6 +623,15 @@ const step = (what, delta) =>
   border: 0;
   border-radius: 0;
 }
+/* Phones: the thresholds wrap under life and mana instead of running off the
+   edge (a sideways-scrolling row hid them with no sign they were there). */
+@media (max-width: 700px) {
+  .stats-strip,
+  .stats-strip .thresholds {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+}
 
 .stats-strip .stats-main {
   gap: var(--sp-5);
