@@ -147,6 +147,16 @@ const crossingChosen = computed(
 // every real control, and do nothing when activated.
 const tabbable = computed(() => armed.value && props.keyboard)
 
+// What activating the zone does, for screen readers: the cues below are drawn
+// as line styles and words, and this says the same in the accessible name.
+const actionLabel = computed(() => {
+  const z = zoneLabel(props.zone)
+  if (crossingChosen.value) return `Attacking from ${z}`
+  if (crossingPick.value) return `Attack from ${z}`
+  if (gridPickable.value) return `Pick ${z}`
+  return `Move here: ${z}`
+})
+
 // A spell dragged/clicked from a castable source into play is cast at the drop
 // location (a magic targets what's there; a permanent enters the realm), not
 // moved. The source is the hand, or the cemetery for a card that grants it --
@@ -211,7 +221,8 @@ function onClick() {
     :class="{ over, armed, reachable: moveLegal === true, unreachable: moveLegal === false, 'grid-pick': gridPickable, 'crossing-pick': crossingPick, 'crossing-chosen': crossingChosen, 'drag-accept': dragCue === 'accept', 'drag-refuse': dragCue === 'refuse', 'refused-over': refusedOver && !!refuseReason }"
     :role="tabbable ? 'button' : null"
     :tabindex="tabbable ? 0 : null"
-    :aria-label="tabbable ? `Move here: ${zoneLabel(zone)}` : null"
+    :aria-label="tabbable ? actionLabel : null"
+    :aria-disabled="tabbable && moveLegal === false ? 'true' : null"
     @dragover="onDragOver"
     @dragleave="onDragLeave"
     @drop.prevent="onDrop"
@@ -220,6 +231,9 @@ function onClick() {
     @keydown.space.prevent="onClick"
   >
     <slot />
+    <!-- A square an armed ability may pick: said in a word, once per square. -->
+    <span v-if="gridPickable && zone.endsWith(':top')" class="cue-word" aria-hidden="true">Pick</span>
+    <span v-if="crossingChosen" class="cue-check" aria-hidden="true">✓</span>
     <span v-if="refusedOver && refuseReason" class="refuse-reason" role="status">{{ refuseReason }}</span>
     <span v-else-if="over && dragCue === 'accept'" class="accept-label" aria-hidden="true">Drop in {{ zoneLabel(zone) }}</span>
   </div>
@@ -230,7 +244,7 @@ function onClick() {
    is cued as a whole by Board (squareCue), so only the other zones -- the
    crossings an oversized unit steps between -- mark themselves here. */
 .dropzone.reachable:not(.cell-half) {
-  box-shadow: inset 0 0 0 2px rgba(80, 200, 120, 0.8);
+  box-shadow: inset 0 0 0 2px var(--cue-go);
 }
 .dropzone.unreachable:not(.cell-half) {
   opacity: 0.55;
@@ -318,16 +332,63 @@ function onClick() {
   background: color-mix(in srgb, var(--c-felt-deep) 70%, transparent);
   color: var(--c-gold);
 }
+/* Picks, told apart by line style and a word or glyph, not colour alone:
+   a square an ability may pick is dashed with a "Pick" tag; a crossing an
+   oversized attacker may attack from has a dashed ring, the chosen one a solid
+   ring and a check. */
 .dropzone.grid-pick {
-  box-shadow: inset 0 0 0 2px rgba(200, 120, 255, 0.85);
+  outline: 2px dashed var(--cue-go);
+  outline-offset: -2px;
   cursor: pointer;
 }
+/* On a square the site art covers the band, so the frame is lifted over it
+   (as for the hovered-half frames above). */
+.dropzone.cell-half.grid-pick {
+  outline: none;
+}
+.dropzone.cell-half.grid-pick::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  border: 2px dashed var(--cue-go);
+  border-radius: var(--r-sm);
+  pointer-events: none;
+}
 .dropzone.crossing-pick {
-  box-shadow: 0 0 0 3px rgba(255, 170, 60, 0.9);
+  outline: 2px dashed var(--cue-fight);
+  outline-offset: 2px;
   cursor: pointer;
 }
 .dropzone.crossing-chosen {
-  box-shadow: 0 0 0 4px rgba(255, 90, 60, 1), 0 0 12px 3px rgba(255, 90, 60, 0.6);
+  outline: 3px solid var(--cue-fight);
+  outline-offset: 2px;
+  box-shadow: 0 0 12px 3px color-mix(in srgb, var(--cue-fight) 60%, transparent);
+}
+.cue-word,
+.cue-check {
+  position: absolute;
+  z-index: 6;
+  pointer-events: none;
+  font-family: var(--font-ui);
+  font-weight: 700;
+  color: var(--c-ink);
+}
+.cue-word {
+  top: 5px;
+  left: 5px;
+  padding: 1px 7px;
+  border-radius: var(--r-pill);
+  background: var(--cue-go);
+  font-size: var(--fs-xs);
+}
+.cue-check {
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--cue-fight);
+  font-size: var(--fs-lg);
+  text-shadow: 0 0 3px var(--c-felt-deep);
 }
 @media (prefers-reduced-motion: no-preference) {
   .dropzone.grid-pick {
@@ -337,11 +398,10 @@ function onClick() {
 @keyframes grid-pick-pulse {
   0%,
   100% {
-    box-shadow: inset 0 0 0 2px rgba(200, 120, 255, 0.5);
+    box-shadow: inset 0 0 0 0 transparent;
   }
   50% {
-    box-shadow: inset 0 0 0 3px rgba(200, 120, 255, 1),
-      0 0 10px 2px rgba(200, 120, 255, 0.6);
+    box-shadow: inset 0 0 12px 2px color-mix(in srgb, var(--cue-go) 55%, transparent);
   }
 }
 </style>
