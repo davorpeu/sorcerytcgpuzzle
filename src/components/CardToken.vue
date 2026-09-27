@@ -325,6 +325,51 @@ function onClick() {
 
 <style scoped>
 /* Moved from style.css (kept first, so the component's own rules below still win). */
+/* Underground cards render on top like everything else, but darkened. */
+.card-token.is-under img,
+.card-token.is-under .card-name {
+  filter: brightness(0.55) saturate(0.85);
+}
+
+.card-token img {
+  width: 100%;
+  display: block;
+  border-radius: 8px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+  transition: transform 0.15s ease;
+}
+
+.card-token .card-name {
+  display: block;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 14px 4px;
+  font-size: 11px;
+  text-align: center;
+  word-break: break-word;
+  transition: transform 0.15s ease;
+}
+
+.card-token img.flipped,
+.card-token .card-name.flipped {
+  transform: rotate(180deg);
+}
+
+.card-token.is-tapped img,
+.card-token.is-tapped .card-name {
+  transform: rotate(90deg);
+  opacity: 0.9;
+}
+
+.card-token.is-tapped img.flipped,
+.card-token.is-tapped .card-name.flipped {
+  transform: rotate(270deg);
+  opacity: 0.9;
+}
+
+/* Moved from style.css (kept first, so the component's own rules below still win). */
 .carry-stack {
   position: absolute;
   inset: 0;
