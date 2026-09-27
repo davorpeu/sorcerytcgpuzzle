@@ -731,9 +731,11 @@ const step = (what, delta) =>
 }
 
 @media (pointer: coarse) {
+  /* Steppers sit in dense rows, so 36px rather than the 44px the other touch
+     controls get. */
   .adj-btn {
-    min-width: 28px;
-    height: 28px;
+    min-width: 36px;
+    height: 36px;
     font-size: var(--fs-md);
   }
 }
