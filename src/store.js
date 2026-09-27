@@ -18,6 +18,7 @@ export {
   defaultStats,
   emitFx,
   emptyZones,
+  remote,
   selectCard,
   state,
   ui,

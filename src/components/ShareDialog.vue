@@ -1,6 +1,6 @@
 <script setup>
 import { nextTick, onBeforeUnmount, ref, useId, watch } from 'vue'
-import { state, config, shareLink, serializePortable, loadPuzzle, wouldLoseWork } from '../store.js'
+import { state, config, remote, shareLink, serializePortable, loadPuzzle, wouldLoseWork } from '../store.js'
 import { flash } from '../editorToast.js'
 import ConfirmDialog from './ConfirmDialog.vue'
 
@@ -59,7 +59,7 @@ async function onCopyLink() {
     await navigator.clipboard.writeText(link.url)
     if (!link.oversized) linkState.value = 'copied'
     // On the server the puzzle gets a short ?puzzle= link once it's saved.
-    else if (config.apiUrl && config.canEdit) linkState.value = 'long-server'
+    else if (remote() && config.canEdit) linkState.value = 'long-server'
     else linkState.value = 'long-local'
   } catch {
     linkState.value = 'blocked'

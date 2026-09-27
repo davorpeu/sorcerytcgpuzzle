@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from 'vue'
 import {
   state,
-  config,
+  remote,
   listPuzzles,
   loadById,
   deletePuzzle,
@@ -190,7 +190,7 @@ async function onLoadDaily() {
     <div class="dh">
       <h2 :id="`${uid}-title`">Puzzles</h2>
       <span :id="`${uid}-where`" class="help">
-        {{ config.apiUrl ? 'Saved on the site' : 'Saved in this browser' }}
+        {{ remote() ? 'Saved on the site' : 'Saved in this browser' }}
       </span>
       <button ref="closeBtn" type="button" class="btn" @click="emit('close')">Close</button>
     </div>

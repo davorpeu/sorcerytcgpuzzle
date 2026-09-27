@@ -6,7 +6,7 @@
 import { computed, ref } from 'vue'
 import {
   state,
-  config,
+  remote,
   hasUnsavedWork,
   savePuzzle,
   newPuzzle,
@@ -32,7 +32,7 @@ const dirty = computed(() => (savedTick.value, hasUnsavedWork()))
 
 const saveState = computed(() => {
   if (saving.value)
-    return { glyph: '', word: 'Saving…', sub: config.apiUrl ? 'To the site' : 'In this browser' }
+    return { glyph: '', word: 'Saving…', sub: remote() ? 'To the site' : 'In this browser' }
   if (empty.value) return { glyph: 'full', word: 'All changes saved', sub: 'Nothing to save yet' }
   if (dirty.value)
     return {
