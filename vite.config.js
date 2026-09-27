@@ -17,9 +17,10 @@ export default defineConfig({
     chunkSizeWarningLimit: 800,
     rollupOptions: {
       output: {
+        // An IIFE is always one file: Vite turns code splitting off for it, so
+        // dynamic imports are inlined without any extra option.
         format: 'iife',
         name: 'SorceryPuzzleBundle',
-        inlineDynamicImports: true,
         entryFileNames: 'sorcery-puzzle.js',
         chunkFileNames: 'sorcery-puzzle-[name].js',
         assetFileNames: 'sorcery-puzzle.[ext]',

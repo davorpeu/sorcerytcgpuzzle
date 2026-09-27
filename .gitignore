@@ -12,3 +12,6 @@ cards_test/
 *.stackdump
 SorceryRulebook.pdf
 .claude/settings.local.json
+# Build output of `npm run build:wp` (upload it from disk; it's rebuilt each time)
+sorcery-puzzle.zip
+redesign/wp-test/
