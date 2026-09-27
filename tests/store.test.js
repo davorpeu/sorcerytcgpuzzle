@@ -16,6 +16,9 @@ import {
   beginMove,
   moveCard,
   solveStatus,
+  startRecording,
+  stopRecording,
+  wouldLoseWork,
   __test,
 } from '../src/store.js'
 
@@ -126,6 +129,14 @@ describe('puzzle files', () => {
     expect(() => loadPuzzle(newer)).toThrow(/newer version/)
     expect(state.puzzleName).toBe(before.name)
     expect(state.initialZones).toEqual(before.initial)
+  })
+
+  it('counts a solution being recorded as work that loading would lose', () => {
+    loadFixture()
+    state.mode = 'editor'
+    startRecording()
+    expect(wouldLoseWork()).toBe(true)
+    stopRecording()
   })
 
   it('saves and loads back to the same puzzle', () => {

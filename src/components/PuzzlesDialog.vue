@@ -8,9 +8,11 @@ import {
   deletePuzzle,
   loadDaily,
   localToday,
+  wouldLoseWork,
 } from '../store.js'
 import { flash } from '../editorToast.js'
 import ConfirmInline from './ConfirmInline.vue'
+import ConfirmDialog from './ConfirmDialog.vue'
 
 // The saved puzzles, grouped by what players see: upcoming (dated, not yet
 // live), released (live or in the archive) and drafts (no date). Grouping is
@@ -124,6 +126,24 @@ function statusWord(p, group) {
 const nameOf = (p) => p.name || 'Untitled puzzle'
 const deleteMsg = (p) => `Delete "${nameOf(p)}" for good? This can't be undone.`
 
+// Opening another puzzle replaces this one: ask first if that loses work.
+const replacing = ref(null) // { title, message, run } while asking
+function guard(title, run) {
+  if (!wouldLoseWork()) return run()
+  replacing.value = {
+    title,
+    message: state.recording
+      ? "The solution you're recording and any unsaved changes will be lost."
+      : 'The cards, board and solutions here have not been saved.',
+    run,
+  }
+}
+function confirmReplace() {
+  const r = replacing.value
+  replacing.value = null
+  r?.run()
+}
+
 async function onOpen(p, play) {
   const ok = await loadById(p.id, play ? undefined : { play: false })
   if (!ok) {
@@ -207,7 +227,7 @@ async function onLoadDaily() {
                   type="button"
                   class="btn small"
                   :aria-label="`Play ${nameOf(p)}`"
-                  @click="onOpen(p, true)"
+                  @click="guard(`Play ${nameOf(p)}?`, () => onOpen(p, true))"
                 >
                   Play
                 </button>
@@ -215,7 +235,7 @@ async function onLoadDaily() {
                   type="button"
                   class="btn small"
                   :aria-label="`Edit ${nameOf(p)}`"
-                  @click="onOpen(p, false)"
+                  @click="guard(`Edit ${nameOf(p)}?`, () => onOpen(p, false))"
                 >
                   Edit
                 </button>
@@ -236,10 +256,19 @@ async function onLoadDaily() {
       </template>
     </div>
     <div class="df">
-      <button type="button" class="btn" @click="onLoadDaily">Load today's puzzle</button>
+      <button type="button" class="btn" @click="guard('Load today\x27s puzzle?', onLoadDaily)">Load today's puzzle</button>
       <span class="sp"></span>
       <span class="help">Edit opens it here; Play opens it in play test.</span>
     </div>
+    <ConfirmDialog
+      :open="!!replacing"
+      :title="replacing?.title || ''"
+      :message="replacing?.message || ''"
+      confirm-label="Open it anyway"
+      keep-label="Keep editing"
+      @confirm="confirmReplace"
+      @cancel="replacing = null"
+    />
   </dialog>
 </template>
 

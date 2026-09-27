@@ -319,6 +319,7 @@ export {
   deletePuzzle,
   fingerprint,
   hasUnsavedWork,
+  wouldLoseWork,
   initFromUrl,
   listArchive,
   listPuzzles,

@@ -202,6 +202,11 @@ export function markSaved() {
 export const hasUnsavedWork = () =>
   config.canEdit && !!Object.keys(state.cards).length && fingerprint() !== savedPrint
 
+// Loading another puzzle replaces the open one, so this is what would be lost:
+// unsaved edits and, while recording, the line being recorded (the draft isn't
+// part of the saved state, so hasUnsavedWork alone doesn't see it).
+export const wouldLoseWork = () => state.recording || hasUnsavedWork()
+
 export function serialize() {
   return {
     version: FORMAT_VERSION,

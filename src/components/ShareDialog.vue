@@ -1,7 +1,8 @@
 <script setup>
 import { nextTick, onBeforeUnmount, ref, useId, watch } from 'vue'
-import { state, config, shareLink, serializePortable, loadPuzzle } from '../store.js'
+import { state, config, shareLink, serializePortable, loadPuzzle, wouldLoseWork } from '../store.js'
 import { flash } from '../editorToast.js'
+import ConfirmDialog from './ConfirmDialog.vue'
 
 // Copy link / export / import for the puzzle on the table. The link result is
 // said inside the dialog (it can need the link itself shown); export and
@@ -94,6 +95,17 @@ async function onExport() {
 const looksLikePuzzle = (d) =>
   !!d && typeof d === 'object' && !Array.isArray(d) && !!d.cards && typeof d.cards === 'object'
 
+// Importing replaces the open puzzle: ask first if that loses work.
+const confirmImport = ref(false)
+function startImport() {
+  if (wouldLoseWork()) confirmImport.value = true
+  else importInput.value.click()
+}
+function importAnyway() {
+  confirmImport.value = false
+  importInput.value.click()
+}
+
 async function onImport(e) {
   const file = e.target.files[0]
   e.target.value = ''
@@ -167,7 +179,7 @@ async function onImport(e) {
         </p>
         <div class="row">
           <button type="button" class="btn" @click="onExport">Export file</button>
-          <button type="button" class="btn" @click="importInput.click()">Import file…</button>
+          <button type="button" class="btn" @click="startImport">Import file…</button>
         </div>
         <input
           ref="importInput"
@@ -179,6 +191,19 @@ async function onImport(e) {
         />
       </section>
     </div>
+    <ConfirmDialog
+      :open="confirmImport"
+      title="Import a puzzle file?"
+      :message="
+        state.recording
+          ? 'The imported puzzle replaces this one. The solution you\x27re recording and any unsaved changes will be lost.'
+          : 'The imported puzzle replaces this one, and its changes have not been saved.'
+      "
+      confirm-label="Choose a file"
+      keep-label="Keep editing"
+      @confirm="importAnyway"
+      @cancel="confirmImport = false"
+    />
   </dialog>
 </template>
 
