@@ -10,10 +10,12 @@ import {
   solveStatus,
   playLocked,
   MAX_MISTAKES,
+  shortestLine,
 } from '../store.js'
 import EditorToast from './EditorToast.vue'
 import EditorPuzzleTitle from './EditorPuzzleTitle.vue'
 import EditorHeaderActions from './EditorHeaderActions.vue'
+import { plural } from '../format.js'
 
 // The flash message lives in App (the editor sidebar raises them too); the
 // header is just where it is shown.
@@ -22,13 +24,8 @@ defineProps({
 })
 
 // Shortest recorded solution line; what the play header advertises.
-const targetMoves = computed(() =>
-  state.solutions.length
-    ? Math.min(...state.solutions.map((l) => l.length))
-    : 0
-)
+const targetMoves = shortestLine
 
-const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
 
 // "Move N of M" while the attempt is still within the shortest line; past it
 // (or before the first move, or with no recorded line) a plain count reads

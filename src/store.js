@@ -296,6 +296,7 @@ export {
   removeSolutionLine,
   resetPlay,
   resetPlayTracking,
+  shortestLine,
   solveStatus,
   startRecording,
   stopRecording,

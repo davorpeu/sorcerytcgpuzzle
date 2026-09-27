@@ -2,8 +2,8 @@
 import { computed } from 'vue'
 import { state, zoneLabel, cardName } from '../store.js'
 import MoveEntry from './MoveEntry.vue'
+import { plural } from '../format.js'
 
-const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
 
 // The ability an entry used: on the card itself, else on any card -- a gained
 // ability (an assumed form) lives on the granted card, which may since have

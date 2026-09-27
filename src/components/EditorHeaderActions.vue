@@ -17,8 +17,8 @@ import { flash } from '../editorToast.js'
 import ShareDialog from './ShareDialog.vue'
 import PuzzlesDialog from './PuzzlesDialog.vue'
 import ConfirmDialog from './ConfirmDialog.vue'
+import { plural } from '../format.js'
 
-const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
 
 const saving = ref(false)
 const lastSaved = ref('') // "HH:MM" of this session's last successful save

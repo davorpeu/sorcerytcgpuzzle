@@ -4,6 +4,7 @@ import { state, ui, zoneOf, isStoryChoiceTarget, canActivateTarget } from '../st
 import Hand from './Hand.vue'
 import DropZone from './DropZone.vue'
 import CardToken from './CardToken.vue'
+import { plural } from '../format.js'
 
 // Your side of the table, as it sits on a real one: decks on the left, the
 // hand fanned in the middle, the public piles on the right.
@@ -66,7 +67,6 @@ watch(pileWithTarget, (zone) => {
   if (zone) open.value = zone
 })
 
-const plural = (n) => `${n} card${n === 1 ? '' : 's'}`
 </script>
 
 <template>
@@ -78,7 +78,7 @@ const plural = (n) => `${n} card${n === 1 ? '' : 's'}`
             :ref="(el) => (pileBtns[d.zone] = el)"
             type="button"
             class="pile-btn"
-            :aria-label="`Your ${d.label.toLowerCase()}, ${plural(count(d.zone))} face down${hiddenEmpty(d) ? ', hidden from players' : ''}`"
+            :aria-label="`Your ${d.label.toLowerCase()}, ${plural(count(d.zone), 'card')} face down${hiddenEmpty(d) ? ', hidden from players' : ''}`"
             :aria-expanded="open === d.zone"
             aria-controls="tray-drawer"
             @click="onPile(d.zone)"
@@ -106,7 +106,7 @@ const plural = (n) => `${n} card${n === 1 ? '' : 's'}`
             :ref="(el) => (pileBtns[p.zone] = el)"
             type="button"
             class="pile-btn"
-            :aria-label="`Your ${p.label.toLowerCase()}, ${plural(count(p.zone))}`"
+            :aria-label="`Your ${p.label.toLowerCase()}, ${plural(count(p.zone), 'card')}`"
             :aria-expanded="open === p.zone"
             aria-controls="tray-drawer"
             @click="onPile(p.zone)"
@@ -140,7 +140,7 @@ const plural = (n) => `${n} card${n === 1 ? '' : 's'}`
     >
       <div class="drawer-head">
         <span class="drawer-title">{{ openPile.label }}</span>
-        <span class="drawer-count">{{ plural(count(openPile.zone)) }}</span>
+        <span class="drawer-count">{{ plural(count(openPile.zone), 'card') }}</span>
         <button type="button" class="btn drawer-close" @click="close">Close</button>
       </div>
       <DropZone :zone="openPile.zone" class="drawer-cards">

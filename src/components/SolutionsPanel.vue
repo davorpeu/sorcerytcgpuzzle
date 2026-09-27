@@ -4,11 +4,11 @@
 // inline confirm before a line is deleted. While recording it is the live list
 // of the line being recorded.
 import { computed, nextTick, reactive, ref, watch } from 'vue'
-import { state, startRecording, removeSolutionLine } from '../store.js'
+import { state, startRecording, removeSolutionLine, shortestLine } from '../store.js'
 import MoveEntry from './MoveEntry.vue'
 import ConfirmInline from './ConfirmInline.vue'
+import { plural } from '../format.js'
 
-const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
 
 const root = ref(null)
 
@@ -51,9 +51,7 @@ watch(
 
 const count = computed(() => state.solutions.length)
 
-const shortestLen = computed(() =>
-  count.value ? Math.min(...state.solutions.map((l) => l.length)) : 0
-)
+const shortestLen = shortestLine
 
 const countWord = computed(() => {
   if (state.recording) return count.value ? `${count.value} saved, 1 recording` : 'Recording'

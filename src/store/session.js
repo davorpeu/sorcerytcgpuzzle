@@ -555,6 +555,12 @@ export function check() {
 // the correct sequence plus fiddling that never touches the solution's objects.
 // There is no submit button: the verdict reflects the board as it stands, so a
 // detour that disturbs a puzzle piece un-solves it as honestly as it solved it.
+// The length of the shortest recorded solution line (0 with none): what the
+// play header advertises and the editor marks as "shortest".
+export const shortestLine = computed(() =>
+  state.solutions.length ? Math.min(...state.solutions.map((l) => l.length)) : 0
+)
+
 export const solveStatus = computed(() => {
   if (state.mode !== 'play' || !hasSolution()) return null
   let best = null
