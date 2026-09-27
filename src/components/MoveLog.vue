@@ -166,4 +166,12 @@ function entryClass(i) {
   text-decoration: none;
   font-style: italic;
 }
+
+/* Moved from style.css: this component's own rules. */
+.move-log {
+  background: var(--c-panel);
+  border: 1px solid var(--c-line);
+  border-radius: var(--r-lg);
+  padding: var(--sp-3);
+}
 </style>

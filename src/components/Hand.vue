@@ -229,4 +229,18 @@ function slotStyle(i) {
   color: var(--c-muted-lo);
   font-size: var(--fs-sm);
 }
+
+/* Moved from style.css: this component's own rules. */
+.hand-block {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+/* The cemetery and collection are usually empty, so they yield width to the
+   hand rather than splitting it evenly -- at 118px the two of them squeezed
+   a two-card hand onto two rows, which overflowed the tray. */
+.grave-block {
+  flex: 1 1 96px;
+  max-width: 160px;
+}
 </style>

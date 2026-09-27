@@ -339,4 +339,16 @@ async function run(term) {
   font-size: var(--fs-lg);
   color: var(--c-cream-hi);
 }
+
+/* Moved from style.css: this component's own rules. */
+.pool-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pool-search {
+  margin-top: 6px;
+}
 </style>

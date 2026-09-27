@@ -593,4 +593,129 @@ watch(
   font-size: var(--fs-lg);
   color: var(--c-gold);
 }
+
+/* Moved from style.css: this component's own rules. */
+/* Trigger / defender prompts resolve in the storyline rather than under the
+   mat, so they read where the shared space is. */
+.story-prompt {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: 8px;
+  font-size: 0.85rem;
+}
+
+/* Both are waiting on you, so both wear the gold dashed "your move" edge
+   (mockup storyline entry); the words say which kind of wait it is. */
+.defender-prompt,
+.trigger-prompt {
+  border: 1.5px dashed var(--c-gold);
+  background: var(--c-gold-bg);
+}
+
+.card-preview-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}
+
+.card-preview-name {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 120px 60px;
+  font-size: 24px;
+  font-family: Georgia, serif;
+}
+
+/* Card type/side rings live in CardToken.vue (scoped skin): cream edge = yours,
+   slate = opponent, heavier edge = avatar, parchment = site, teal = aura. */
+.legend-badge.under {
+  background: var(--c-raised-2);
+  color: var(--c-text);
+}
+
+.legend-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* The keyboard walkthrough is a sentence with <kbd> chips in it, not a
+   badge + label row. As a flex line every bare text run ("to a card and",
+   "to select it, then") became its own non-wrapping flex item and collapsed
+   into a narrow stack of columns. Let it flow as ordinary wrapping text with
+   the chips sitting inline. */
+.legend-list .legend-keys {
+  display: block;
+  line-height: 1.7;
+}
+
+.legend-keys .legend-kbd {
+  margin: 0 1px;
+}
+
+.legend-badge {
+  background: var(--accent);
+  color: var(--c-ink);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 5px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.legend-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.legend-elements {
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+
+.legend-el {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  text-transform: capitalize;
+}
+
+.legend-kbd {
+  display: inline-block;
+  vertical-align: baseline;
+  white-space: nowrap;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--text);
+}
 </style>

@@ -755,4 +755,9 @@ const step = (what, delta) =>
     transition: none;
   }
 }
+
+/* Moved from style.css: this component's own rules. */
+.door-icon {
+  margin-right: 2px;
+}
 </style>

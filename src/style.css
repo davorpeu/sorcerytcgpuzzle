@@ -360,8 +360,7 @@ body {
 /* ---------- panels ---------- */
 
 .panel,
-.card-pool,
-.move-log {
+.card-pool {
   background: var(--c-panel);
   border: 1px solid var(--c-line);
   border-radius: var(--r-lg);
@@ -886,19 +885,6 @@ details[open] > .panel-summary {
   padding: 8px;
 }
 
-.hand-block {
-  flex: 1 1 200px;
-  min-width: 0;
-}
-
-/* The cemetery and collection are usually empty, so they yield width to the
-   hand rather than splitting it evenly -- at 118px the two of them squeezed
-   a two-card hand onto two rows, which overflowed the tray. */
-.grave-block {
-  flex: 1 1 96px;
-  max-width: 160px;
-}
-
 .hand,
 .grave {
   min-height: 96px;
@@ -931,10 +917,6 @@ details[open] > .panel-summary {
   margin-bottom: 4px;
 }
 
-.door-icon {
-  margin-right: 2px;
-}
-
 .th-icon {
   flex-shrink: 0;
   display: block;
@@ -951,27 +933,6 @@ details[open] > .panel-summary {
   flex-wrap: wrap;
   gap: 6px;
   align-items: flex-start;
-}
-
-/* Trigger / defender prompts resolve in the storyline rather than under the
-   mat, so they read where the shared space is. */
-.story-prompt {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-  margin-top: 0.5rem;
-  padding: 0.4rem 0.6rem;
-  border-radius: 8px;
-  font-size: 0.85rem;
-}
-
-/* Both are waiting on you, so both wear the gold dashed "your move" edge
-   (mockup storyline entry); the words say which kind of wait it is. */
-.defender-prompt,
-.trigger-prompt {
-  border: 1.5px dashed var(--c-gold);
-  background: var(--c-gold-bg);
 }
 
 /* ---------- carrying ---------- */
@@ -1110,19 +1071,6 @@ details[open] > .panel-summary {
 
 /* ---------- alt-key card preview ---------- */
 
-.card-preview-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  background: rgba(0, 0, 0, 0.6);
-  pointer-events: none;
-}
-
 .card-preview-overlay img {
   max-height: 80vh;
   max-width: 80vw;
@@ -1143,15 +1091,6 @@ details[open] > .panel-summary {
   max-width: none;
   transform: rotate(90deg);
   margin-block: calc(var(--h) * (1 / var(--r) - 1) / 2);
-}
-
-.card-preview-name {
-  background: var(--panel-2);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 120px 60px;
-  font-size: 24px;
-  font-family: Georgia, serif;
 }
 
 /* ---------- cards ---------- */
@@ -1327,14 +1266,6 @@ details[open] > .panel-summary {
   white-space: nowrap;
 }
 
-/* Card type/side rings live in CardToken.vue (scoped skin): cream edge = yours,
-   slate = opponent, heavier edge = avatar, parchment = site, teal = aura. */
-
-.legend-badge.under {
-  background: var(--c-raised-2);
-  color: var(--c-text);
-}
-
 /* Type key: a small square with the same coloured border the card art wears,
    so the legend matches the ring on the board. Site uses parchment. */
 .legend-swatch {
@@ -1365,13 +1296,6 @@ details[open] > .panel-summary {
 
 /* ---------- card pool ---------- */
 
-.pool-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
 /* A pool of twenty cards is seven rows tall, which pushes the board off the
    screen and leaves the sidebar as a long scroll. It scrolls inside its own
    panel instead -- the same treatment .media-results already gets -- and
@@ -1392,10 +1316,6 @@ details[open] > .panel-summary {
 }
 
 /* ---------- media library search ---------- */
-
-.pool-search {
-  margin-top: 6px;
-}
 
 .pool-search .text-input {
   margin-bottom: 4px;
@@ -1421,84 +1341,10 @@ details[open] > .panel-summary {
 
 /* ---------- legend ---------- */
 
-.legend-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  font-size: 12px;
-  color: var(--muted);
-}
-
 .legend-list li {
   display: flex;
   align-items: flex-start;
   gap: 7px;
-}
-
-/* The keyboard walkthrough is a sentence with <kbd> chips in it, not a
-   badge + label row. As a flex line every bare text run ("to a card and",
-   "to select it, then") became its own non-wrapping flex item and collapsed
-   into a narrow stack of columns. Let it flow as ordinary wrapping text with
-   the chips sitting inline. */
-.legend-list .legend-keys {
-  display: block;
-  line-height: 1.7;
-}
-
-.legend-keys .legend-kbd {
-  margin: 0 1px;
-}
-
-.legend-badge {
-  background: var(--accent);
-  color: var(--c-ink);
-  font-size: 11px;
-  font-weight: 700;
-  padding: 2px 5px;
-  border-radius: 3px;
-  flex-shrink: 0;
-}
-
-.legend-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  border: 1px solid var(--border);
-  background: var(--panel-2);
-  color: var(--text);
-  font-size: 12px;
-  flex-shrink: 0;
-}
-
-.legend-elements {
-  flex-wrap: wrap;
-  gap: 4px 10px;
-}
-
-.legend-el {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  text-transform: capitalize;
-}
-
-.legend-kbd {
-  display: inline-block;
-  vertical-align: baseline;
-  white-space: nowrap;
-  border: 1px solid var(--border);
-  background: var(--panel-2);
-  border-radius: 4px;
-  padding: 1px 6px;
-  font-family: inherit;
-  font-size: 11px;
-  color: var(--text);
 }
 
 /* ---------- saved list & move log ---------- */
