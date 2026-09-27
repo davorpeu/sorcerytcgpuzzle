@@ -9,17 +9,34 @@ import { state, pendingModeChoice, chooseModes, cancelModeChoice } from '../stor
 const choice = computed(() => pendingModeChoice())
 const picked = ref([])
 const firstMode = ref(null)
+// A native modal <dialog>, like the other dialogs: it keeps focus inside and
+// turns Esc into a cancel event.
+const dlgEl = ref(null)
 watch(
   () => choice.value && `${choice.value.cardId}:${choice.value.ability.id}`,
   async (key) => {
     picked.value = []
-    // Put the keyboard on the first mode so the choice can be made at once.
-    if (key) {
-      await nextTick()
-      firstMode.value?.focus()
+    await nextTick()
+    if (!key) {
+      if (dlgEl.value?.open) dlgEl.value.close()
+      return
     }
+    if (!dlgEl.value.open) dlgEl.value.showModal()
+    // Put the keyboard on the first mode so the choice can be made at once.
+    firstMode.value?.focus()
   }
 )
+
+// Esc cancels an activation's choice. A triggered ability can't be called off
+// (it has to resolve), so there Esc does nothing.
+function onCancel(e) {
+  e.preventDefault()
+  if (!choice.value?.story) cancelModeChoice()
+}
+// Esc belongs to the dialog; don't let the table's Esc handler also act.
+function onKey(e) {
+  if (e.key === 'Escape') e.stopPropagation()
+}
 
 const single = computed(() => choice.value?.count === 1)
 const ready = computed(() => picked.value.length === choice.value?.count)
@@ -55,8 +72,8 @@ function setFirst(i, el) {
 </script>
 
 <template>
-  <div v-if="choice" class="choice-modal" role="dialog" aria-modal="true" :aria-label="label">
-    <div class="dlg">
+  <dialog ref="dlgEl" class="choice-modal" :aria-label="label" @cancel="onCancel" @keydown="onKey">
+    <div v-if="choice" class="dlg">
       <div class="dh">
         <img
           v-if="card?.img"
@@ -105,18 +122,19 @@ function setFirst(i, el) {
         </button>
       </div>
     </div>
-  </div>
+  </dialog>
 </template>
 
 <style scoped>
 .choice-modal {
-  position: fixed;
-  inset: 0;
-  z-index: 1100;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   padding: var(--sp-4);
+  border: none;
+  background: transparent;
+  max-width: 100%;
+  max-height: 100%;
+  overflow: visible;
+}
+.choice-modal::backdrop {
   background: rgba(0, 0, 0, 0.55);
 }
 .dlg {
