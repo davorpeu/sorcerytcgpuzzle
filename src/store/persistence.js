@@ -3,6 +3,7 @@
 // URL loading. Part of the store split: import from src/store.js, never from
 // this file directly.
 
+import { computed, ref } from 'vue'
 import {
   FORMAT_VERSION,
   GRID_SIZE,
@@ -163,52 +164,11 @@ function startPosition() {
   }
 }
 
-// Everything a save would write, minus the timestamp and the generated id --
-// both change on every call and would make the puzzle look permanently dirty.
-// Taken on demand (a page unload, a New) rather than watched, so editing pays
-// nothing for it.
-export function fingerprint() {
-  return JSON.stringify({
-    name: state.puzzleName,
-    desc: state.puzzleDesc,
-    date: state.puzzleDate,
-    enforce: state.enforce,
-    combat: state.combat,
-    hideAtlas: state.hideAtlas,
-    hideSpellbook: state.hideSpellbook,
-    cards: state.cards,
-    initial: state.initialZones || state.zones,
-    tapped: state.initialTapped || state.tapped,
-    damage: state.initialDamage || state.damage,
-    floodedSites: state.initialFloodedSites || state.floodedSites,
-    carry: state.initialCarry || state.carry,
-    stats: state.initialStats || state.stats,
-    ...startPosition(),
-    solutions: state.solutions,
-  })
-}
-
-// The fingerprint as of the last save, load or New. Everything since then is
-// work a reload would silently destroy -- there is no autosave and no undo
-// that reaches across a page load.
-let savedPrint = fingerprint()
-
-export function markSaved() {
-  savedPrint = fingerprint()
-}
-
-export const hasUnsavedWork = () =>
-  config.canEdit && !!Object.keys(state.cards).length && fingerprint() !== savedPrint
-
-// Loading another puzzle replaces the open one, so this is what would be lost:
-// unsaved edits and, while recording, the line being recorded (the draft isn't
-// part of the saved state, so hasUnsavedWork alone doesn't see it).
-export const wouldLoseWork = () => state.recording || hasUnsavedWork()
-
-export function serialize() {
+// The puzzle as a save writes it, without the version, id and timestamp, and
+// without copying anything: serialize() copies it, fingerprint() only
+// stringifies it. One description of "the puzzle", so the two can't drift.
+function puzzleData() {
   return {
-    version: FORMAT_VERSION,
-    id: state.puzzleId || uid(),
     name: state.puzzleName || 'Untitled puzzle',
     desc: state.puzzleDesc || '',
     date: state.puzzleDate || null,
@@ -219,18 +179,53 @@ export function serialize() {
     // Tokens generated while recording/playing are not part of the puzzle.
     // A card taken over in play is saved under its original owner.
     cards: Object.fromEntries(
-      Object.entries(clone(state.cards))
+      Object.entries(state.cards)
         .filter(([, c]) => !c.generated)
         .map(([id, c]) => [id, state.controlFlips[id] ? { ...c, enemy: !c.enemy } : c])
     ),
-    initial: clone(state.initialZones || state.zones),
-    initialTapped: clone(state.initialTapped || state.tapped || {}),
-    initialDamage: clone(state.initialDamage || state.damage || {}),
-    initialFloodedSites: clone(state.initialFloodedSites || state.floodedSites || {}),
-    carry: clone(state.initialCarry || state.carry),
-    stats: clone(state.initialStats || state.stats),
-    ...clone(startPosition()),
-    solutions: clone(state.solutions),
+    initial: state.initialZones || state.zones,
+    initialTapped: state.initialTapped || state.tapped || {},
+    initialDamage: state.initialDamage || state.damage || {},
+    initialFloodedSites: state.initialFloodedSites || state.floodedSites || {},
+    carry: state.initialCarry || state.carry,
+    stats: state.initialStats || state.stats,
+    ...startPosition(),
+    solutions: state.solutions,
+  }
+}
+
+// Everything a save would write, minus the timestamp and the generated id --
+// both change on every call and would make the puzzle look permanently dirty.
+export function fingerprint() {
+  return JSON.stringify(puzzleData())
+}
+
+// The fingerprint as of the last save, load or New. Everything since then is
+// work a reload would silently destroy -- there is no autosave and no undo
+// that reaches across a page load. A ref, so the save state shown in the
+// header updates the moment a save lands.
+const savedPrint = ref(fingerprint())
+
+export function markSaved() {
+  savedPrint.value = fingerprint()
+}
+
+export const hasUnsavedWork = () =>
+  config.canEdit && !!Object.keys(state.cards).length && fingerprint() !== savedPrint.value
+
+// The same, for templates: the header's "Unsaved changes" line.
+export const isDirty = computed(() => hasUnsavedWork())
+
+// Loading another puzzle replaces the open one, so this is what would be lost:
+// unsaved edits and, while recording, the line being recorded (the draft isn't
+// part of the saved state, so hasUnsavedWork alone doesn't see it).
+export const wouldLoseWork = () => state.recording || hasUnsavedWork()
+
+export function serialize() {
+  return {
+    version: FORMAT_VERSION,
+    id: state.puzzleId || uid(),
+    ...clone(puzzleData()),
     savedAt: new Date().toISOString(),
   }
 }

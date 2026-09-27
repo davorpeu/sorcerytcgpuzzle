@@ -8,6 +8,7 @@ import {
   state,
   remote,
   hasUnsavedWork,
+  isDirty,
   savePuzzle,
   newPuzzle,
   undo,
@@ -22,13 +23,9 @@ import { plural } from '../format.js'
 
 const saving = ref(false)
 const lastSaved = ref('') // "HH:MM" of this session's last successful save
-// store.js keeps the saved fingerprint in a plain variable, so a re-save that
-// changes no reactive state wouldn't re-run the computed below. Bumping this
-// after each save makes it re-read hasUnsavedWork().
-const savedTick = ref(0)
 
 const empty = computed(() => !Object.keys(state.cards).length)
-const dirty = computed(() => (savedTick.value, hasUnsavedWork()))
+const dirty = isDirty
 
 const saveState = computed(() => {
   if (saving.value)
@@ -61,7 +58,6 @@ async function onSave() {
     flash(`Save failed: ${e.message}`, 'error')
   } finally {
     saving.value = false
-    savedTick.value++
   }
 }
 
@@ -81,7 +77,6 @@ function startBlank() {
   confirmNew.value = false
   newPuzzle()
   lastSaved.value = ''
-  savedTick.value++
   flash('New blank puzzle.', 'ok')
 }
 

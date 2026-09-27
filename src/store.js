@@ -325,8 +325,8 @@ export {
   deletePuzzle,
   fingerprint,
   hasUnsavedWork,
-  wouldLoseWork,
   initFromUrl,
+  isDirty,
   listArchive,
   listPuzzles,
   loadById,
@@ -340,6 +340,7 @@ export {
   serialize,
   serializePortable,
   shareLink,
+  wouldLoseWork,
 } from './store/persistence.js'
 
 // Internals exposed for the unit tests in tests/ only. Not part of the app's

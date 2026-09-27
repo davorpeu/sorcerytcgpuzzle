@@ -24,6 +24,8 @@ import {
   ARMED_ACTIONS,
   cancelArmed,
   removeCard,
+  isDirty,
+  markSaved,
   startRecording,
   stopRecording,
   wouldLoseWork,
@@ -145,6 +147,24 @@ describe('puzzle files', () => {
     startRecording()
     expect(wouldLoseWork()).toBe(true)
     stopRecording()
+  })
+
+  it('tracks unsaved changes, and a save clears them', () => {
+    loadFixture()
+    expect(isDirty.value).toBe(false)
+    state.puzzleName = 'Renamed'
+    expect(isDirty.value).toBe(true)
+    markSaved()
+    expect(isDirty.value).toBe(false)
+  })
+
+  it('writes the file fields in the same order as before', () => {
+    loadFixture()
+    expect(Object.keys(serialize())).toEqual([
+      'version', 'id', 'name', 'desc', 'date', 'enforce', 'combat', 'hideAtlas',
+      'hideSpellbook', 'cards', 'initial', 'initialTapped', 'initialDamage',
+      'initialFloodedSites', 'carry', 'stats', 'solutions', 'savedAt',
+    ])
   })
 
   it('saves and loads back to the same puzzle', () => {
