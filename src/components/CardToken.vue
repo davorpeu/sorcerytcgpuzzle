@@ -324,6 +324,184 @@ function onClick() {
 </template>
 
 <style scoped>
+/* Moved from style.css (kept first, so the component's own rules below still win). */
+.card-token:focus-visible {
+  outline: 3px solid var(--c-focus);
+  outline-offset: -3px;
+}
+
+/* Cards stay live either way; they are what a click on a square usually means,
+   and the z-index is what lifts them clear of the site art below. */
+.cell-half .card-token {
+  position: relative;
+  z-index: 4;
+  pointer-events: auto;
+}
+
+.cell-half.split.crowded .card-token {
+  --card-w: clamp(18%, calc(88% / var(--n, 1)), 24%);
+}
+
+.grave .card-token {
+  --card-w: 58px;
+}
+
+/* A carried card is in no zone, so its holder's own token is the only place it
+   is drawn. Full size rather than a thumbnail -- a load small enough to fit
+   inside the holder is too small to recognise -- and offset down and right the
+   way an overlapped hand of cards reads, so both faces stay legible. One dashed
+   frame is drawn round the whole pile: the offset alone looks like two cards
+   that happen to overlap, the frame is what says they travel together.
+
+   The step is a share of a card's own size, so the pile scales with the token
+   whether it is drawn in a hand or shrunk into a board square. --carry-step is
+   the same fraction as a plain number, for the margin rule below. */
+.card-token {
+  --carry-step: 0.46;
+  --carry-dx: calc(var(--carry-step) * 100%);
+  --carry-dy: 7%;
+  --carry-pad: 4px;
+}
+
+/* The fan is drawn outside the token's own box, so the row it sits in has to
+   pay for it or the pile buries the next card along. A percentage margin would
+   measure the container rather than the card, hence the fraction of --card-w;
+   the vertical share assumes a card's usual portrait aspect, which is close
+   enough for a few px of clearance. */
+.card-token.carrying {
+  margin-right: calc(var(--carry-n, 0) * var(--carry-step) * var(--card-w));
+  margin-bottom: calc(var(--carry-n, 0) * 0.1 * var(--card-w));
+}
+
+/* Armed to pick something up, and everything it could pick up. */
+.card-token.carrier {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.card-token.liftable {
+  cursor: copy;
+}
+
+.card-token.liftable:hover {
+  outline: 2px dashed var(--accent);
+  outline-offset: 2px;
+}
+
+.card-token {
+  position: relative;
+  /* Every context sizes a token by writing --card-w rather than `width`, so a
+     rule that has to reason about a card's size -- the carried-card fan below
+     -- can derive from it instead of repeating the number per context. */
+  --card-w: 82px;
+  width: var(--card-w);
+  cursor: grab;
+  user-select: none;
+}
+
+.card-token:active {
+  cursor: grabbing;
+}
+
+.card-token.attacker {
+  outline: 2px solid var(--bad);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+.card-token.striker {
+  outline: 2px dashed var(--c-danger);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+.card-token.selected {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+.card-token.targetable {
+  cursor: crosshair;
+}
+
+/* A spell castable from outside the hand (swapped cemetery, cast permit). */
+.card-token.castable {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 8px;
+  box-shadow: 0 0 10px var(--accent);
+}
+
+/* Already chosen by a multi-target pick still in progress. */
+.card-token.picked-target {
+  outline: 2px solid var(--bad);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+.card-token.targetable:hover {
+  outline: 2px dashed var(--bad);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .card-token.targetable {
+      animation: fx-target-pulse 1.1s ease-in-out infinite;
+      border-radius: 8px;
+    }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .card-token.attacker,
+    .card-token.striker,
+    .card-token.carrier {
+      animation: fx-armed-pulse 1.2s ease-in-out infinite;
+    }
+}
+
+/* Minions inside a square's surface/underground slots stay small -- but only
+   as small as the company they keep. A flat 30% reserved room for three cards
+   whatever was standing there, so the ordinary case, one unit, sat at under a
+   third of its square and read as a chip dropped on it rather than a piece
+   standing on it. --n is what the square actually holds, written by the band;
+   the floor is what a card needs to stay recognisable when it is sharing. */
+.cell-half .card-token {
+  --card-w: clamp(30%, calc(88% / var(--n, 1)), 44%);
+}
+
+/* Alone in its square a card can have a pixel floor as well: 44% of a phone
+   square is 30px, under what a card needs to be recognisable, and with nothing
+   beside it there is room to spare. */
+.cell-half .card-token:only-child {
+  --card-w: max(44%, 34px);
+}
+
+@media (max-width: 560px) {
+  .card-token {
+      --card-w: 64px;
+    }
+}
+
+@media (max-width: 560px) {
+  .grave .card-token {
+      --card-w: 48px;
+    }
+}
+
+@media (max-height: 820px) {
+  .opp-drawer .card-token {
+      --card-w: 62px;
+    }
+}
+
+@media (max-height: 820px) {
+  .opp-drawer .grave .card-token {
+      --card-w: 46px;
+    }
+}
+
 /* ---------- the token skin ----------
    Art is the card. The token adds only game state: whose card it is (the
    edge), what it is doing (rings, strips) and what changed in play (badges).
