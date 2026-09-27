@@ -41,6 +41,7 @@ Nearly everything lives here — a single `reactive()` `state` object plus expor
 | `effects.js` | effect ops, tokens, card-flow effects, casting |
 | `mana.js` | affinity and mana, draw decks, mode choice |
 | `session.js` | editor session, recording, undo, solve / mistake detection |
+| `clicks.js` | what a click or drop does given what is armed (`clickCard`, `clickZone`, `castOrMove`...); components only pass in DOM facts |
 | `persistence.js` | uploads, `serialize`/`loadPuzzle`, save/load, share links, URL loading |
 
 The modules import each other in a cycle, which is fine for functions. `src/store.js` re-exports an explicit list per module, so a new public store function must also be added to that list (the build fails otherwise). Two rules keep the cycle working: code that runs when a module loads (top-level `watch()`, constants built from other values) may only use `state.js` or its own module; and a module can't assign another module's `let` variable, so export a setter instead (e.g. `clearStoryStack()`). Before touching game behavior, read the relevant module; the components mostly render `state` and call its functions. Three reactive objects:
