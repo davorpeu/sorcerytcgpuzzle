@@ -420,6 +420,153 @@ function nodeStyle(idx) {
 
 <style scoped>
 /* Moved from style.css (kept first, so the component's own rules below still win). */
+.site-bg:focus-visible {
+  outline: 3px solid var(--c-focus);
+  outline-offset: -3px;
+}
+
+/* The grid used to take its height from its own width (5 square cells wide),
+   so a wider window made a taller board and pushed the hands off screen.
+   The stage keeps the 5:4 shape but is capped by the height available, and
+   its max-width follows from that -- so the board shrinks to fit instead of
+   demanding more page. The aura overlay shares the stage, which is what
+   keeps the nodes on the grid lines at every size. */
+.board-stage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 5 / 4;
+  max-height: var(--stage-h);
+  max-width: calc(var(--stage-h) * 1.25);
+}
+
+.board-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  grid-template-rows: repeat(4, 1fr);
+  height: 100%;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.cell {
+  position: relative;
+  overflow: hidden;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* The site art fills its square (sizing, flips and the portrait turn are in
+   Board.vue). The image itself is the drag/click surface for moving the site. */
+.site-bg {
+  cursor: grab;
+  user-select: none;
+}
+
+.site-bg:active {
+  cursor: grabbing;
+}
+
+.cell-half {
+  position: absolute;
+  left: 0;
+  right: 0;
+  padding: 3px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px;
+}
+
+/* No z-index, deliberately: a positioned box without one does not open a
+   stacking context, so the cards inside these bands can sit above the site art
+   (which is above the bands themselves) instead of being trapped under it.
+   The order inside a square is bands -> site art -> cards.
+
+   Half each: with the site slot no longer a drop target of its own, these
+   two are the square's only zones and have to meet. They used to leave a 30%
+   band between them that only the site slot caught -- and that band was also
+   the sole corridor through which the site art could be clicked, because both
+   halves sit above it. The corridor is gone; the rule below is what keeps the
+   art reachable instead. */
+.cell-half.top {
+  top: 0;
+  height: 50%;
+  align-content: flex-start;
+}
+
+/* The lower half: cards below the surface, darkened and badged. */
+.cell-half.bot {
+  bottom: 0;
+  height: 50%;
+  align-content: flex-end;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+/* A zone only wants the pointer when it can do something with it: while a card
+   is armed for a click-move, or while one is in flight. Idle, the bands step
+   aside so a click on bare felt is not swallowed by a target that would ignore
+   it anyway. */
+.cell-half {
+  pointer-events: none;
+}
+
+.cell-half.armed,
+.board.dragging .cell-half {
+  pointer-events: auto;
+}
+
+/* A square with something below it is split: surface cards keep to the upper
+   left, below cards to the lower right. Both levels lay out the same way --
+   side by side, wrapping, sized by --n (what that level holds). A lone card on
+   its level stays full size (44% each, so the pair sits side by side without
+   covering each other); only a crowded level shrinks, to about 24% of the
+   width -- a card as tall as half a 4:3 square (63:88 art). */
+.cell-half.top.split {
+  justify-content: flex-start;
+}
+
+.cell-half.bot.split {
+  justify-content: flex-end;
+}
+
+/* The site's own layer, above both bands. It has to be, or selecting a site
+   would arm the square and bury the art under a zone -- and you could no longer
+   hover it for the Alt preview or drag it anywhere. clickSite hands an armed
+   click back down to the band underneath. The strip itself is just a frame:
+   bare felt is not a target, so only the artwork takes the pointer. */
+.site-strip {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.site-strip > * {
+  pointer-events: auto;
+}
+
+.site-bg.targetable {
+  cursor: crosshair;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .site-bg.targetable {
+      animation: fx-target-pulse 1.1s ease-in-out infinite;
+      border-radius: 8px;
+    }
+}
+
+@media (max-width: 700px) {
+  /* Squares are ~68px wide at this size, so the 3px inset and 4px gutter are
+       nearly a tenth of the room a card has. */
+  .cell-half {
+      padding: 2px;
+      gap: 2px;
+    }
+}
+
+/* Moved from style.css (kept first, so the component's own rules below still win). */
 /* Sites and auras are drawn straight onto the board rather than as card
    tokens, so they get a count instead of a strip. */
 .carry-badge {
