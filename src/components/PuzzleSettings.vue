@@ -82,8 +82,20 @@ const decks = switches.filter((s) => s.group === 'decks')
 
     <section class="grp" aria-labelledby="ps-rules">
       <h3 id="ps-rules" class="grp-h">Rules</h3>
-      <label v-for="s in rules" :key="s.key" class="sw">
-        <input v-model="state[s.key]" type="checkbox" role="switch" class="sw-input" />
+      <!-- Every solution line has to be recorded under the same rules, as it
+           starts from the same setup (CardSetup locks that too). -->
+      <p v-if="state.recording" class="help lock-note" role="note">
+        <span aria-hidden="true">🔒 </span>Locked while you record. Stop recording to change the
+        rules.
+      </p>
+      <label v-for="s in rules" :key="s.key" class="sw" :class="{ locked: state.recording }">
+        <input
+          v-model="state[s.key]"
+          type="checkbox"
+          role="switch"
+          class="sw-input"
+          :disabled="state.recording"
+        />
         <span class="track" aria-hidden="true"></span>
         <span class="t">
           <b>{{ s.label }} <small>{{ state[s.key] ? 'On' : 'Off' }}</small></b>
@@ -258,6 +270,11 @@ const decks = switches.filter((s) => s.group === 'decks')
 .sw-input:focus-visible + .track {
   outline: 2px solid var(--c-focus);
   outline-offset: 2px;
+}
+/* Locked while recording: dimmed, and the note above says why in words. */
+.sw.locked {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 .t {
   display: flex;

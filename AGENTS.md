@@ -89,6 +89,10 @@ See `wordpress/AGENTS.md` (plugin PHP, REST endpoints, and the `scripts/build-wp
   game rules belong in the store.
 - `config` (host wiring), `ui` (transient interaction) and `state` (puzzle + session) stay separate.
   Never persist `ui` or `config` in the puzzle JSON.
+- Editor forms may edit the puzzle objects they are given in place (`v-model` on
+  `state` fields, and the ability sub-editors on the ability they receive): one form, one
+  object. Anything that changes what a solution line means (card setup, abilities, the
+  rules switches) must be locked while `state.recording` is true.
 - Persistence branches on `remote()` inside the store only; components never know whether they
   talk to localStorage or WordPress.
 - The puzzle JSON stays backward compatible: `loadPuzzle()` back-fills defaults; bump

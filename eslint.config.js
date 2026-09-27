@@ -26,9 +26,10 @@ export default [
     },
   },
   {
-    // Known debt (redesign/audit-plan.md, Phase E): the ability sub-editors edit
-    // the ability object they are given in place. Move to emitted updates or
-    // store setters, then delete this override.
+    // Deliberate: the ability sub-editors are parts of one form (TriggerEditor)
+    // and edit the ability object they are given in place, through v-model.
+    // Editing is locked while a solution is being recorded (CardSetup), which
+    // is the risk this rule would otherwise guard against.
     files: ['src/components/ConditionEditor.vue', 'src/components/EffectSelector.vue', 'src/components/TargetEditor.vue'],
     rules: { 'vue/no-mutating-props': 'off' },
   },
