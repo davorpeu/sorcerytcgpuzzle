@@ -645,4 +645,89 @@ const cardLabel = (id) => state.cards[id]?.name || "a card";
   outline: 2px solid var(--c-focus);
   outline-offset: 2px;
 }
+
+/* Moved from style.css: this component's own rules. */
+/* Everything a card can do, at a size a finger can hit, docked where the
+   eye already is. It rides above the storyline and survives the dock being
+   folded away, so the actions are never more than one tap from the board. */
+.mat-area > .card-actions {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  max-width: calc(var(--stage-h-max) * 1.25 + 30px);
+  margin-inline: auto;
+  z-index: 20;
+}
+
+.card-actions {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  padding: 8px 36px 8px 10px;
+  margin-bottom: 6px;
+}
+
+.ca-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ca-hint {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 0;
+}
+
+.ca-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ca-close:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+@media (max-width: 700px) {
+  /* Wrapped onto a phone the action bar is ~185px tall, and floated over the
+       foot of the mat that is half the board -- select a card to see what it can
+       do and you lose sight of where it could go. In flow it sits under the mat
+       and pushes instead of covering. */
+  .mat-area > .card-actions {
+      position: relative; /* in flow, but still the × button's containing block */
+      max-width: none;
+      margin-inline: 0;
+      margin-top: 8px;
+    }
+}
+
+@media (pointer: coarse) {
+  .ca-close {
+      width: 44px;
+      height: 44px;
+    }
+}
+
+@media (pointer: coarse) {
+  .card-actions {
+      padding-right: 44px;
+    }
+}
 </style>
