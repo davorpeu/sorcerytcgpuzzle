@@ -783,14 +783,14 @@ export function armedDefendLegal(cardId) {
 
 export function chooseDefender(defenderId) {
   if (!ui.awaitingDefender || !armedDefendLegal(defenderId)) return
-  const { attackerId, targetId } = ui.awaitingDefender
-  performAttack(attackerId, targetId, defenderId)
+  const { attackerId, targetId, crossing } = ui.awaitingDefender
+  performAttack(attackerId, targetId, defenderId, crossing)
 }
 
 export function declineDefender() {
   if (!ui.awaitingDefender) return
-  const { attackerId, targetId } = ui.awaitingDefender
-  performAttack(attackerId, targetId, null)
+  const { attackerId, targetId, crossing } = ui.awaitingDefender
+  performAttack(attackerId, targetId, null, crossing)
 }
 
 // ---------- carrying ----------

@@ -124,7 +124,9 @@ export const sameEntry = (a, b) => {
       a.targetId === b.targetId &&
       (a.defenderId || null) === (b.defenderId || null) &&
       // The crossing an oversized attacker attacked from (absent for the rest).
-      (a.crossing ?? null) === (b.crossing ?? null)
+      // Lines recorded before crossings were logged have none; absent on
+      // either side matches any crossing, so those lines stay solvable.
+      (a.crossing == null || b.crossing == null || a.crossing === b.crossing)
     )
   if (type === 'pickup' || type === 'shoot' || type === 'intercept')
     return a.targetId === b.targetId

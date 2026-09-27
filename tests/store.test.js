@@ -49,14 +49,17 @@ describe('sameEntry (is an attempt move the same as a solution move?)', () => {
     expect(sameEntry({ ...atk, defenderId: 'nc' }, atk)).toBe(false)
   })
 
-  // Known bug A2 (redesign/audit-plan.md): lines recorded before oversized
-  // attackers logged a `crossing` have none, so the attempt's crossing makes
-  // the correct attack fail and cost the player a mistake. `it.fails` keeps
-  // the suite green while the bug exists; turn it into `it` once it's fixed.
-  it.fails('an older line without a crossing still matches an attack that picked one', () => {
+  // Lines recorded before oversized attackers logged a `crossing` have none.
+  it('an older line without a crossing still matches an attack that picked one', () => {
     const recorded = { type: 'attack', cardId: 'au', targetId: 'sk' }
     const attempt = { type: 'attack', cardId: 'au', targetId: 'sk', crossing: 5 }
     expect(sameEntry(attempt, recorded)).toBe(true)
+  })
+
+  it('tells two recorded crossings apart', () => {
+    const atk = { type: 'attack', cardId: 'au', targetId: 'sk' }
+    expect(sameEntry({ ...atk, crossing: 5 }, { ...atk, crossing: 5 })).toBe(true)
+    expect(sameEntry({ ...atk, crossing: 5 }, { ...atk, crossing: 6 })).toBe(false)
   })
 })
 
