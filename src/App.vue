@@ -25,7 +25,6 @@ import Board from './components/Board.vue'
 import MoveLog from './components/MoveLog.vue'
 import DropZone from './components/DropZone.vue'
 import CardToken from './components/CardToken.vue'
-import ThresholdIcon from './components/ThresholdIcon.vue'
 import CardActions from './components/CardActions.vue'
 import TriggerFeed from './components/TriggerFeed.vue'
 import FxOverlay from './components/FxOverlay.vue'
@@ -60,9 +59,9 @@ const editorTooNarrow = computed(() => state.mode === 'editor' && narrow.value)
 const phoneMq = typeof window !== 'undefined' && window.matchMedia ? window.matchMedia('(max-width: 1000px)') : null
 const phone = ref(!!phoneMq?.matches)
 const onPhone = (e) => (phone.value = e.matches)
-const storyCompact = computed(
-  () => !state.zones.storyline.length && (state.mode === 'editor' || phone.value)
-)
+// Empty, the storyline is one line, so the moves (play) or the solutions
+// (editor) get the column's height. What it is for is in the Help dialog.
+const storyCompact = computed(() => !state.zones.storyline.length)
 const notice = ref('')
 const showArchive = ref(false)
 
@@ -191,7 +190,7 @@ watch(
 
       <template v-else>
         <!-- The selected card: it is what you are working with right now. -->
-        <CardInspector />
+        <CardInspector :with-actions="!phone" />
 
         <!-- One panel, whichever state you are in. Loaded or not, the two
              things you can do are the same: play the current puzzle or open
@@ -227,71 +226,7 @@ watch(
 
       <!-- In the editor the Solutions panel (right) and the Card/Pool tabs
            replace the move log and the legend. -->
-      <MoveLog v-if="state.mode !== 'editor'" />
 
-      <details v-if="state.mode !== 'editor'" class="panel legend">
-        <summary class="panel-summary">Legend</summary>
-        <ul class="legend-list">
-          <li><kbd class="legend-kbd">Alt</kbd> hover a card to enlarge it</li>
-          <li class="legend-keys">
-            <kbd class="legend-kbd">Tab</kbd> to a card and
-            <kbd class="legend-kbd">Enter</kbd> to select it, then
-            <kbd class="legend-kbd">Tab</kbd> to a zone and
-            <kbd class="legend-kbd">Enter</kbd> to move it there.
-            <kbd class="legend-kbd">Esc</kbd> deselects
-          </li>
-          <li>
-            <span class="legend-swatch unit"></span>
-            Your card (cream edge) — minions can move, attack or shoot (each taps it), and use their abilities
-          </li>
-          <li>
-            <span class="legend-swatch opp"></span>
-            Opponent's card (slate edge)
-          </li>
-          <li>
-            <span class="legend-swatch avatar"></span>
-            Avatar (heavier edge) — special minion representing the player
-          </li>
-          <li>
-            <span class="legend-swatch"></span>
-            Site (parchment border) — occupies a square of the grid
-          </li>
-          <li>
-            <span class="legend-swatch aura"></span>
-            Aura (teal border) — sits on an intersection, always drawn on top
-          </li>
-          <li>
-            <span class="legend-icon">🂠</span>
-            Upside-down card — controlled by the opponent
-          </li>
-          <li>
-            <span class="legend-badge under">Buried</span> /
-            <span class="legend-badge under">Submerged</span>
-            (▾ / ≈ on small cards) Card under a land / water site — darkened; drag or move it onto the lower strip
-            of a square to send it below, the upper part to surface it
-          </li>
-          <li>
-            <span class="legend-icon">☞</span>
-            Click a card to select it — its actions (cast, move, attack,
-            abilities, pick up) appear under the board
-          </li>
-          <li>
-            <span class="legend-icon">✋</span>
-            Carried card — picked up by another card, travels with it until
-            its holder drops it
-          </li>
-          <li>
-            <span class="legend-icon">→</span>
-            With a card selected, click any zone to move it there (works
-            without dragging, e.g. on a tablet)
-          </li>
-          <li class="legend-elements">
-            <span v-for="el in ['air', 'earth', 'fire', 'water']" :key="el" class="legend-el">
-              <ThresholdIcon :element="el" /> {{ el }}
-            </span>
-          </li>
-        </ul>
-      </details>
     </aside>
 
     <main class="area-board mat-area">
@@ -304,7 +239,7 @@ watch(
       <!-- The one thing that still wants to be near the mat. It exists
            only while a card is selected, so it costs the grid height
            only while you are actually using it. -->
-      <CardActions v-if="state.mode !== 'editor'" />
+      <CardActions v-if="state.mode !== 'editor' && phone" />
     </main>
 
     <aside class="area-right">
@@ -328,10 +263,6 @@ watch(
           <!-- Empty, it says what it is for, so it isn't mistaken for a
                spare drop area. -->
           <p v-if="!state.zones.storyline.length" class="storyline-empty">
-            <template v-if="!storyCompact">
-              Spells and abilities wait here in order while they resolve.
-              Both players share it.
-            </template>
             Nothing is resolving.
           </p>
         </DropZone>
@@ -412,6 +343,10 @@ watch(
         </div>
       </section>
 
+      <!-- Play: the moves so far sit with the storyline -- both are what has
+           happened -- and take the height it leaves, scrolling inside. -->
+      <MoveLog v-if="state.mode === 'play'" class="moves-block" />
+
       <!-- Phone / tablet: one row like the opponent's strip (.mockup/phone.html
            "You Life 14 Mana 5 ..."), so the hand stays near the board. -->
       <section v-if="phone" class="you-strip" aria-label="You">
@@ -488,6 +423,13 @@ watch(
 /* Grows into spare height but never shrinks under its content: on a short
    board row (embedded under a tall theme header) it was squeezed to a sliver
    with its heading spilling out; the column scrolls instead. */
+/* Play: the moves take the height the storyline leaves and scroll inside. */
+.moves-block {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
 .storyline-block {
   flex: 1 0 auto;
   display: flex;
@@ -636,86 +578,5 @@ watch(
   padding: 120px 60px;
   font-size: 24px;
   font-family: Georgia, serif;
-}
-
-/* Card type/side rings live in CardToken.vue (scoped skin): cream edge = yours,
-   slate = opponent, heavier edge = avatar, parchment = site, teal = aura. */
-.legend-badge.under {
-  background: var(--c-raised-2);
-  color: var(--c-text);
-}
-
-.legend-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  font-size: 12px;
-  color: var(--muted);
-}
-
-/* The keyboard walkthrough is a sentence with <kbd> chips in it, not a
-   badge + label row. As a flex line every bare text run ("to a card and",
-   "to select it, then") became its own non-wrapping flex item and collapsed
-   into a narrow stack of columns. Let it flow as ordinary wrapping text with
-   the chips sitting inline. */
-.legend-list .legend-keys {
-  display: block;
-  line-height: 1.7;
-}
-
-.legend-keys .legend-kbd {
-  margin: 0 1px;
-}
-
-.legend-badge {
-  background: var(--accent);
-  color: var(--c-ink);
-  font-size: 11px;
-  font-weight: 700;
-  padding: 2px 5px;
-  border-radius: 3px;
-  flex-shrink: 0;
-}
-
-.legend-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  border: 1px solid var(--border);
-  background: var(--panel-2);
-  color: var(--text);
-  font-size: 12px;
-  flex-shrink: 0;
-}
-
-.legend-elements {
-  flex-wrap: wrap;
-  gap: 4px 10px;
-}
-
-.legend-el {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  text-transform: capitalize;
-}
-
-.legend-kbd {
-  display: inline-block;
-  vertical-align: baseline;
-  white-space: nowrap;
-  border: 1px solid var(--border);
-  background: var(--panel-2);
-  border-radius: 4px;
-  padding: 1px 6px;
-  font-family: inherit;
-  font-size: 11px;
-  color: var(--text);
 }
 </style>

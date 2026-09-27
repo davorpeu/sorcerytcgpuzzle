@@ -243,6 +243,33 @@ const usedUp = (a) =>
   !!ui.selected &&
   abilityUsesLeft(ui.selected, a) <= 0;
 
+// One ability button's attributes and text (used by both lists below).
+const abilityAttrs = (a) => ({
+  class: ["btn", { active: isArming(a.id) }],
+  title: usedUp(a)
+    ? "Already used as many times as allowed this turn"
+    : abilityCostBlocked(ui.selected, a)
+    ? "Cannot pay its cost (mana, threshold, life or cards)"
+    : a.text || a.name,
+  disabled: (usedUp(a) || abilityCostBlocked(ui.selected, a)) && !isArming(a.id),
+});
+const abilityText = (a) =>
+  isArming(a.id) ? `Cancel ${a.name || "ability"}` : abilityLabel(a);
+
+// A card with many abilities: the first two stay as buttons and the rest wait
+// under "More abilities", so the actions always fit beside the art. One that is
+// armed is never hidden -- its Cancel has to stay in reach.
+const ABILITIES_SHOWN = 2;
+const armedHidden = computed(() =>
+  liveAbilities.value.slice(ABILITIES_SHOWN).some((a) => isArming(a.id))
+);
+const shownAbilities = computed(() =>
+  armedHidden.value ? liveAbilities.value : liveAbilities.value.slice(0, ABILITIES_SHOWN)
+);
+const moreAbilities = computed(() =>
+  armedHidden.value ? [] : liveAbilities.value.slice(ABILITIES_SHOWN)
+);
+
 // The template's conditions, named so the column can tell whether it has
 // anything to show at all (a pool card, say, has no table actions).
 const playing = computed(() => state.mode === "play" || state.recording);
@@ -368,25 +395,26 @@ const cardLabel = (id) => state.cards[id]?.name || "a card";
         Drag onto the board (or click a square) to cast.
       </p>
       <button
-        v-for="a in liveAbilities"
+        v-for="a in shownAbilities"
         :key="a.id"
-        class="btn"
-        :class="{ active: isArming(a.id) }"
-        :title="
-          usedUp(a)
-            ? 'Already used as many times as allowed this turn'
-            : abilityCostBlocked(ui.selected, a)
-            ? 'Cannot pay its cost (mana, threshold, life or cards)'
-            : a.text || a.name
-        "
-        :disabled="
-          (usedUp(a) || abilityCostBlocked(ui.selected, a)) && !isArming(a.id)
-        "
+        v-bind="abilityAttrs(a)"
         @click="beginActivate(ui.selected, a.id)"
       >
-        ✧
-        {{ isArming(a.id) ? `Cancel ${a.name || "ability"}` : abilityLabel(a) }}
+        ✧ {{ abilityText(a) }}
       </button>
+      <details v-if="moreAbilities.length" class="ca-more">
+        <summary class="btn">More abilities ({{ moreAbilities.length }})</summary>
+        <div class="ca-more-list">
+          <button
+            v-for="a in moreAbilities"
+            :key="a.id"
+            v-bind="abilityAttrs(a)"
+            @click="beginActivate(ui.selected, a.id)"
+          >
+            ✧ {{ abilityText(a) }}
+          </button>
+        </div>
+      </details>
       <button
         v-if="unitInPlay"
         class="btn"
@@ -620,11 +648,36 @@ const cardLabel = (id) => state.cards[id]?.name || "a card";
   align-items: stretch;
   gap: var(--sp-2);
 }
+/* Two columns of buttons, so a unit's usual actions (move, attack, pick up,
+   an ability or two) fit in a few rows beside the art; hints, the drop row and
+   "More abilities" take the full width. */
 .ca-column .ca-buttons {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: var(--sp-2);
+}
+.ca-column .ca-buttons > :not(.btn) {
+  grid-column: 1 / -1;
+}
+.ca-more > summary {
+  list-style: none;
+  cursor: pointer;
+}
+.ca-more > summary::-webkit-details-marker {
+  display: none;
+}
+.ca-more[open] > summary {
+  border-color: var(--c-gold);
+}
+.ca-more-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+.ca-column .ca-more-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
 }
 .ca-column .btn {
   width: 100%;
@@ -650,14 +703,12 @@ const cardLabel = (id) => state.cards[id]?.name || "a card";
 /* Everything a card can do, at a size a finger can hit, docked where the
    eye already is. It rides above the storyline and survives the dock being
    folded away, so the actions are never more than one tap from the board. */
+/* Under the board on phones and tablets (the only place the bar is used now):
+   in the page flow, so it pushes content down instead of covering the board
+   or shrinking it. Still the × button's containing block. */
 .mat-area > .card-actions {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  max-width: calc(var(--stage-h-max) * 1.25 + 30px);
-  margin-inline: auto;
-  z-index: 20;
+  position: relative;
+  margin-top: 8px;
 }
 
 .card-actions {
@@ -705,18 +756,6 @@ const cardLabel = (id) => state.cards[id]?.name || "a card";
   color: var(--text);
 }
 
-@media (max-width: 700px) {
-  /* Wrapped onto a phone the action bar is ~185px tall, and floated over the
-       foot of the mat that is half the board -- select a card to see what it can
-       do and you lose sight of where it could go. In flow it sits under the mat
-       and pushes instead of covering. */
-  .mat-area > .card-actions {
-      position: relative; /* in flow, but still the × button's containing block */
-      max-width: none;
-      margin-inline: 0;
-      margin-top: 8px;
-    }
-}
 
 @media (pointer: coarse) {
   .ca-close {

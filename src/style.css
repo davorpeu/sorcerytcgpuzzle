@@ -166,9 +166,9 @@
   /* The opponent drawer's height; zones scroll inside it. */
   --tray-body-h: 184px;
 
-  /* What the mat keeps free above and below the grid: breathing room at the
-     top, and at the bottom the strip the selected-card action bar floats in
-     (raised by the :has(.card-actions) rule below). */
+  /* What the mat keeps free above and below the grid. Selecting a card never
+     changes it: on desktop the actions sit in the left column, and on phones
+     the bar under the board is in the page flow. */
   --tray-top: 14px;
   --tray-bottom: 8px;
 
@@ -535,13 +535,6 @@ details[open] > .panel-summary {
   align-items: flex-start;
 }
 
-/* The action bar is the only thing below the grid, and only while a card is
-   selected, so the bottom margin is nearly nothing the rest of the time. */
-.app:has(.card-actions) {
-  /* The bar is a row of buttons plus a hint line, 81px + its 6px margin. */
-  --tray-bottom: 88px;
-}
-
 /* ---------- selected-card action bar ---------- */
 
 /* 5x4 grid of actual squares. */
@@ -727,34 +720,6 @@ details[open] > .panel-summary {
   }
 }
 
-/* Type key: a small square with the same coloured border the card art wears,
-   so the legend matches the ring on the board. Site uses parchment. */
-.legend-swatch {
-  display: inline-block;
-  width: 16px;
-  height: 16px;
-  border: 2px solid var(--c-cream-lo);
-  border-radius: 4px;
-  flex-shrink: 0;
-}
-
-.legend-swatch.unit {
-  border-color: var(--c-cream);
-}
-
-.legend-swatch.opp {
-  border-color: var(--c-opp);
-}
-
-.legend-swatch.avatar {
-  border-color: var(--c-cream);
-  border-width: 3px;
-}
-
-.legend-swatch.aura {
-  border-color: var(--aura);
-}
-
 /* ---------- card pool ---------- */
 
 /* A pool of twenty cards is seven rows tall, which pushes the board off the
@@ -801,12 +766,6 @@ details[open] > .panel-summary {
 }
 
 /* ---------- legend ---------- */
-
-.legend-list li {
-  display: flex;
-  align-items: flex-start;
-  gap: 7px;
-}
 
 /* ---------- saved list & move log ---------- */
 
@@ -944,11 +903,6 @@ details[open] > .panel-summary {
      bar's height and pushed the bar out over the stats below. */
   .mat-area > .board {
     height: auto;
-  }
-
-  /* ...so the mat no longer reserves the strip the bar used to float in. */
-  .app:has(.card-actions) {
-    --tray-bottom: 8px;
   }
 
   /* Phones scroll anyway, and the board is bound by the width here: let it

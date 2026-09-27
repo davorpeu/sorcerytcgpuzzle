@@ -26,11 +26,20 @@ import {
   survivalRisks,
 } from '../store.js'
 import CardThumb from './CardThumb.vue'
+import CardActions from './CardActions.vue'
 import { survivalWarning } from '../format.js'
 
 // The selected card, large. Everything printed on it -- name, type, cost,
 // threshold, power, rules text -- is already in the art, so the list under it
 // carries only what play has changed. An untouched card shows art alone.
+// Play (desktop): the selected card's actions sit under its art, so choosing
+// a card never changes the size of the board. Phones keep the bar under the
+// board instead (the left column is far below it there). The editor shows
+// the actions itself, in the Card tab.
+const props = defineProps({
+  withActions: { type: Boolean, default: false },
+})
+
 const id = computed(() => ui.selected)
 const card = computed(() => (id.value ? state.cards[id.value] : null))
 
@@ -120,7 +129,7 @@ const hint = computed(() => {
     return state.recording
       ? 'Pick an action below; it is added to the solution.'
       : 'Its actions are below, then its setup.'
-  return 'Pick an action under the board.'
+  return props.withActions ? 'Pick an action below.' : 'Pick an action under the board.'
 })
 </script>
 
@@ -143,6 +152,7 @@ const hint = computed(() => {
       </li>
     </ul>
     <p class="inspector-hint">{{ hint }}</p>
+    <CardActions v-if="withActions && !editor" placement="column" class="inspector-actions" />
     <p class="inspector-keys"><kbd>Esc</kbd> puts the card down</p>
   </section>
   <section v-else class="inspector empty" aria-label="Selected card">
@@ -164,12 +174,16 @@ const hint = computed(() => {
   color: var(--c-text);
 }
 
-/* A selected card owns the whole visible left column (as in the mockup);
-   Puzzles/moves/legend follow below it and the column scrolls to them.
-   Doubled class: outranks `.mode-play .area-left > .inspector` in style.css
-   (see redesign/requests/p1-inspector.md). */
+/* A selected card takes the column's spare height: the art shrinks to fit so
+   the state, the hint and the actions under it are always in view, with no
+   scrolling. (Doubled class: outranks the generic panel rules.) */
 .inspector.inspector:not(.empty) {
-  flex: 0 0 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.inspector-actions {
+  flex: none;
 }
 
 .inspector-kicker {

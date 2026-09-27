@@ -66,7 +66,7 @@ function entryClass(i) {
 </script>
 
 <template>
-  <details class="move-log" :open="state.mode !== 'play'">
+  <details class="move-log" open>
     <summary class="panel-summary">{{ title }}</summary>
     <ol v-if="entries.length">
       <template v-for="(m, i) in entries" :key="i">

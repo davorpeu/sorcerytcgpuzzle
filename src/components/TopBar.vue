@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import {
   state,
   config,
@@ -13,6 +13,7 @@ import {
   shortestLine,
 } from '../store.js'
 import EditorToast from './EditorToast.vue'
+import LegendDialog from './LegendDialog.vue'
 import EditorPuzzleTitle from './EditorPuzzleTitle.vue'
 import EditorHeaderActions from './EditorHeaderActions.vue'
 import { plural } from '../format.js'
@@ -25,6 +26,8 @@ defineProps({
 
 // Shortest recorded solution line; what the play header advertises.
 const targetMoves = shortestLine
+
+const helpOpen = ref(false)
 
 
 // "Move N of M" while the attempt is still within the shortest line; past it
@@ -171,6 +174,11 @@ const result = computed(() => {
       <button type="button" class="btn tb-btn ghost" @click="resetPlay">
         Reset
       </button>
+      <!-- The legend: reference, so it waits behind a button. -->
+      <button type="button" class="btn tb-btn ghost" aria-haspopup="dialog" @click="helpOpen = true">
+        Help
+      </button>
+      <LegendDialog :open="helpOpen" @close="helpOpen = false" />
     </div>
 
     <template v-if="state.mode === 'editor'">
