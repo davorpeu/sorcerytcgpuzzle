@@ -14,6 +14,7 @@ import {
 } from '../store.js'
 import EditorToast from './EditorToast.vue'
 import LegendDialog from './LegendDialog.vue'
+import PlayPuzzlesDialog from './PlayPuzzlesDialog.vue'
 import EditorPuzzleTitle from './EditorPuzzleTitle.vue'
 import EditorHeaderActions from './EditorHeaderActions.vue'
 import { plural } from '../format.js'
@@ -28,6 +29,7 @@ defineProps({
 const targetMoves = shortestLine
 
 const helpOpen = ref(false)
+const puzzlesOpen = ref(false)
 
 
 // "Move N of M" while the attempt is still within the shortest line; past it
@@ -179,6 +181,12 @@ const result = computed(() => {
         Help
       </button>
       <LegendDialog :open="helpOpen" @close="helpOpen = false" />
+      <!-- Today's puzzle and the archive: navigation, so it waits behind a
+           button instead of taking the left column from the selected card. -->
+      <button type="button" class="btn tb-btn ghost" aria-haspopup="dialog" @click="puzzlesOpen = true">
+        Puzzles
+      </button>
+      <PlayPuzzlesDialog :open="puzzlesOpen" @close="puzzlesOpen = false" />
     </div>
 
     <template v-if="state.mode === 'editor'">

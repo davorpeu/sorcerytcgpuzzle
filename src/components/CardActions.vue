@@ -703,12 +703,17 @@ const cardLabel = (id) => state.cards[id]?.name || "a card";
 /* Everything a card can do, at a size a finger can hit, docked where the
    eye already is. It rides above the storyline and survives the dock being
    folded away, so the actions are never more than one tap from the board. */
-/* Under the board on phones and tablets (the only place the bar is used now):
-   in the page flow, so it pushes content down instead of covering the board
-   or shrinking it. Still the × button's containing block. */
+/* Under the board on phones and narrow windows (the only place the bar is
+   used now). In the page flow, so it never shrinks the board, and sticky, so
+   when the board runs below the screen the bar stays pinned to its bottom
+   edge instead of scrolling out of reach. Still the × button's containing
+   block (sticky is positioned). */
 .mat-area > .card-actions {
-  position: relative;
+  position: sticky;
+  bottom: 8px;
+  z-index: 20;
   margin-top: 8px;
+  box-shadow: var(--shadow-pop);
 }
 
 .card-actions {

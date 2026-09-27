@@ -179,7 +179,8 @@ const hint = computed(() => {
    scrolling. (Doubled class: outranks the generic panel rules.) */
 .inspector.inspector:not(.empty) {
   flex: 1 1 auto;
-  min-height: 0;
+  /* Never below its content: the art (min 72px) is what gives way. */
+  min-height: min-content;
 }
 
 .inspector-actions {
@@ -202,7 +203,9 @@ const hint = computed(() => {
    as fits and the hint and keys below it always stay in view. */
 .inspector-stage {
   flex: 1 1 0;
-  min-height: 160px;
+  /* Small on purpose: on a short window the art shrinks rather than pushing
+     the actions below it out of the pane. */
+  min-height: 72px;
   display: flex;
   justify-content: center;
   align-items: center;
@@ -325,6 +328,17 @@ const hint = computed(() => {
   margin: 0;
   padding-top: 0;
   border-top: 0;
+}
+
+/* Short windows: tighter spacing, and the Esc reminder (also in Help) goes. */
+@media (max-height: 800px) {
+  .inspector {
+    gap: var(--sp-2);
+    padding: var(--sp-3);
+  }
+  .inspector:not(.compact) .inspector-keys {
+    display: none;
+  }
 }
 
 .inspector.empty {

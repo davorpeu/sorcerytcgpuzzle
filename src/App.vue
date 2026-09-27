@@ -192,10 +192,10 @@ watch(
         <!-- The selected card: it is what you are working with right now. -->
         <CardInspector :with-actions="!phone" />
 
-        <!-- One panel, whichever state you are in. Loaded or not, the two
-             things you can do are the same: play the current puzzle or open
-             the archive. -->
-        <div class="panel">
+        <!-- Before any puzzle is loaded there is no card to show, so this is
+             how you start. Once one is loaded, the same choices are behind
+             the header's Puzzles button and the column is the card's. -->
+        <div v-if="!state.puzzleName" class="panel">
           <div class="zone-title">
             {{ state.puzzleName ? 'Puzzles' : 'No puzzle loaded' }}
           </div>
@@ -221,7 +221,7 @@ watch(
           </div>
         </div>
 
-        <ArchiveCalendar v-if="showArchive" @select="onArchiveSelect" />
+        <ArchiveCalendar v-if="showArchive && !state.puzzleName" @select="onArchiveSelect" />
       </template>
 
       <!-- In the editor the Solutions panel (right) and the Card/Pool tabs
