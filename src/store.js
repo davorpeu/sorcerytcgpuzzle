@@ -1,3 +1,11 @@
+// Other modules reset it through this: an imported binding can't be assigned.
+function clearStoryStack() {
+  storyStack = null
+}
+// Other modules set it through this: an imported binding can't be assigned.
+function setDropCastId(id) {
+  dropCastId = id
+}
 import { reactive, computed, watch, nextTick } from 'vue'
 
 export const GRID_COLS = 5
@@ -6736,11 +6744,11 @@ function findDropTarget(casterId, ability, zone, sq) {
           (z) => state.zones[z] || []
         )
       : [...(state.zones[zone] || [])]
-  dropCastId = casterId
+  setDropCastId(casterId)
   try {
     return ids.find((id) => satisfiesTarget(casterId, id, ability.target)) || null
   } finally {
-    dropCastId = null
+    setDropCastId(null)
   }
 }
 
@@ -7080,7 +7088,7 @@ export function undo() {
   if (!list.length) return
   // A pending trigger choice belongs to the move being undone; drop it.
   ui.storyChoice = null
-  storyStack = null
+  clearStoryStack()
   const m = list.pop()
   if (m.prevTapped) state.tapped = clone(m.prevTapped)
   if (m.prevStats) state.stats = clone(m.prevStats)
@@ -7181,7 +7189,7 @@ function restoreInitial() {
   state.stealthLost = {}
   state.wardBroken = {}
   state.counters = {}
-  storyStack = null
+  clearStoryStack()
 }
 
 // `from`, `held` and `carrierId` are recorded for undo but deliberately not
@@ -8152,7 +8160,7 @@ export function loadPuzzle(data, { play = true } = {}) {
   state.stealthLost = {}
   state.wardBroken = {}
   state.counters = {}
-  storyStack = null
+  clearStoryStack()
   state.zones = restoreZones(state.initialZones)
   state.floodedSites = clone(state.initialFloodedSites)
   state.initialStats = normalizeStats(data.stats)
@@ -8206,7 +8214,7 @@ export function newPuzzle() {
   state.stealthLost = {}
   state.wardBroken = {}
   state.counters = {}
-  storyStack = null
+  clearStoryStack()
   state.initialZones = null
   state.initialCarry = null
   state.stats = defaultStats()
