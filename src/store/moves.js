@@ -2,7 +2,6 @@
 // store split: import from src/store.js, never from this file directly.
 
 import { watch } from 'vue'
-import { removeFromZones } from '../store.js'
 import {
   GRID_COLS,
   GRID_SIZE,
@@ -52,6 +51,7 @@ import { fireTriggers } from './abilities.js'
 import { checkGrantLoss, checkSurvival, snapshotStructural } from './effects.js'
 import { withEditorSiteMana } from './mana.js'
 import { editingStart, isAvatar, isUnit } from './session.js'
+import { removeFromZones } from './persistence.js'
 
 // ---------- moves ----------
 

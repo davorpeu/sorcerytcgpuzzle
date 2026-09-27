@@ -3,7 +3,6 @@
 // store split: import from src/store.js, never from this file directly.
 
 import { nextTick } from 'vue'
-import { removeFromZones } from '../store.js'
 import { GRID_COLS, GRID_SIZE, clone, emitFx, state, ui, uid, zoneOf } from './state.js'
 import {
   ANIMATE_DURATIONS,
@@ -83,6 +82,7 @@ import {
 } from './abilities.js'
 import { beginCast, canCast, isSpell, legalSummonLocation, undo } from './mana.js'
 import { adjustStat, isAvatar, isTapped, isUnit } from './session.js'
+import { removeFromZones } from './persistence.js'
 
 // ---------- effect ops ----------
 

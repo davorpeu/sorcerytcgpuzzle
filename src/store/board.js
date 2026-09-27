@@ -4,7 +4,6 @@
 // src/store.js, never from this file directly.
 
 import { computed } from 'vue'
-import { removeFromZones } from '../store.js'
 import {
   ELEMENTS,
   GRID_COLS,
@@ -33,6 +32,7 @@ import { matchesFilter, satisfiesTarget } from './abilities.js'
 import { checkSurvival, effectMove, otherSide, selectCards, snapshotStructural } from './effects.js'
 import { canCast, effectiveThreshold, inPlayCards, legalSummonLocation } from './mana.js'
 import { isAvatar, isUnit } from './session.js'
+import { removeFromZones } from './persistence.js'
 
 const FIXED_ZONE_LABELS = {
   'hand:player': 'Player hand',
