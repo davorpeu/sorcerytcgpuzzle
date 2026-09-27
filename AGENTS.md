@@ -114,6 +114,8 @@ See `wordpress/AGENTS.md` (plugin PHP, REST endpoints, and the `scripts/build-wp
   buried, counters...). Names may appear in `aria-label` only.
 - Use the design tokens (CSS custom properties in `:root` of `src/style.css`); no hard-coded
   colours. Component styles are `scoped`; global CSS only in `src/style.css`.
+- In a scoped style, `:global(...)` must hold the whole selector: Vue drops anything after it
+  (`:global(.a) .b` compiles to `.a`), which once hid the entire app.
 - Sentence case everywhere, no all-caps labels.
 - State is never shown by colour alone: pair it with a word, glyph or line style.
 - Visible keyboard focus on everything interactive; everything reachable by keyboard.
