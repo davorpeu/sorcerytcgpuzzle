@@ -28,6 +28,11 @@ import {
   cellSquare,
   cellLayer,
   crossingIndex,
+  clickCard,
+  clickSite,
+  clickZone,
+  zoneRefuses,
+  zoneArmed,
   markSaved,
   startRecording,
   stopRecording,
@@ -340,5 +345,51 @@ describe('armed actions', () => {
     expect(ui.activating).toBe(null)
     expect(ui.moving).toBe('nc') // another card's action stays
     ui.moving = null
+  })
+})
+
+describe('clicks (what a click does, given what is armed)', () => {
+  beforeEach(async () => {
+    loadFixture()
+    enterPlay()
+    resetPlay()
+    await nextTick()
+    ui.selected = null
+  })
+
+  it('a click on a card with nothing armed selects it', () => {
+    clickCard('nc', 'cell:17:top')
+    expect(ui.selected).toBe('nc')
+  })
+
+  it('with Move armed, a click on a unit moves onto its square (the solution)', async () => {
+    beginMove('gk')
+    clickCard('sk', 'cell:7:top')
+    await nextTick()
+    expect(state.zones['cell:7:top']).toContain('gk')
+    expect(solveStatus.value).toBe('optimal')
+  })
+
+  it('with Move armed, a click on a site moves into the band under the pointer', async () => {
+    beginMove('gk')
+    clickSite(7, 'cell:7:top', 's7')
+    await nextTick()
+    expect(state.zones['cell:7:top']).toContain('gk')
+  })
+
+  it('while solving, a realm card is refused off the board, and on it until Move is armed', () => {
+    expect(zoneRefuses('gk', 'hand:player')).toBe(true)
+    expect(zoneRefuses('gk', 'cell:7:top')).toBe(true)
+    beginMove('gk')
+    expect(zoneRefuses('gk', 'cell:7:top')).toBe(false)
+  })
+
+  it('a click on a zone moves the selected, Move-armed card there', async () => {
+    beginMove('gk')
+    ui.selected = 'gk'
+    expect(zoneArmed('cell:7:top')).toBe(true)
+    clickZone('cell:7:top', false)
+    await nextTick()
+    expect(state.zones['cell:7:top']).toContain('gk')
   })
 })

@@ -1,7 +1,6 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import {
-  moveCard,
   ui,
   state,
   zoneOf,
@@ -9,23 +8,17 @@ import {
   armedMoveLegal,
   activeGridPick,
   canPickGridSquare,
-  pickGridSquare,
   activeStoryGridPick,
   canStoryPickSquare,
-  pickStorySquare,
-  destPickArmed,
   canPickAnyDest,
-  pickAnyDest,
   spellCastable,
-  canCast,
-  castByDrop,
-  playerControls,
-  castControlled,
-  manualMoveAllowed,
   attackCrossingPickable,
-  pickAttackCrossing,
   cellSquare,
   crossingIndex,
+  zoneRefuses,
+  zoneArmed,
+  castOrMove,
+  clickZone,
 } from '../store.js'
 
 const props = defineProps({
@@ -48,21 +41,13 @@ const over = ref(false)
 // cast (castByDrop would silently do nothing), so off-board zones refuse it,
 // all but the storyline for a magic.
 function refuses(cardId) {
-  if (!cardId) return false
-  if (spellCastable(cardId)) return castOffBoard(cardId)
-  return !manualMoveAllowed(cardId, props.zone)
-}
-function castOffBoard(cardId) {
-  if (!offBoard.value) return false
-  return !(props.zone === 'storyline' && state.cards[cardId]?.magic)
+  return zoneRefuses(cardId, props.zone)
 }
 
 // A zone is "armed" while a card is selected: clicking it moves that card
 // here. This is the touch-friendly counterpart to dragging, and the only way
 // to play on a tablet, where HTML5 drag-and-drop does not fire at all.
-const armed = computed(
-  () => !!ui.selected && !ui.attacker && !ui.striker && !refuses(ui.selected)
-)
+const armed = computed(() => zoneArmed(props.zone))
 
 // Not cancelling dragover is what tells the browser the drop is not allowed
 // (no-drop cursor, and no drop event). A refused off-board zone still notes the
@@ -153,26 +138,7 @@ const actionLabel = computed(() => {
   return `Move here: ${z}`
 })
 
-// A spell dragged/clicked from a castable source into play is cast at the drop
-// location (a magic targets what's there; a permanent enters the realm), not
-// moved. The source is the hand, or the cemetery for a card that grants it --
-// spellCastable decides. In the editor it is false, so setting up a puzzle still
-// just places cards. An unaffordable spell does nothing rather than moving in
-// for free. (castOffBoard above keeps piles from advertising such a drop.)
-function castOrMove(cardId, from, zone) {
-  // In play mode the solver drives only their own side: an opponent's cards
-  // (a spell in their hand, a unit of theirs on the board) can't be cast or
-  // moved by dragging/clicking. The puzzle moves the opponent automatically.
-  // A spell is gated by who casts it, which can be the solver even for an
-  // opponent's card (out of a swapped cemetery, or by a cast permit).
-  if (spellCastable(cardId)) {
-    if (castControlled(cardId) && canCast(cardId)) castByDrop(cardId, zone)
-    return
-  }
-  if (!playerControls(cardId)) return
-  moveCard(cardId, from, zone)
-}
-
+// A dropped card is cast or moved here; the store's castOrMove decides which.
 function onDrop(e) {
   over.value = false
   try {
@@ -184,30 +150,7 @@ function onDrop(e) {
 }
 
 function onClick() {
-  // A destination pick (teleport / token placement) takes the click. This zone
-  // is one exact location: the surface band or the below band of a square.
-  if (destPickArmed()) {
-    if (canPickAnyDest(props.zone)) pickAnyDest(props.zone)
-    return
-  }
-  // A paused trigger picking a grid square takes the click.
-  if (activeStoryGridPick()) {
-    if (canStoryPickSquare(square.value)) pickStorySquare(square.value)
-    return
-  }
-  // A grid-target ability being aimed takes the click as a square pick.
-  if (activeGridPick()) {
-    if (gridPickable.value) pickGridSquare(square.value)
-    return
-  }
-  // An oversized attacker's crossing: picked here, before or after the target.
-  if (crossing.value != null && ui.attacker) {
-    if (crossingPick.value) pickAttackCrossing(crossing.value)
-    return
-  }
-  if (!armed.value) return
-  const from = zoneOf(ui.selected)
-  if (from) castOrMove(ui.selected, from, props.zone)
+  clickZone(props.zone, gridPickable.value)
 }
 </script>
 

@@ -6,27 +6,8 @@ import {
   isTapped,
   zoneRegion,
   selectCard,
-  targetAttack,
-  targetStrike,
-  targetPickup,
-  targetActivate,
   canActivateTarget,
-  armedAttackLegal,
-  armedShootLegal,
-  targetShoot,
-  armedInterceptLegal,
-  targetIntercept,
-  armedDefendLegal,
-  chooseDefender,
-  activeGridPick,
-  canPickGridSquare,
-  pickGridSquare,
-  isStoryChoiceTarget,
   isPickedTarget,
-  resolveStoryChoice,
-  destPickArmed,
-  canPickAnyDest,
-  pickAnyDest,
   carriedBy,
   damageOf,
   isSilenced,
@@ -42,11 +23,12 @@ import {
   isAnimated,
   wardTokenArt,
   beginDrag,
-  moveCard,
-  zoneOf,
   canCast,
   castShortfall,
   cellSquare,
+  cardTargetable,
+  cardLiftable,
+  clickCard,
 } from '../store.js'
 
 const props = defineProps({
@@ -87,19 +69,10 @@ const shortText = computed(() => {
 })
 // Strike is unenforced (any on-board target); attack highlights only legal
 // targets when the puzzle enforces (armedAttackLegal falls back to true otherwise).
-const targetable = computed(() => {
-  if (ui.storyChoice) return isStoryChoiceTarget(props.cardId)
-  if (ui.awaitingDefender) return armedDefendLegal(props.cardId)
-  if (ui.shooting && ui.shooting !== props.cardId) return armedShootLegal(props.cardId)
-  if (ui.intercepting && ui.intercepting !== props.cardId)
-    return onBoard.value && armedInterceptLegal(props.cardId)
-  if (!onBoard.value) return false
-  if (ui.striker && ui.striker !== props.cardId) return true
-  return armedAttackLegal(props.cardId)
-})
+const targetable = computed(() => cardTargetable(props.cardId, props.from))
 // Anything but the armed carrier itself can be picked up, wherever it sits --
 // a card in hand is as liftable as one on the board.
-const liftable = computed(() => ui.carrier && ui.carrier !== props.cardId)
+const liftable = computed(() => cardLiftable(props.cardId))
 // Waiting for this card as an activated ability's target. Unlike attack/strike
 // the target can be anywhere the ability allows (a collection avatar, say), so
 // this is not gated to the board.
@@ -128,17 +101,6 @@ const counterTag = ([name, n]) =>
   name === SHIELD_COUNTER ? `🛡${n}` : `${name.slice(0, 4)}×${n}`
 const signedStr = computed(() =>
   strengthMod.value > 0 ? `+${strengthMod.value}` : `${strengthMod.value}`
-)
-// Only the formal Move action makes a click on a unit mean "move here". A
-// plain selection leaves other units clickable to select instead, so you can
-// switch between cards without moving. So clicking a unit standing in a square
-// sends the moving card onto that square -- the same as clicking the bare felt
-// or the site there -- rather than reselecting the card under the pointer.
-// Only board squares are destinations; tokens in a hand or cemetery still
-// select. Tokens live in the surface band, so that is where the move lands;
-// the below band is a separate strip of its own that catches its own clicks.
-const moveArmed = computed(
-  () => ui.moving && ui.moving !== props.cardId && onBoard.value
 )
 
 // Transient cosmetic flash for this card. Only kinds whose card stays put are
@@ -198,63 +160,9 @@ function onDragStart(e) {
 // A click either lands an armed attack/strike or selects the card, which is what
 // puts its actions in the bar above the storyline. The click must not reach
 // the zone underneath, or selecting would immediately move the card.
+// What the click does depends on what is armed; the store decides.
 function onClick() {
-  // Picking a destination (teleport / token placement): a click on a card picks
-  // its location -- its own layer if legal there, else that square's surface.
-  if (destPickArmed()) {
-    const m = /^cell:(\d+):/.exec(props.from)
-    if (m) {
-      const zone = canPickAnyDest(props.from) ? props.from : `cell:${m[1]}:top`
-      if (canPickAnyDest(zone)) pickAnyDest(zone)
-    }
-    return
-  }
-  // The storyline is paused for a trigger to pick a target.
-  if (ui.storyChoice) {
-    if (isStoryChoiceTarget(props.cardId)) resolveStoryChoice(props.cardId)
-    return
-  }
-  // Aiming a grid ability: clicking a unit picks its square.
-  if (activeGridPick()) {
-    const m = /^cell:(\d+):/.exec(props.from)
-    if (m && canPickGridSquare(Number(m[1]))) pickGridSquare(Number(m[1]))
-    return
-  }
-  // A pending attack is waiting for a defender: a highlighted unit takes the job.
-  if (ui.awaitingDefender) {
-    if (armedDefendLegal(props.cardId)) chooseDefender(props.cardId)
-    return
-  }
-  if (targetable.value) {
-    if (ui.shooting) targetShoot(props.cardId)
-    else if (ui.intercepting) targetIntercept(props.cardId)
-    else if (ui.attacker) targetAttack(props.cardId)
-    else if (ui.striker) targetStrike(props.cardId)
-    return
-  }
-  // An armed activated ability lands its target here.
-  if (activatingTarget.value) {
-    targetActivate(props.cardId)
-    return
-  }
-  // An armed pick-up lands here too, or the highlight would be a lie: this is
-  // the only click surface for cards on the board and in hand, and sites and
-  // auras already lift this way from Board.vue.
-  if (liftable.value) {
-    targetPickup(props.cardId)
-    return
-  }
-  // A click on a unit while the Move action is armed drops the moving card
-  // onto this unit's square (surface band) instead of reselecting.
-  if (moveArmed.value) {
-    const m = props.from.match(/^cell:(\d+):(top|bot)$/)
-    const from = zoneOf(ui.moving)
-    if (m && from) {
-      moveCard(ui.moving, from, `cell:${m[1]}:top`)
-      return
-    }
-  }
-  selectCard(props.cardId)
+  clickCard(props.cardId, props.from)
 }
 </script>
 

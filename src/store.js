@@ -345,6 +345,18 @@ export {
   shareLink,
   wouldLoseWork,
 } from './store/persistence.js'
+export {
+  cardLiftable,
+  cardMoveTarget,
+  cardTargetable,
+  castOrMove,
+  clickAura,
+  clickCard,
+  clickSite,
+  clickZone,
+  zoneArmed,
+  zoneRefuses,
+} from './store/clicks.js'
 
 // Internals exposed for the unit tests in tests/ only. Not part of the app's
 // API: components must not import this.

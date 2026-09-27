@@ -3,34 +3,18 @@ import { computed, reactive } from 'vue'
 import {
   state,
   ui,
-  targetAttack,
-  targetPickup,
-  targetStrike,
   armedAttackLegal,
-  armedShootLegal,
-  targetShoot,
-  armedDefendLegal,
-  chooseDefender,
-  attackCrossingPickable,
-  pickAttackCrossing,
   isStoryChoiceTarget,
-  resolveStoryChoice,
   canActivateTarget,
-  targetActivate,
   isOversized,
   isTapped,
   damageOf,
   effectivePower,
-  selectCard,
   carriedBy,
   beginDrag,
-  moveCard,
   zoneOf,
   zoneLabel,
   regionOf,
-  destPickArmed,
-  canPickAnyDest,
-  pickAnyDest,
   isWaterSite,
   isFloodedSite,
   squareCue,
@@ -40,6 +24,8 @@ import {
   GRID_ROWS,
   INTERSECTIONS,
   INTERSECTION_COLS,
+  clickSite as storeClickSite,
+  clickAura as storeClickAura,
 } from '../store.js'
 import DropZone from './DropZone.vue'
 import CardToken from './CardToken.vue'
@@ -107,77 +93,14 @@ function bandAt(idx, e) {
   return band && band.classList.contains('bot') ? `cell:${idx}:bot` : `cell:${idx}:top`
 }
 
+// A click on a square's site art; the band under the pointer (DOM) says
+// surface or below, and the store decides what the click does.
 function clickSite(idx, e) {
-  const card = siteCard(idx)
-  // Picking a destination: the site art stands for its square's locations.
-  if (destPickArmed()) {
-    const zone = bandAt(idx, e)
-    if (canPickAnyDest(zone)) pickAnyDest(zone)
-    else if (canPickAnyDest(`cell:${idx}:top`)) pickAnyDest(`cell:${idx}:top`)
-    return
-  }
-  // Only the formal Move action turns a click anywhere on the square -- bare
-  // felt, the site art, or a unit standing here -- into a move; moveCard taps
-  // the moving unit because ui.moving is set. A plain selection leaves the
-  // site clickable to select (the else branch) so you can switch between
-  // pieces without moving. The band under the pointer picks surface vs below.
-  if (ui.moving && (!card || ui.moving !== card.id)) {
-    const to = bandAt(idx, e)
-    const from = zoneOf(ui.moving)
-    if (from) moveCard(ui.moving, from, to)
-    return
-  }
-  if (!card) return
-  if (ui.attacker && ui.attacker !== card.id) targetAttack(card.id)
-  else if (ui.carrier && ui.carrier !== card.id) targetPickup(card.id)
-  else if (ui.striker && ui.striker !== card.id) targetStrike(card.id)
-  else selectCard(card.id)
+  storeClickSite(idx, bandAt(idx, e), siteCard(idx)?.id ?? null)
 }
 
 function clickAura(card) {
-  if (!card) return
-  // Any aura -- animated or not -- can be an ability's or trigger's target
-  // (e.g. "animate an aura"); the ability's target spec decides.
-  if (ui.storyChoice) {
-    if (isStoryChoiceTarget(card.id)) resolveStoryChoice(card.id)
-    return
-  }
-  if (canActivateTarget(card.id)) {
-    targetActivate(card.id)
-    return
-  }
-  // An oversized attacker picking its crossing: a card already standing there
-  // (its own token, to attack from where it is) stands for the crossing, unless
-  // it is itself something to attack.
-  if (ui.attacker && !armedAttackLegal(card.id)) {
-    const crossing = Number(zoneOf(card.id)?.slice('aura:'.length))
-    if (attackCrossingPickable(crossing)) {
-      pickAttackCrossing(crossing)
-      return
-    }
-  }
-  // An animated aura is an oversized minion, so it can be the target of the
-  // same armed actions a unit token answers to.
-  if (isOversized(card.id)) {
-    if (ui.awaitingDefender) {
-      if (armedDefendLegal(card.id)) chooseDefender(card.id)
-      return
-    }
-    if (ui.shooting && ui.shooting !== card.id) {
-      if (armedShootLegal(card.id)) targetShoot(card.id)
-      return
-    }
-    if (ui.attacker && ui.attacker !== card.id) {
-      if (armedAttackLegal(card.id)) targetAttack(card.id)
-      return
-    }
-    if (ui.striker && ui.striker !== card.id) {
-      targetStrike(card.id)
-      return
-    }
-  }
-  if (ui.carrier && ui.carrier !== card.id) targetPickup(card.id)
-  else selectCard(card.id)
+  storeClickAura(card?.id)
 }
 
 // Sites and auras are painted straight onto the square rather than drawn as
