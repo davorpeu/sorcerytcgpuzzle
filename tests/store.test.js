@@ -3,7 +3,7 @@
 // five sites, The Green Knight on square 12 with a buried Skeleton under it,
 // an opponent Skeleton on square 7, and one recorded solution line — the
 // Knight moves 12 -> 7.
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { nextTick } from 'vue'
 import fixture from './fixtures/art-test-v1.json'
 import {
@@ -16,6 +16,11 @@ import {
   beginMove,
   moveCard,
   solveStatus,
+  undo,
+  enterEditor,
+  config,
+  playLocked,
+  MAX_MISTAKES,
   startRecording,
   stopRecording,
   wouldLoseWork,
@@ -167,6 +172,20 @@ describe('playing the puzzle', () => {
     expect(state.mistakes).toBe(0)
   })
 
+  it('counts a harmless extra move as solved, but not optimal', async () => {
+    beginMove('gk')
+    moveCard('gk', 'cell:12:top', 'cell:7:top')
+    await nextTick()
+    // The Necromancer is not part of the solution, so stepping it into the
+    // square the Knight left doesn't disturb the puzzle.
+    beginMove('nc')
+    moveCard('nc', 'cell:17:top', 'cell:12:top')
+    await nextTick()
+    expect(state.moves).toHaveLength(2)
+    expect(solveStatus.value).toBe('partial')
+    expect(state.mistakes).toBe(0)
+  })
+
   it('snaps a wrong move back and counts a mistake', async () => {
     beginMove('gk')
     moveCard('gk', 'cell:12:top', 'cell:13:top')
@@ -175,5 +194,79 @@ describe('playing the puzzle', () => {
     expect(state.moves).toHaveLength(0)
     expect(state.mistakes).toBe(1)
     expect(ui.moving).toBe(null)
+  })
+})
+
+describe('undo and the mistake limit', () => {
+  beforeEach(async () => {
+    loadFixture()
+    enterPlay()
+    resetPlay()
+    await nextTick()
+  })
+  afterEach(() => {
+    config.canEdit = true
+  })
+
+  it('undo puts the board back and clears the verdict', async () => {
+    beginMove('gk')
+    moveCard('gk', 'cell:12:top', 'cell:7:top')
+    await nextTick()
+    expect(solveStatus.value).toBe('optimal')
+    undo()
+    await nextTick()
+    expect(state.zones['cell:12:top']).toContain('gk')
+    expect(state.moves).toHaveLength(0)
+    expect(solveStatus.value).toBe(null)
+  })
+
+  it('a player fails for the day after the last allowed mistake', async () => {
+    config.canEdit = false
+    for (let i = 0; i < MAX_MISTAKES; i++) {
+      beginMove('gk')
+      moveCard('gk', 'cell:12:top', 'cell:13:top')
+      await nextTick()
+    }
+    expect(state.mistakes).toBe(MAX_MISTAKES)
+    expect(state.failed).toBe(true)
+    expect(playLocked.value).toBe(true)
+  })
+
+  it('an editor gets the snap-back but no limit', async () => {
+    for (let i = 0; i < MAX_MISTAKES + 1; i++) {
+      beginMove('gk')
+      moveCard('gk', 'cell:12:top', 'cell:13:top')
+      await nextTick()
+    }
+    expect(state.mistakes).toBe(MAX_MISTAKES + 1)
+    expect(state.failed).toBe(false)
+    expect(playLocked.value).toBe(false)
+  })
+})
+
+describe('recording solution lines in the editor', () => {
+  beforeEach(() => {
+    loadFixture()
+    enterEditor()
+  })
+
+  it('adds a new line and puts the board back to the start', () => {
+    startRecording()
+    beginMove('gk')
+    moveCard('gk', 'cell:12:top', 'cell:11:top')
+    expect(state.draft).toHaveLength(1)
+    stopRecording()
+    expect(state.solutions).toHaveLength(2)
+    expect(state.solutions[1][0]).toMatchObject({ cardId: 'gk', from: 'cell:12:top', to: 'cell:11:top' })
+    expect(state.zones['cell:12:top']).toContain('gk')
+    expect(state.draft).toHaveLength(0)
+  })
+
+  it('does not add a line that is already recorded', () => {
+    startRecording()
+    beginMove('gk')
+    moveCard('gk', 'cell:12:top', 'cell:7:top')
+    stopRecording()
+    expect(state.solutions).toHaveLength(1)
   })
 })
