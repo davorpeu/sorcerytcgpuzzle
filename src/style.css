@@ -1327,12 +1327,6 @@ details[open] > .panel-summary {
   font-family: Georgia, serif;
 }
 
-.card-preview-caption {
-  font-size: 16px;
-  font-weight: 600;
-  text-shadow: 0 1px 4px #000;
-}
-
 /* ---------- cards ---------- */
 
 .card-token {

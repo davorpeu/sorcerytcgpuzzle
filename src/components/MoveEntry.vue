@@ -5,6 +5,7 @@
 // its name, as the board does: then the name is the only way to tell it.)
 import { computed } from 'vue'
 import { state, zoneLabel, cardName } from '../store.js'
+import CardThumb from './CardThumb.vue'
 
 const props = defineProps({
   entry: { type: Object, required: true },
@@ -86,21 +87,7 @@ const events = computed(() =>
   props.entry.seq == null ? [] : state.events.filter((e) => e.seq === props.entry.seq)
 )
 
-function thumb(id) {
-  const c = state.cards[id]
-  if (!c) return { gone: true, label: 'A card no longer in the puzzle' }
-  return {
-    img: c.img || '',
-    opp: !!c.enemy,
-    label: c.enemy ? `${cardName(id)}, opponent's` : cardName(id),
-    name: cardName(id),
-  }
-}
 
-function artStyle(id) {
-  const img = state.cards[id]?.img
-  return img ? { backgroundImage: `url(${JSON.stringify(img)})` } : null
-}
 </script>
 
 <template>
@@ -109,31 +96,14 @@ function artStyle(id) {
     <span class="body">
       <span class="line">
         <template v-for="(p, i) in parts" :key="i">
-          <span
-            v-if="p.kind === 'card'"
-            class="mini"
-            :class="{
-              opp: thumb(p.id).opp,
-              'no-art': !thumb(p.id).gone && !thumb(p.id).img,
-              gone: thumb(p.id).gone,
-            }"
-            :style="artStyle(p.id)"
-            role="img"
-            :aria-label="thumb(p.id).label"
-          ><span v-if="!thumb(p.id).gone && !thumb(p.id).img" aria-hidden="true">{{ thumb(p.id).name }}</span></span>
+          <CardThumb v-if="p.kind === 'card'" :id="p.id" />
           <span v-else-if="p.kind === 'verb'" class="v">{{ p.text }}</span>
           <span v-else class="t">{{ p.text }}</span>
         </template>
       </span>
       <ul v-if="events.length" class="events">
         <li v-for="ev in events" :key="ev.id" :class="{ ignored: ev.status === 'ignored' }">
-          <span
-            class="mini"
-            :class="{ opp: thumb(ev.cardId).opp, gone: thumb(ev.cardId).gone }"
-            :style="artStyle(ev.cardId)"
-            role="img"
-            :aria-label="thumb(ev.cardId).label"
-          ></span>
+          <CardThumb :id="ev.cardId" size="sm" />
           <span class="v">triggers</span>
           <span class="t ev-name">{{ ev.name }}</span>
           <em v-if="ev.status === 'ignored'">ignored, {{ ev.reason || 'source left the realm' }}</em>
@@ -177,47 +147,6 @@ function artStyle(id) {
   align-items: center;
   gap: 4px 6px;
 }
-.mini {
-  width: 18px;
-  height: 25px;
-  flex-shrink: 0;
-  border-radius: 2px;
-  background-color: var(--c-raised-2);
-  background-size: cover;
-  background-position: center;
-  border: 1px solid var(--c-gold);
-}
-/* Opponent's cards: slate edge and upside down, as they sit on the table. */
-.mini.opp {
-  border-color: var(--c-opp);
-  transform: rotate(180deg);
-}
-/* No art: a cream face with the name, as on the board. */
-.mini.no-art {
-  width: auto;
-  max-width: 9em;
-  height: auto;
-  min-height: 25px;
-  padding: 1px 4px;
-  background: var(--c-cream-lo);
-  color: var(--c-ink);
-  font-size: var(--fs-xs);
-  line-height: 1.15;
-  display: inline-flex;
-  align-items: center;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.mini.no-art.opp {
-  transform: none;
-  border-style: dashed;
-}
-.mini.gone {
-  background: transparent;
-  border: 1px dashed var(--c-line-strong);
-  transform: none;
-}
 .v {
   color: var(--c-cream-hi);
   font-weight: 700;
@@ -233,10 +162,6 @@ function artStyle(id) {
 }
 .events li {
   font-size: var(--fs-xs);
-}
-.events .mini {
-  width: 14px;
-  height: 19px;
 }
 /* An ignored trigger: struck through AND says "ignored", never style alone. */
 .events li.ignored .ev-name {

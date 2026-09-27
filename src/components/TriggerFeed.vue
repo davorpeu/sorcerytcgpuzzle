@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { state, emitFx } from '../store.js'
+import CardThumb from './CardThumb.vue'
 
 // What the last move set off, shown as compact chips in the storyline block.
 // Nothing to dismiss: the strip is keyed to the latest logged entry's seq, so
@@ -52,7 +53,7 @@ watch(
       >
         <span class="chip-icon" aria-hidden="true">✧</span>
         <span class="chip-name">
-          <strong>{{ state.cards[ev.cardId]?.name }}</strong> — {{ ev.name }}
+          <CardThumb :id="ev.cardId" size="sm" /> {{ ev.name }}
         </span>
       </button>
       <div v-if="open === ev.id" class="chip-body">
@@ -61,7 +62,7 @@ watch(
           ignored — {{ ev.reason || 'its source left the realm' }}
         </div>
         <div v-if="ev.triggeringId && ev.triggeringId !== ev.cardId" class="chip-src">
-          set off by {{ state.cards[ev.triggeringId]?.name }}
+          set off by <CardThumb :id="ev.triggeringId" size="sm" />
         </div>
       </div>
     </li>

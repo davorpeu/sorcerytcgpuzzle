@@ -23,6 +23,7 @@ import {
   playerControls,
   GRID_SIZE,
 } from '../store.js'
+import CardThumb from './CardThumb.vue'
 
 // The selected card, large. Everything printed on it -- name, type, cost,
 // threshold, power, rules text -- is already in the art, so the list under it
@@ -75,10 +76,9 @@ const changes = computed(() => {
   if (cantMove(cid)) out.push({ text: "Can't move", tone: 'bad' })
   if (cantDefend(cid)) out.push({ text: "Can't move to defend", tone: 'bad' })
   if (cantBeTargeted(cid)) out.push({ text: "Can't be targeted by opponents" })
-  const held = carriedBy(cid)
-    .map((h) => state.cards[h]?.name)
-    .filter(Boolean)
-  if (held.length) out.push({ text: `Carrying ${held.join(', ')}` })
+  // What it carries, as art (names are printed on the cards).
+  const held = carriedBy(cid).filter((h) => state.cards[h])
+  if (held.length) out.push({ text: 'Carrying', cards: held })
   return out
 })
 
@@ -126,7 +126,10 @@ const hint = computed(() => {
       <p v-else class="inspector-name">{{ card.name }}</p>
     </div>
     <ul v-if="changes.length" class="inspector-changes" aria-label="What has changed">
-      <li v-for="c in changes" :key="c.text" :class="c.tone">{{ c.text }}</li>
+      <li v-for="c in changes" :key="c.text" :class="c.tone">
+        {{ c.text }}
+        <CardThumb v-for="h in c.cards || []" :key="h" :id="h" size="sm" />
+      </li>
     </ul>
     <p class="inspector-hint">{{ hint }}</p>
     <p class="inspector-keys"><kbd>Esc</kbd> puts the card down</p>

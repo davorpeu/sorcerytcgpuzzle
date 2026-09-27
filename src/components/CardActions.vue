@@ -406,7 +406,7 @@ const cardLabel = (id) => state.cards[id]?.name || "a card";
         :disabled="!canFight && !attacking"
         @click="beginAttack(ui.selected)"
       >
-        {{ attacking ? "Cancel attack" : "Attack & Move" }}
+        {{ attacking ? "Cancel attack" : "Attack and move" }}
       </button>
       <button
         v-if="hasRange"

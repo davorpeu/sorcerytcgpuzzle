@@ -74,30 +74,30 @@ function entryClass(i) {
       <li v-else :class="entryClass(i)">
         <template v-if="m.type === 'attack'">
           <strong>{{ cardName(m.cardId) }}</strong>
-          ⚔ attacks <strong>{{ cardName(m.targetId) }}</strong>
+          <span aria-hidden="true">⚔</span> attacks <strong>{{ cardName(m.targetId) }}</strong>
           <template v-if="m.defenderId">
             — defended by <strong>{{ cardName(m.defenderId) }}</strong>
           </template>
         </template>
         <template v-else-if="m.type === 'strike'">
           <strong>{{ cardName(m.cardId) }}</strong>
-          💥 strikes <strong>{{ cardName(m.targetId) }}</strong>
+          <span aria-hidden="true">💥</span> strikes <strong>{{ cardName(m.targetId) }}</strong>
         </template>
         <template v-else-if="m.type === 'shoot'">
           <strong>{{ cardName(m.cardId) }}</strong>
-          ➶ shoots <strong>{{ cardName(m.targetId) }}</strong>
+          <span aria-hidden="true">➶</span> shoots <strong>{{ cardName(m.targetId) }}</strong>
         </template>
         <template v-else-if="m.type === 'intercept'">
           <strong>{{ cardName(m.cardId) }}</strong>
-          ⚔ intercepts <strong>{{ cardName(m.targetId) }}</strong>
+          <span aria-hidden="true">⚔</span> intercepts <strong>{{ cardName(m.targetId) }}</strong>
         </template>
         <template v-else-if="m.type === 'pickup'">
           <strong>{{ cardName(m.cardId) }}</strong>
-          ✋ picks up <strong>{{ cardName(m.targetId) }}</strong>
+          <span aria-hidden="true">✋</span> picks up <strong>{{ cardName(m.targetId) }}</strong>
         </template>
         <template v-else-if="m.type === 'drop'">
           <strong>{{ cardName(m.carrierId) }}</strong>
-          ▽ drops <strong>{{ cardName(m.cardId) }}</strong>
+          <span aria-hidden="true">▽</span> drops <strong>{{ cardName(m.cardId) }}</strong>
           {{ zoneLabel(m.to) }}
         </template>
         <template v-else-if="m.type === 'ability'">
@@ -105,14 +105,14 @@ function entryClass(i) {
           ✧ activates <strong>{{ abilityName(m) }}</strong>
           <template v-if="m.modes?.length">({{ modeNames(m) }})</template>
           <template v-if="m.targetId">
-            → <strong>{{ targetNames(m) }}</strong>
+            <span aria-hidden="true">→</span><span class="sr-only">at</span> <strong>{{ targetNames(m) }}</strong>
           </template>
         </template>
         <template v-else-if="m.type === 'cast'">
-          ✦ casts <strong>{{ cardName(m.cardId) }}</strong>
+          <span aria-hidden="true">✦</span> casts <strong>{{ cardName(m.cardId) }}</strong>
           <template v-if="m.modes?.length">({{ modeNames(m) }})</template>
           <template v-if="m.targetId">
-            → <strong>{{ targetNames(m) }}</strong>
+            <span aria-hidden="true">→</span><span class="sr-only">at</span> <strong>{{ targetNames(m) }}</strong>
           </template>
         </template>
 
@@ -127,7 +127,7 @@ function entryClass(i) {
         </template>
         <template v-else>
           <strong>{{ cardName(m.cardId) }}</strong>
-          {{ zoneLabel(m.from) }} → {{ zoneLabel(m.to) }}
+          {{ zoneLabel(m.from) }} <span aria-hidden="true">→</span><span class="sr-only">to</span> {{ zoneLabel(m.to) }}
         </template>
         <ul v-if="eventsFor(m).length" class="entry-events">
           <li v-for="ev in eventsFor(m)" :key="ev.id" :class="{ ignored: ev.status === 'ignored' }">

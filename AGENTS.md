@@ -111,7 +111,9 @@ See `wordpress/AGENTS.md` (plugin PHP, REST endpoints, and the `scripts/build-wp
 
 - **Never show information printed on the card** (name, cost, threshold, type, rules text, base
   power). Card art is the card; the UI shows only game state and changes (damage, tapped,
-  buried, counters...). Names may appear in `aria-label` only.
+  buried, counters...). Names may appear in `aria-label` only. Exceptions the user approved:
+  card names in the storyline/ability prompts ("Choose a target for …"), in the play-mode move
+  log, and the editor's Power/Defense inputs (there is no card database).
 - Use the design tokens (CSS custom properties in `:root` of `src/style.css`); no hard-coded
   colours. Component styles are `scoped`; global CSS only in `src/style.css`.
 - In a scoped style, `:global(...)` must hold the whole selector: Vue drops anything after it

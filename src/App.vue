@@ -445,7 +445,6 @@ watch(
         @load="notePreviewRatio($event, previewCard.img)"
       />
       <div v-else class="card-preview-name">{{ previewCard.name }}</div>
-      <div class="card-preview-caption">{{ previewCard.name }}</div>
     </div>
   </div>
 </template>
