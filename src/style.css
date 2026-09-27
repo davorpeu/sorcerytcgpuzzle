@@ -1986,7 +1986,14 @@ details[open] > .panel-summary {
    mouse's dimensions, not a finger's. */
 @media (pointer: coarse) {
   .btn {
+    min-height: 44px;
     padding: 9px 13px;
+  }
+
+  /* Icon-only buttons (delete, disclosure) in the dialogs and panels. */
+  .iconbtn {
+    min-width: 44px;
+    min-height: 44px;
   }
 
   .btn.small {
@@ -2000,8 +2007,8 @@ details[open] > .panel-summary {
   }
 
   .ca-close {
-    width: 32px;
-    height: 32px;
+    width: 44px;
+    height: 44px;
   }
 
   .card-actions {
@@ -2029,5 +2036,22 @@ details[open] > .panel-summary {
 
   .opp-drawer .grave .card-token {
     --card-w: 46px;
+  }
+}
+
+/* Reduced motion, everywhere: components gate their own animations too, but
+   this catches any transition or animation that isn't (and any added later).
+   Durations collapse rather than being removed, so end states still apply. */
+@media (prefers-reduced-motion: reduce) {
+  .app *,
+  .app *::before,
+  .app *::after,
+  .narrow-shell *,
+  dialog,
+  dialog * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
