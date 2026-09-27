@@ -8,10 +8,8 @@ import {
   areAdjacent,
   areNearby,
   canCast,
-  cardZoneCategory,
   carrierOf,
   checkSurvival,
-  damageOf,
   effectMove,
   effectiveThreshold,
   engageCrossings,
@@ -21,13 +19,11 @@ import {
   isUnit,
   legalSummonLocation,
   matchesFilter,
-  normalizeArea,
   otherSide,
   removeFromZones,
   routeZone,
   satisfiesTarget,
   selectCards,
-  sendToCemetery,
   shedInPlayState,
   snapshotStructural,
 } from '../store.js'
@@ -45,6 +41,7 @@ import {
   uid,
   zoneOf,
 } from './state.js'
+import { cardZoneCategory, damageOf, normalizeArea, sendToCemetery } from './counters.js'
 
 const FIXED_ZONE_LABELS = {
   'hand:player': 'Player hand',
