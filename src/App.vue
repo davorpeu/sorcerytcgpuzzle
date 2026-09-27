@@ -37,6 +37,7 @@ import EditorSidebar from './components/EditorSidebar.vue'
 import SolutionsPanel from './components/SolutionsPanel.vue'
 import RecordingFrame from './components/RecordingFrame.vue'
 import EditorNarrowNotice from './components/EditorNarrowNotice.vue'
+import EditorToast from './components/EditorToast.vue'
 import { enableDragScroll } from './dragScroll.js'
 
 let stopDragScroll = null
@@ -180,6 +181,8 @@ watch(
        Only the left column changes with the mode: the selected card in play,
        the editor's panels in the editor. -->
   <div v-if="editorTooNarrow" class="narrow-shell">
+    <!-- The header (where editor messages show) isn't rendered here. -->
+    <EditorToast class="narrow-toast" />
     <EditorNarrowNotice />
   </div>
   <div v-else class="app" :class="[`mode-${state.mode}`, { locked: playLocked }]">
@@ -452,6 +455,10 @@ watch(
   padding: var(--sp-5) var(--sp-3);
   color: var(--c-text);
   font-family: var(--font-ui);
+}
+
+.narrow-toast {
+  margin-bottom: var(--sp-3);
 }
 
 /* Positioned for the editor RecordingFrame overlay; its caption straddles the

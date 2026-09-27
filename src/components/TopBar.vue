@@ -11,7 +11,7 @@ import {
   playLocked,
   MAX_MISTAKES,
 } from '../store.js'
-import { toast } from '../editorToast.js'
+import EditorToast from './EditorToast.vue'
 import EditorPuzzleTitle from './EditorPuzzleTitle.vue'
 import EditorHeaderActions from './EditorHeaderActions.vue'
 
@@ -123,17 +123,7 @@ const result = computed(() => {
         </div>
       </div>
       <output class="notice" aria-live="polite">{{ notice }}</output>
-      <!-- Editor messages (save, import, share...). Tone is carried by a glyph
-           and the border style as well as colour. -->
-      <div
-        v-if="state.mode === 'editor' && toast.msg"
-        :key="toast.seq"
-        class="toast"
-        :class="toast.tone"
-        :role="toast.tone === 'error' ? 'alert' : 'status'"
-      >
-        {{ toast.msg }}
-      </div>
+      <EditorToast v-if="state.mode === 'editor'" />
     </div>
 
     <!-- Where the attempt stands: moves made so far against the shortest
@@ -426,36 +416,6 @@ h1 {
 
 .topbar-brief.playtest {
   font-size: var(--fs-sm);
-}
-
-.toast {
-  padding: 8px 14px;
-  border-radius: var(--r-md);
-  background: var(--c-raised-2);
-  border: 1px solid var(--c-gold);
-  font-size: var(--fs-md);
-  color: var(--c-cream-hi);
-}
-.toast.ok::before {
-  content: "✓ ";
-  color: var(--c-gold);
-  font-weight: 700;
-}
-.toast.warn {
-  border-color: var(--c-warn);
-}
-.toast.warn::before {
-  content: "! ";
-  color: var(--c-warn);
-  font-weight: 700;
-}
-.toast.error {
-  border: 1px dashed var(--c-danger);
-}
-.toast.error::before {
-  content: "✕ ";
-  color: var(--c-danger-soft);
-  font-weight: 700;
 }
 
 .vr {
