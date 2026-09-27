@@ -6,7 +6,6 @@ import {
   checkGrantLoss,
   checkSurvival,
   editingStart,
-  fireTriggers,
   isAvatar,
   isUnit,
   removeFromZones,
@@ -58,6 +57,7 @@ import {
   zoneCategory,
 } from './board.js'
 import { resolveAttack, strikeWithLance } from './counters.js'
+import { fireTriggers } from './abilities.js'
 
 // ---------- moves ----------
 

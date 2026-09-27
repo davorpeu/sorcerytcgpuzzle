@@ -5,9 +5,7 @@
 import {
   adjustStat,
   checkGrantLoss,
-  fireTriggers,
   isUnit,
-  matchesFilter,
   removeFromZones,
   snapshotStructural,
 } from '../store.js'
@@ -30,6 +28,7 @@ import {
   zoneCategory,
 } from './board.js'
 import { carriedBy, shedInPlayState } from './moves.js'
+import { fireTriggers, matchesFilter } from './abilities.js'
 
 // ---------- counters & damage prevention ----------
 

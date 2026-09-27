@@ -13,10 +13,8 @@ import {
   isAvatar,
   isUnit,
   legalSummonLocation,
-  matchesFilter,
   otherSide,
   removeFromZones,
-  satisfiesTarget,
   selectCards,
   snapshotStructural,
 } from '../store.js'
@@ -44,6 +42,7 @@ import {
   routeZone,
   shedInPlayState,
 } from './moves.js'
+import { matchesFilter, satisfiesTarget } from './abilities.js'
 
 const FIXED_ZONE_LABELS = {
   'hand:player': 'Player hand',
