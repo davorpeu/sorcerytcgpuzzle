@@ -319,7 +319,7 @@ onUnmounted(() => clearInterval(pruneTimer))
   padding: 2px 8px;
   border-radius: 999px;
   background: rgba(40, 20, 60, 0.9);
-  border: 1px solid rgba(200, 120, 255, 0.7);
+  border: 1px solid color-mix(in srgb, var(--c-trigger) 70%, transparent);
   color: #f0e2ff;
   font-size: 0.75rem;
   font-weight: 600;

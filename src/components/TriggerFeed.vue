@@ -79,8 +79,8 @@ watch(
   gap: 4px;
 }
 .trigger-chip {
-  border: 1px solid rgba(200, 120, 255, 0.45);
-  background: rgba(200, 120, 255, 0.1);
+  border: 1px solid color-mix(in srgb, var(--c-trigger) 45%, transparent);
+  background: color-mix(in srgb, var(--c-trigger) 10%, transparent);
   border-radius: 8px;
   font-size: 0.8rem;
   animation: chip-in 0.25s ease-out;
@@ -123,7 +123,7 @@ watch(
   white-space: normal;
 }
 .chip-icon {
-  color: rgb(210, 150, 255);
+  color: var(--c-trigger-hi);
 }
 .chip-body {
   padding: 0 0.5rem 0.4rem 1.45rem;

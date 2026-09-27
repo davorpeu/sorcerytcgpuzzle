@@ -1345,11 +1345,11 @@ const ids = { name: `ab-name-${++uid}`, text: `ab-text-${uid}`, add: `ab-add-${u
   pointer-events: auto;
 }
 .backdrop.full {
-  background: rgba(10, 14, 12, 0.62);
+  background: var(--c-scrim-felt);
 }
 .hole {
   position: fixed;
-  box-shadow: 0 0 0 200vmax rgba(10, 14, 12, 0.62);
+  box-shadow: 0 0 0 200vmax var(--c-scrim-felt);
   pointer-events: none;
 }
 .region {

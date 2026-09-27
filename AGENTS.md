@@ -121,7 +121,10 @@ See `wordpress/AGENTS.md` (plugin PHP, REST endpoints, and the `scripts/build-wp
   card names in the storyline/ability prompts ("Choose a target for …"), in the play-mode move
   log, and the editor's Power/Defense inputs (there is no card database).
 - Use the design tokens (CSS custom properties in `:root` of `src/style.css`); no hard-coded
-  colours. Component styles are `scoped`; global CSS only in `src/style.css`.
+  colours for anything that carries meaning or repeats. Two exceptions: black shadows
+  (`rgba(0, 0, 0, a)` in a box-shadow), and illustration colours that are art rather than
+  palette -- the spell effects in `FxOverlay.vue` and the water tint in `Board.vue`. Keep those
+  in their component. Component styles are `scoped`; global CSS only in `src/style.css`.
 - In a scoped style, `:global(...)` must hold the whole selector: Vue drops anything after it
   (`:global(.a) .b` compiles to `.a`), which once hid the entire app.
 - Sentence case everywhere, no all-caps labels.

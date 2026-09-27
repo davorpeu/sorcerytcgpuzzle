@@ -286,7 +286,7 @@ async function onLoadDaily() {
   box-shadow: var(--shadow-pop);
 }
 .dlg::backdrop {
-  background: rgba(0, 0, 0, 0.55);
+  background: var(--c-scrim);
 }
 .dlg[open] {
   display: flex;

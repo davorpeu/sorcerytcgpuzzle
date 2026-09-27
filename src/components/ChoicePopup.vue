@@ -135,7 +135,7 @@ function setFirst(i, el) {
   overflow: visible;
 }
 .choice-modal::backdrop {
-  background: rgba(0, 0, 0, 0.55);
+  background: var(--c-scrim);
 }
 .dlg {
   width: min(420px, 100%);

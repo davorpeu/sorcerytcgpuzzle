@@ -142,6 +142,13 @@
   --shadow-card: 0 2px 6px rgba(0, 0, 0, 0.5);
   --shadow-pop: 0 8px 34px rgba(0, 0, 0, 0.7);
 
+  /* Behind modal dialogs; the ability editor's is tinted with the felt. */
+  --c-scrim: rgba(0, 0, 0, 0.55);
+  --c-scrim-felt: rgba(10, 14, 12, 0.62);
+  /* Triggered abilities (trigger feed, the ability name floating off a card). */
+  --c-trigger: #c878ff;
+  --c-trigger-hi: #d296ff;
+
   /* Legacy aliases. */
   --bg: var(--c-felt);
   --panel: var(--c-panel);
@@ -1309,10 +1316,10 @@ details[open] > .panel-summary {
 @keyframes fx-target-pulse {
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgba(240, 122, 92, 0);
+    box-shadow: 0 0 0 0 transparent;
   }
   50% {
-    box-shadow: 0 0 10px 3px rgba(240, 122, 92, 0.75);
+    box-shadow: 0 0 10px 3px color-mix(in srgb, var(--c-danger) 75%, transparent);
   }
 }
 @keyframes fx-armed-pulse {
