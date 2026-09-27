@@ -128,6 +128,8 @@ See `wordpress/AGENTS.md` (plugin PHP, REST endpoints, and the `scripts/build-wp
 - In a scoped style, `:global(...)` must hold the whole selector: Vue drops anything after it
   (`:global(.a) .b` compiles to `.a`), which once hid the entire app.
 - Sentence case everywhere, no all-caps labels.
+- Text is at least 11px (`--fs-xs` is 12px). The only exceptions are badges drawn on the
+  board's smallest pieces (aura seals, site carry badges); keep those to a number or glyph.
 - State is never shown by colour alone: pair it with a word, glyph or line style.
 - Visible keyboard focus on everything interactive; everything reachable by keyboard.
 - Respect `prefers-reduced-motion` for every animation.

@@ -693,17 +693,6 @@ details[open] > .panel-summary {
   background: rgba(0, 0, 0, 0.18);
 }
 
-.cell-half.bot::after {
-  position: absolute;
-  bottom: 2px;
-  left: 0;
-  right: 0;
-  text-align: center;
-  font-size: 8px;
-  color: var(--muted);
-  opacity: 0.6;
-  pointer-events: none;
-}
 
 /* A zone only wants the pointer when it can do something with it: while a card
    is armed for a click-move, or while one is in flight. Idle, the bands step

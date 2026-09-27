@@ -398,7 +398,7 @@ function nodeStyle(idx) {
                  since it is drawn as an aura rather than a card token. -->
             <template v-if="isOversized(card.id)">
               <span class="oversized-tag" aria-hidden="true">
-                ANIM {{ effectivePower(card.id) }}
+                Anim {{ effectivePower(card.id) }}
               </span>
               <span v-if="damageOf(card.id)" class="oversized-dmg" aria-hidden="true">
                 {{ damageOf(card.id) }}
