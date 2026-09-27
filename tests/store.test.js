@@ -119,6 +119,15 @@ describe('puzzle files', () => {
     expect(state.solutions).toEqual(fixture.solutions)
   })
 
+  it('refuses a file from a newer version and keeps the current puzzle', () => {
+    loadFixture()
+    const before = serialize()
+    const newer = { ...JSON.parse(JSON.stringify(fixture)), version: 99, name: 'From the future' }
+    expect(() => loadPuzzle(newer)).toThrow(/newer version/)
+    expect(state.puzzleName).toBe(before.name)
+    expect(state.initialZones).toEqual(before.initial)
+  })
+
   it('saves and loads back to the same puzzle', () => {
     loadFixture()
     const first = serialize()

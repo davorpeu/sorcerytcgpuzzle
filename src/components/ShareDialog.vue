@@ -104,8 +104,13 @@ async function onImport(e) {
     loadPuzzle(data, { play: false })
     flash(`Imported "${state.puzzleName || 'Untitled puzzle'}"`, 'ok')
     emit('close')
-  } catch {
-    flash("Import failed: that file isn't a puzzle.", 'error')
+  } catch (err) {
+    flash(
+      err?.code === 'too-new'
+        ? `Import failed: ${err.message}`
+        : "Import failed: that file isn't a puzzle.",
+      'error'
+    )
   }
 }
 </script>

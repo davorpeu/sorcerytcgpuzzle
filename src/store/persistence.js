@@ -307,6 +307,16 @@ function normalizeStats(s) {
 }
 
 export function loadPuzzle(data, { play = true } = {}) {
+  // A file from a newer version of the app may use fields this one doesn't
+  // understand. Refuse it before touching the current puzzle, rather than load
+  // it half right.
+  if (Number(data?.version) > FORMAT_VERSION) {
+    const e = new Error(
+      'This puzzle was made with a newer version of the app. Reload the page to update it.'
+    )
+    e.code = 'too-new'
+    throw e
+  }
   state.puzzleId = data.id || uid()
   state.puzzleName = data.name || ''
   state.puzzleDesc = data.desc || ''
@@ -561,7 +571,11 @@ export async function loadById(id, opts) {
   }
   const p = readStore()[id]
   if (!p || (!config.canEdit && !released(p))) return false
-  loadPuzzle(p, opts)
+  try {
+    loadPuzzle(p, opts)
+  } catch {
+    return false
+  }
   return true
 }
 
@@ -620,7 +634,11 @@ export async function loadDaily() {
   }
   const current = (await listPuzzles()).filter(released).sort(byReleaseDesc)[0]
   if (!current) return false
-  loadPuzzle(current)
+  try {
+    loadPuzzle(current)
+  } catch {
+    return false
+  }
   return true
 }
 
