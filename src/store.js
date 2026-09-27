@@ -1,11 +1,3 @@
-// Other modules reset it through this: an imported binding can't be assigned.
-function clearStoryStack() {
-  storyStack = null
-}
-// Other modules set it through this: an imported binding can't be assigned.
-function setDropCastId(id) {
-  dropCastId = id
-}
 import { reactive, computed, watch, nextTick } from 'vue'
 
 export const GRID_COLS = 5
@@ -4192,6 +4184,10 @@ function triggerMatches(trigger, owner, entry) {
 // The stack being drained right now, or null when idle. A nested trigger (a
 // death mid-resolution, say) sees this set and unshifts onto it to interrupt.
 let storyStack = null
+// Other modules reset it through this: an imported binding can't be assigned.
+function clearStoryStack() {
+  storyStack = null
+}
 // Events resolved in the current drain, capped by STORY_LIMIT.
 let storyResolved = 0
 const STORY_LIMIT = 200
@@ -5041,6 +5037,10 @@ export function destPrompt(ability) {
 // sides as its caster -- the other side when it is cast out of a swapped
 // cemetery or by permit -- though control only passes to them as it resolves.
 let dropCastId = null
+// Other modules set it through this: an imported binding can't be assigned.
+function setDropCastId(id) {
+  dropCastId = id
+}
 const beingCast = (id) => dropCastId === id || (!!ui.activating?.cast && ui.activating.cardId === id)
 const actsAsEnemy = (id) =>
   beingCast(id) ? castSide(id) === 'opponent' : !!state.cards[id]?.enemy
