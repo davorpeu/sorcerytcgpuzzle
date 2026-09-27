@@ -5,26 +5,19 @@
 
 import { computed } from 'vue'
 import {
-  areAdjacent,
-  areNearby,
   canCast,
-  carrierOf,
   checkSurvival,
   effectMove,
   effectiveThreshold,
-  engageCrossings,
   inPlayCards,
-  inRealm,
   isAvatar,
   isUnit,
   legalSummonLocation,
   matchesFilter,
   otherSide,
   removeFromZones,
-  routeZone,
   satisfiesTarget,
   selectCards,
-  shedInPlayState,
   snapshotStructural,
 } from '../store.js'
 import {
@@ -42,6 +35,15 @@ import {
   zoneOf,
 } from './state.js'
 import { cardZoneCategory, damageOf, normalizeArea, sendToCemetery } from './counters.js'
+import {
+  areAdjacent,
+  areNearby,
+  carrierOf,
+  engageCrossings,
+  inRealm,
+  routeZone,
+  shedInPlayState,
+} from './moves.js'
 
 const FIXED_ZONE_LABELS = {
   'hand:player': 'Player hand',

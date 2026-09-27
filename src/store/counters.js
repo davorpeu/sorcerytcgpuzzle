@@ -4,13 +4,11 @@
 
 import {
   adjustStat,
-  carriedBy,
   checkGrantLoss,
   fireTriggers,
   isUnit,
   matchesFilter,
   removeFromZones,
-  shedInPlayState,
   snapshotStructural,
 } from '../store.js'
 import { ELEMENTS, clone, emitFx, state, ui, uid, zoneOf } from './state.js'
@@ -31,6 +29,7 @@ import {
   sideOf,
   zoneCategory,
 } from './board.js'
+import { carriedBy, shedInPlayState } from './moves.js'
 
 // ---------- counters & damage prevention ----------
 
