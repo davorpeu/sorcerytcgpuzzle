@@ -110,8 +110,11 @@ const lineNo = computed(() => state.solutions.length + 1)
 }
 
 /* The ability dialog opens with its top edge just under this caption, which
-   then peeked out above it; the idle caption steps aside while it is open. */
-:global(.app:has(.ability-dialog)) .cap.idle {
+   then peeked out above it; the idle caption steps aside while it is open.
+   The whole selector is inside :global() on purpose: Vue drops anything after
+   a :global(...) part, and `:global(.app:has(.ability-dialog)) .cap.idle`
+   compiled to `.app:has(.ability-dialog)`, hiding the entire app. */
+:global(.app:has(.ability-dialog) .rec-frame > .cap.idle) {
   visibility: hidden;
 }
 </style>
