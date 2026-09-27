@@ -3,18 +3,7 @@
 // store split: import from src/store.js, never from this file directly.
 
 import { nextTick } from 'vue'
-import {
-  adjustStat,
-  beginCast,
-  canCast,
-  isAvatar,
-  isSpell,
-  isTapped,
-  isUnit,
-  legalSummonLocation,
-  removeFromZones,
-  undo,
-} from '../store.js'
+import { adjustStat, isAvatar, isTapped, isUnit, removeFromZones } from '../store.js'
 import { GRID_COLS, GRID_SIZE, clone, emitFx, state, ui, uid, zoneOf } from './state.js'
 import {
   ANIMATE_DURATIONS,
@@ -92,6 +81,7 @@ import {
   runAbilityEffects,
   squareOf,
 } from './abilities.js'
+import { beginCast, canCast, isSpell, legalSummonLocation, undo } from './mana.js'
 
 // ---------- effect ops ----------
 

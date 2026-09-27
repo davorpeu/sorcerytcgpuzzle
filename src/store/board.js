@@ -4,15 +4,7 @@
 // src/store.js, never from this file directly.
 
 import { computed } from 'vue'
-import {
-  canCast,
-  effectiveThreshold,
-  inPlayCards,
-  isAvatar,
-  isUnit,
-  legalSummonLocation,
-  removeFromZones,
-} from '../store.js'
+import { isAvatar, isUnit, removeFromZones } from '../store.js'
 import {
   ELEMENTS,
   GRID_COLS,
@@ -39,6 +31,7 @@ import {
 } from './moves.js'
 import { matchesFilter, satisfiesTarget } from './abilities.js'
 import { checkSurvival, effectMove, otherSide, selectCards, snapshotStructural } from './effects.js'
+import { canCast, effectiveThreshold, inPlayCards, legalSummonLocation } from './mana.js'
 
 const FIXED_ZONE_LABELS = {
   'hand:player': 'Player hand',
