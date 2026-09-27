@@ -2,7 +2,7 @@
 // action, draw decks and mode choice. Part of the store split: import from
 // src/store.js, never from this file directly.
 
-import { ELEMENTS, clone, emitFx, state, ui, uid, zoneOf } from './state.js'
+import { ARMED_ACTIONS, ELEMENTS, clone, emitFx, state, ui, uid, zoneOf } from './state.js'
 import {
   abilityCostBlocked,
   abilityUsesLeft,
@@ -691,12 +691,25 @@ export function finishPicks() {
 
 // Only one action is ever armed: clear the others before arming an ability.
 function disarmOthers() {
-  ui.attacker = null
-  ui.striker = null
-  ui.moving = null
-  ui.carrier = null
-  ui.shooting = null
-  ui.intercepting = null
+  for (const k of ARMED_ACTIONS) ui[k] = null
+}
+
+// Esc: drop the armed action, a pending ability target or defender prompt,
+// and the selection. A trigger's choice (ui.storyChoice) stays: a triggered
+// ability has to resolve.
+export function cancelArmed() {
+  disarmOthers()
+  ui.activating = null
+  ui.awaitingDefender = null
+  ui.selected = null
+}
+
+// The prompts' Cancel buttons.
+export function cancelActivation() {
+  ui.activating = null
+}
+export function cancelDefenderPrompt() {
+  ui.awaitingDefender = null
 }
 
 // The mode choice waiting on the player, if any: { cardId, ability, count, story }.

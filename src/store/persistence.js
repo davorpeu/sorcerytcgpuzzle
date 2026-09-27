@@ -8,6 +8,7 @@ import {
   GRID_SIZE,
   MAX_DATA_URL,
   STORAGE_KEY,
+  ARMED_ACTIONS,
   api,
   clone,
   config,
@@ -113,11 +114,8 @@ export function removeFromZones(zones, cardId) {
 
 // Clear any armed action or selection that was pointing at this card.
 function clearArmed(cardId) {
-  if (ui.attacker === cardId) ui.attacker = null
-  if (ui.carrier === cardId) ui.carrier = null
-  if (ui.striker === cardId) ui.striker = null
-  if (ui.moving === cardId) ui.moving = null
-  if (ui.selected === cardId) ui.selected = null
+  for (const k of [...ARMED_ACTIONS, 'selected']) if (ui[k] === cardId) ui[k] = null
+  if (ui.activating?.cardId === cardId) ui.activating = null
 }
 
 export function removeCard(cardId) {

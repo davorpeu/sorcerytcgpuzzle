@@ -21,6 +21,9 @@ import {
   config,
   playLocked,
   MAX_MISTAKES,
+  ARMED_ACTIONS,
+  cancelArmed,
+  removeCard,
   startRecording,
   stopRecording,
   wouldLoseWork,
@@ -268,5 +271,40 @@ describe('recording solution lines in the editor', () => {
     moveCard('gk', 'cell:12:top', 'cell:7:top')
     stopRecording()
     expect(state.solutions).toHaveLength(1)
+  })
+})
+
+describe('armed actions', () => {
+  beforeEach(() => {
+    loadFixture()
+    enterEditor()
+  })
+
+  it("Esc (cancelArmed) clears every armed action but not a trigger's choice", () => {
+    for (const k of ARMED_ACTIONS) ui[k] = 'gk'
+    ui.activating = { cardId: 'gk' }
+    ui.awaitingDefender = { attackerId: 'gk' }
+    ui.selected = 'gk'
+    ui.storyChoice = { ownerId: 'nc' }
+    cancelArmed()
+    for (const k of ARMED_ACTIONS) expect(ui[k]).toBe(null)
+    expect(ui.activating).toBe(null)
+    expect(ui.awaitingDefender).toBe(null)
+    expect(ui.selected).toBe(null)
+    expect(ui.storyChoice).toEqual({ ownerId: 'nc' })
+    ui.storyChoice = null
+  })
+
+  it('removing a card clears every action it was armed for', () => {
+    ui.shooting = 'gk'
+    ui.intercepting = 'gk'
+    ui.activating = { cardId: 'gk' }
+    ui.moving = 'nc'
+    removeCard('gk')
+    expect(ui.shooting).toBe(null)
+    expect(ui.intercepting).toBe(null)
+    expect(ui.activating).toBe(null)
+    expect(ui.moving).toBe('nc') // another card's action stays
+    ui.moving = null
   })
 })

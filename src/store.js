@@ -5,6 +5,7 @@
 import { routeZone, wouldCycle } from './store/moves.js'
 import { entryCards, lineOutcome, sameEntry, sameLine, solutionCards } from './store/session.js'
 export {
+  ARMED_ACTIONS,
   ELEMENTS,
   GRID_COLS,
   GRID_ROWS,
@@ -254,6 +255,9 @@ export {
   canCharge,
   canDeclineActivate,
   canFinishPicks,
+  cancelActivation,
+  cancelArmed,
+  cancelDefenderPrompt,
   cancelModeChoice,
   cardTypeLabel,
   castByDrop,

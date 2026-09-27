@@ -17,6 +17,9 @@ import {
   activeAbility,
   storyPickState,
   finishStoryPicks,
+  cancelArmed,
+  cancelActivation,
+  cancelDefenderPrompt,
 } from './store.js'
 import Board from './components/Board.vue'
 import MoveLog from './components/MoveLog.vue'
@@ -101,17 +104,7 @@ function onKeyDown(e) {
     e.preventDefault() // keep the browser from focusing its menu bar
     ui.alt = true
   }
-  if (e.key === 'Escape') {
-    ui.attacker = null
-    ui.carrier = null
-    ui.striker = null
-    ui.moving = null
-    ui.activating = null
-    ui.shooting = null
-    ui.intercepting = null
-    ui.awaitingDefender = null
-    ui.selected = null
-  }
+  if (e.key === 'Escape') cancelArmed()
 }
 
 function onKeyUp(e) {
@@ -355,7 +348,7 @@ watch(
         >
           <span>Attack: click a highlighted defender, or</span>
           <button class="btn small primary" @click="declineDefender">Attack directly</button>
-          <button class="btn small" @click="ui.awaitingDefender = null">Cancel</button>
+          <button class="btn small" @click="cancelDefenderPrompt">Cancel</button>
         </div>
 
         <!-- "An ally shoots a projectile": the player picks the ally, then
@@ -370,7 +363,7 @@ watch(
             <strong>{{ state.cards[ui.activating.shooterId]?.name }}</strong>
             shoots — click the highlighted unit the projectile hits.
           </span>
-          <button class="btn small" @click="ui.activating = null">Cancel</button>
+          <button class="btn small" @click="cancelActivation">Cancel</button>
         </div>
 
         <!-- A spell (possibly drag-cast, so not selected) waits for its
@@ -380,7 +373,7 @@ watch(
             <strong>{{ state.cards[ui.activating.cardId]?.name }}</strong>
             — {{ destPrompt(activeAbility()) }}
           </span>
-          <button class="btn small" @click="ui.activating = null">Cancel</button>
+          <button class="btn small" @click="cancelActivation">Cancel</button>
         </div>
 
         <!-- A triggered ability is waiting for the player to pick its target.

@@ -184,6 +184,11 @@ export const ui = reactive({
   fx: [],
 })
 
+// The one-card actions a card can be armed for (only one at a time: arming one
+// clears the others). Esc, removing the card and arming another all clear from
+// this one list.
+export const ARMED_ACTIONS = ['attacker', 'striker', 'moving', 'carrier', 'shooting', 'intercepting']
+
 // How long each effect kind stays in `ui.fx` before it self-removes (ms).
 const FX_DURATION = {
   cast: 800,
