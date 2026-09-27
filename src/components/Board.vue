@@ -419,6 +419,208 @@ function nodeStyle(idx) {
 </template>
 
 <style scoped>
+/* Moved from style.css (kept first, so the component's own rules below still win). */
+/* Sites and auras are drawn straight onto the board rather than as card
+   tokens, so they get a count instead of a strip. */
+.carry-badge {
+  /* .site-badge centres itself with left/transform; this one hugs the corner
+     so it can sit alongside the SITE and AURA badges rather than under them. */
+  left: auto;
+  transform: none;
+  bottom: 2px;
+  right: 2px;
+}
+
+.site-badge {
+  position: absolute;
+  bottom: 3px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--c-gold);
+  color: var(--c-ink);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+@media (max-width: 1100px) {
+  .cell-half .site-badge {
+      font-size: 7px;
+      letter-spacing: 0;
+      padding: 1px 3px;
+    }
+}
+
+/* Moved from style.css (kept first, so the component's own rules below still win). */
+.aura-token:focus-visible {
+  outline: 3px solid var(--c-focus);
+  outline-offset: -3px;
+}
+
+/* Overlay covering the stage, which is the grid, so the nodes sit exactly on
+   the crossings of the grid lines however the board is scaled. */
+.intersections {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.aura-node {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  pointer-events: auto;
+  /* Auras always paint above sites and any cards on them. */
+  z-index: 4;
+}
+
+/* Sized so a portrait aura card stands roughly as tall as a site card:
+   a site is ~82% of a cell (16.4% of the grid); at 4:3 cells and 88x63
+   card art, a 9%-wide portrait card matches the site's height.
+
+   The floor and ceiling are both in stage terms for a reason. This was
+   `min-width: 64px`, and on a phone the floor won: 64px of aura on a 68px
+   square, taller than the square itself, swallowing the site under it and the
+   cards either side. 12% of the stage is 60% of one square, which is as large
+   as a piece drawn on a crossing can be and still leave the squares readable. */
+.aura-node.occupied {
+  width: clamp(9%, 36px, 12%);
+  min-width: 0;
+  height: auto;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  overflow: visible;
+}
+
+.aura-node.occupied.over {
+  outline: 2px solid var(--aura);
+  outline-offset: 2px;
+}
+
+.oversized-tag {
+  position: absolute;
+  left: 2px;
+  bottom: 2px;
+  padding: 0 0.3em;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--c-cream-hi);
+  background: rgba(0, 0, 0, 0.7);
+  pointer-events: none;
+}
+
+.oversized-dmg {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 1.1em;
+  padding: 0 0.25em;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 700;
+  text-align: center;
+  color: var(--c-cream-hi);
+  background: var(--c-danger-deep);
+  pointer-events: none;
+}
+
+.aura-token {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Host themes style [role="button"] and img with padding, margins and
+     min-heights; any of them shows up as a strip of token background under
+     the art, so the token hugs its image outright. */
+  margin: 0;
+  padding: 0;
+  min-height: 0;
+  border-radius: 8px;
+  background: var(--panel-2);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+}
+
+/* Several auras can share a crossing. The first sets the node's height; the
+   rest lie over it (fanned out by an inline transform from Board.vue). The one
+   under the pointer or selected comes to the front so any of them can be read
+   and grabbed. */
+.aura-token.stacked {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+.aura-token:hover,
+.aura-token:focus-visible {
+  z-index: 20 !important;
+}
+
+.aura-token.selected {
+  z-index: 10 !important;
+}
+
+/* An animated aura is an oversized minion standing on all four squares around
+   its crossing. It keeps the plain aura size; the unit-style ring and ANIM tag
+   are what mark it. */
+.aura-token.oversized {
+  box-shadow: 0 0 0 2px var(--accent), 0 4px 14px rgba(0, 0, 0, 0.7);
+}
+
+.aura-token:active {
+  cursor: grabbing;
+}
+
+/* Tapped (an animated aura that moved or attacked), turned a quarter like a
+   tapped card token. The whole token turns so its tags go with the art. */
+.aura-token.tapped {
+  rotate: 90deg;
+  opacity: 0.9;
+}
+
+.aura-name {
+  font-size: 8px;
+  font-weight: 600;
+  text-align: center;
+  overflow: hidden;
+  padding: 4px 2px;
+}
+
+.aura-token.selected {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: 8px;
+}
+
+.aura-token.targetable {
+  cursor: crosshair;
+}
+
+.aura-token.targetable:hover {
+  outline: 2px dashed var(--bad);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .aura-token.targetable {
+      animation: fx-target-pulse 1.1s ease-in-out infinite;
+      border-radius: 8px;
+    }
+}
+
 /* ---------- the realm: felt squares on thin lines ---------- */
 
 /* The board is the table itself, not a panel on it: no card behind the grid. */

@@ -325,6 +325,65 @@ function onClick() {
 
 <style scoped>
 /* Moved from style.css (kept first, so the component's own rules below still win). */
+.carry-stack {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+}
+
+/* Holder and load share one frame, so it grows by exactly the distance the fan
+   travels and the last card in the pile lands just inside it. */
+.carry-frame {
+  position: absolute;
+  left: calc(-1 * var(--carry-pad));
+  top: calc(-1 * var(--carry-pad));
+  width: calc(100% + var(--carry-n, 0) * var(--carry-dx) + 2 * var(--carry-pad));
+  height: calc(100% + var(--carry-n, 0) * var(--carry-dy) + 2 * var(--carry-pad));
+  border: 1px dashed var(--accent);
+  border-radius: 11px;
+  background: var(--c-gold-bg);
+}
+
+/* --i is the card's place in the fan, written by the template. --lift keeps
+   hover out of the transform so it can add to the offset instead of replacing
+   it. */
+.carry-chip {
+  --lift: 0px;
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  pointer-events: auto;
+  transform: translate(
+    calc(var(--i) * var(--carry-dx)),
+    calc(var(--i) * var(--carry-dy) + var(--lift))
+  );
+  transition: transform 0.15s ease;
+}
+
+.carry-chip:hover,
+.carry-chip.selected {
+  --lift: -6px;
+  z-index: 1;
+}
+
+.carry-chip-name {
+  display: block;
+  background: var(--panel-2);
+  padding: 14px 4px;
+  font-size: 11px;
+  line-height: 1.2;
+  font-weight: 600;
+  text-align: center;
+  word-break: break-word;
+}
+
+/* Moved from style.css (kept first, so the component's own rules below still win). */
 .card-token:focus-visible {
   outline: 3px solid var(--c-focus);
   outline-offset: -3px;
