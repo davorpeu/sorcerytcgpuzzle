@@ -6,17 +6,12 @@
 import { computed } from 'vue'
 import {
   canCast,
-  checkSurvival,
-  effectMove,
   effectiveThreshold,
   inPlayCards,
   isAvatar,
   isUnit,
   legalSummonLocation,
-  otherSide,
   removeFromZones,
-  selectCards,
-  snapshotStructural,
 } from '../store.js'
 import {
   ELEMENTS,
@@ -43,6 +38,7 @@ import {
   shedInPlayState,
 } from './moves.js'
 import { matchesFilter, satisfiesTarget } from './abilities.js'
+import { checkSurvival, effectMove, otherSide, selectCards, snapshotStructural } from './effects.js'
 
 const FIXED_ZONE_LABELS = {
   'hand:player': 'Player hand',
