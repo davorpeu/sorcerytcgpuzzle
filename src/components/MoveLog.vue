@@ -1,6 +1,7 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed } from 'vue'
 import { state, zoneLabel, cardName } from '../store.js'
+import MoveEntry from './MoveEntry.vue'
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
 
@@ -35,26 +36,16 @@ function eventsFor(m) {
   return m.seq == null ? [] : state.events.filter((e) => e.seq === m.seq)
 }
 
-// Which recorded line the log is showing. It used to show the last one and
-// nothing else, so a puzzle with three solutions had two of them unreadable:
-// the sidebar listed their lengths but there was no way to see the moves.
-const lineIdx = ref(0)
+// Plan decision d: play mode keeps card names. Set this to true to draw the
+// play log with MoveEntry (art thumbnails, names only in aria-label) instead.
+const PLAY_THUMBNAILS = false
 
-watch(
-  () => state.solutions.length,
-  (n, prev) => {
-    // A line you have just finished recording is the one you want to read
-    // back, so the log follows it. Deleting one can leave the index past the
-    // end instead, so it comes back to the last line that still exists.
-    if (n > (prev ?? 0)) lineIdx.value = n - 1
-    else if (lineIdx.value > n - 1) lineIdx.value = Math.max(0, n - 1)
-  }
-)
-
+// In the editor the Solutions panel lists the lines; this log is only kept
+// working if it's mounted there: the line being recorded, else the last line.
 const entries = computed(() => {
   if (state.mode === 'play') return state.moves
   if (state.recording) return state.draft
-  return state.solutions[lineIdx.value] || []
+  return state.solutions[state.solutions.length - 1] || []
 })
 
 const title = computed(() => {
@@ -63,17 +54,8 @@ const title = computed(() => {
     return `Recording solution ${state.solutions.length + 1} (${state.draft.length})`
   const n = state.solutions.length
   if (!n) return 'Solution (none recorded)'
-  return `Solution ${lineIdx.value + 1} of ${n} (${plural(
-    entries.value.length,
-    'move'
-  )})`
+  return `Solution ${n} of ${n} (${plural(entries.value.length, 'move')})`
 })
-
-// The line picker is only worth the row when there is more than one line to
-// pick, and it has nothing to say while a line is being recorded.
-const showPicker = computed(
-  () => state.mode === 'editor' && !state.recording && state.solutions.length > 1
-)
 
 function entryClass(i) {
   if (state.mode !== 'play' || !state.checked) return ''
@@ -86,21 +68,10 @@ function entryClass(i) {
 <template>
   <details class="move-log" :open="state.mode !== 'play'">
     <summary class="panel-summary">{{ title }}</summary>
-    <div v-if="showPicker" class="line-picker">
-      <button
-        v-for="(line, i) in state.solutions"
-        :key="i"
-        class="btn small"
-        :class="{ active: i === lineIdx }"
-        :aria-pressed="i === lineIdx"
-        :title="`Solution ${i + 1} — ${plural(line.length, 'move')}`"
-        @click="lineIdx = i"
-      >
-        {{ i + 1 }}
-      </button>
-    </div>
     <ol v-if="entries.length">
-      <li v-for="(m, i) in entries" :key="i" :class="entryClass(i)">
+      <template v-for="(m, i) in entries" :key="i">
+      <MoveEntry v-if="PLAY_THUMBNAILS" :entry="m" :index="i" :numbered="false" :class="entryClass(i)" />
+      <li v-else :class="entryClass(i)">
         <template v-if="m.type === 'attack'">
           <strong>{{ cardName(m.cardId) }}</strong>
           ⚔ attacks <strong>{{ cardName(m.targetId) }}</strong>
@@ -165,6 +136,7 @@ function entryClass(i) {
           </li>
         </ul>
       </li>
+      </template>
     </ol>
     <p v-else class="hint">
       {{

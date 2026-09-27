@@ -1,3 +1,54 @@
+<script>
+// Labels shared with the ability dialog, which folds a condition to one line.
+export const TYPE_LABELS = {
+  always: 'always',
+  onWater: 'stands on a water site',
+  onLand: 'stands on a land site',
+  onFlooded: 'stands on a flooded site',
+  lifeAtMost: 'life is N or less',
+  lifeAtLeast: 'life is N or more',
+  manaAtLeast: 'mana is N or more',
+  affinityAtLeast: 'threshold in an element is N or more',
+  untapped: 'is untapped',
+  tapped: 'is tapped',
+  damaged: 'is damaged',
+  hasKeyword: 'has a keyword',
+  region: 'is in a region',
+  controlsCard: 'at least N cards in an area…',
+  all: 'all of…',
+  any: 'any of…',
+}
+export const AMOUNT_TYPES = [
+  'lifeAtMost',
+  'lifeAtLeast',
+  'manaAtLeast',
+  'affinityAtLeast',
+  'controlsCard',
+]
+export const SUBJECT_LABELS = {
+  self: 'this card',
+  target: 'the picked target',
+  triggering: 'the triggering card',
+  other: 'the other card involved',
+}
+// A condition as a plain phrase: "your life is 3 or less", "not: this card is tapped".
+export function condRecap(cond) {
+  if (!cond || cond.type === 'always') return 'always'
+  if (cond.type === 'all' || cond.type === 'any') {
+    const parts = (cond.of || []).map(condRecap)
+    const joined = parts.join(cond.type === 'all' ? ' and ' : ' or ') || 'nothing'
+    return cond.not ? `not (${joined})` : joined
+  }
+  let text = (TYPE_LABELS[cond.type] || cond.type).replace(/\bN\b/, cond.amount ?? 0).replace(/…$/, '')
+  if (cond.type === 'affinityAtLeast' && cond.element) text = text.replace('an element', cond.element)
+  if (cond.type === 'hasKeyword' && cond.keyword) text = `has ${cond.keyword}`
+  if (cond.type === 'region' && cond.region) text = `is ${cond.region}`
+  const who = cond.whose === 'enemy' ? "the opponent's " : ''
+  const subject = cond.subject && cond.subject !== 'self' ? `${SUBJECT_LABELS[cond.subject]} ` : ''
+  return `${cond.not ? 'not: ' : ''}${who}${subject}${text}`
+}
+</script>
+
 <script setup>
 import EffectSelector from './EffectSelector.vue'
 import {
@@ -25,37 +76,6 @@ const props = defineProps({
   depth: { type: Number, default: 0 },
 })
 
-const TYPE_LABELS = {
-  always: 'always',
-  onWater: 'stands on a water site',
-  onLand: 'stands on a land site',
-  onFlooded: 'stands on a flooded site',
-  lifeAtMost: 'life is N or less',
-  lifeAtLeast: 'life is N or more',
-  manaAtLeast: 'mana is N or more',
-  affinityAtLeast: 'threshold in an element is N or more',
-  untapped: 'is untapped',
-  tapped: 'is tapped',
-  damaged: 'is damaged',
-  hasKeyword: 'has a keyword',
-  region: 'is in a region',
-  controlsCard: 'at least N cards in an area…',
-  all: 'all of…',
-  any: 'any of…',
-}
-const AMOUNT_TYPES = [
-  'lifeAtMost',
-  'lifeAtLeast',
-  'manaAtLeast',
-  'affinityAtLeast',
-  'controlsCard',
-]
-const SUBJECT_LABELS = {
-  self: 'this card',
-  target: 'the picked target',
-  triggering: 'the triggering card',
-  other: 'the other card involved',
-}
 // Nesting past a couple of levels is never needed and gets unreadable.
 // Set an optional field, dropping it at its default so saved files stay small.
 function setOpt(obj, key, value, dflt) {
@@ -141,9 +161,9 @@ const subjects = () =>
     <span v-if="cond.type === 'all' || cond.type === 'any'" class="cond-list">
       <span v-for="(sub, i) in cond.of" :key="i" class="cond-sub">
         <ConditionEditor :cond="sub" :passive="passive" :triggered="triggered" :pick="pick" :depth="depth + 1" />
-        <button class="btn small danger" title="Remove" @click="removeSubCondition(cond, i)">🗑</button>
+        <button type="button" class="btn small danger" aria-label="Remove this test" title="Remove this test" @click="removeSubCondition(cond, i)">✕</button>
       </span>
-      <button class="btn small" @click="addSubCondition(cond)">+ test</button>
+      <button type="button" class="btn small add" @click="addSubCondition(cond)">+ Test</button>
     </span>
   </span>
 </template>
@@ -172,7 +192,7 @@ const subjects = () =>
   flex-direction: column;
   gap: 0.3rem;
   padding-left: 0.8rem;
-  border-left: 2px solid rgba(255, 255, 255, 0.12);
+  border-left: 2px solid var(--c-line-strong);
 }
 .cond-sub {
   display: flex;

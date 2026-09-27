@@ -1,23 +1,10 @@
 <script setup>
-import { computed, ref } from "vue";
-import TriggerEditor from "./TriggerEditor.vue";
-import ThresholdIcon from "./ThresholdIcon.vue";
+import { computed } from "vue";
 import {
   state,
   ui,
   zoneOf,
   clearSelection,
-  removeCard,
-  toggleSite,
-  toggleCastFromCemetery,
-  toggleAura,
-  toggleArtifact,
-  toggleMonument,
-  toggleLanceToken,
-  setTokenTemplate,
-  TOKEN_TEMPLATE_KINDS,
-  TOKEN_NAMES,
-  toggleMagic,
   canAffordCast,
   canCastFrom,
   castSourceOk,
@@ -33,14 +20,11 @@ import {
   finishPicks,
   beginCast,
   isSpell,
-  toggleUnit,
-  toggleAvatar,
   isUnit,
   isOversized,
   isAvatar,
   drawFromDeck,
   deckSize,
-  toggleControl,
   beginMove,
   beginAttack,
   beginShoot,
@@ -62,7 +46,21 @@ import {
   tapBlockedBySickness,
   moveBlockedByPassive,
   attackBlockedByPassive,
+  isAssumedForm,
 } from "../store.js";
+
+// 'mat': the floating bar under the board (play). 'column': the same actions
+// stacked in the editor's Card tab under "On the table" -- no floating chrome
+// and no ×, since Esc and the tab itself deselect. The editor-only setup rows
+// (side, kind, stats, costs, abilities, remove) live in CardSetup.
+const props = defineProps({
+  placement: {
+    type: String,
+    default: "mat",
+    validator: (v) => v === "mat" || v === "column",
+  },
+});
+const inColumn = computed(() => props.placement === "column");
 
 // Everything a card can do lives here rather than on postage-stamp buttons
 // pinned to the card itself, which are unusable once cards shrink to fit a
@@ -76,6 +74,7 @@ const onBoard = computed(
     /^cell:\d+:(top|bot)$/.test(zone.value || "") ||
     (!!ui.selected && isOversized(ui.selected))
 );
+const oversizedSelected = computed(() => !!ui.selected && isOversized(ui.selected));
 const editing = computed(() => state.mode === "editor" && !state.recording);
 const inPool = computed(() => zone.value === "pool");
 const inHand = computed(() => zone.value?.startsWith("hand:"));
@@ -91,17 +90,6 @@ const castLocked = computed(
 );
 // The picker's progress for multi-card targets ("banish three spells").
 const pickState = computed(() => activatePickState());
-// What a card provides (mana / elemental affinity), for the header line.
-const providesText = computed(() => {
-  const c = card.value;
-  if (!c) return "";
-  const bits = [];
-  if (c.manaProvided) bits.push(`${c.manaProvided}◇`);
-  for (const el of ["air", "earth", "fire", "water"]) {
-    if (c.affinity?.[el]) bits.push(`${c.affinity[el]} ${el}`);
-  }
-  return bits.join(", ");
-});
 // A magic being aimed (its cast is armed, waiting for a target/square).
 const casting = computed(
   () => ui.activating?.cast && ui.activating.cardId === ui.selected
@@ -197,16 +185,17 @@ const canPickUp = computed(
 );
 // What this card holds, and who holds it -- the two sides of the same relation
 // and the two buttons the bar has to offer.
+// What the card can put down -- not a form it has assumed, which only its lose
+// conditions or a release effect end.
 const holding = computed(() =>
-  ui.selected && !enemyLocked.value ? carriedBy(ui.selected) : []
+  ui.selected && !enemyLocked.value
+    ? carriedBy(ui.selected).filter((id) => !isAssumedForm(id))
+    : []
 );
 const heldBy = computed(() => (ui.selected ? carrierOf(ui.selected) : null));
-
-// The abilities editor is a modal, opened from the bar. How many a card has is
-// worth showing on the button so an editor can see at a glance which cards are
-// already wired up.
-const showAbilities = ref(false);
-const abilityCount = computed(() => card.value?.abilities?.length || 0);
+// A form another card has assumed: its abilities are its carrier's now, and it
+// can't move, attack, draw or be put down on its own -- so the bar is empty.
+const assumed = computed(() => !!ui.selected && isAssumedForm(ui.selected));
 
 // Activated abilities usable right now: only while a solution is being recorded
 // or played (they log a move), and only those live in the card's current zone.
@@ -255,45 +244,103 @@ const usedUp = (a) =>
   !!ui.selected &&
   abilityUsesLeft(ui.selected, a) <= 0;
 
-// Removing a card takes it out of the puzzle for good -- Undo walks back
-// moves, not deletions -- and the button sits in a row of harmless toggles,
-// so it asks first.
-function onRemove() {
-  if (!card.value) return;
-  if (
-    !confirm(
-      `Remove "${card.value.name}" from the puzzle? This cannot be undone.`
-    )
-  )
-    return;
-  removeCard(ui.selected);
-}
+// The template's conditions, named so the column can tell whether it has
+// anything to show at all (a pool card, say, has no table actions).
+const playing = computed(() => state.mode === "play" || state.recording);
+const showCast = computed(
+  () => castSource.value && !!card.value?.magic && playing.value && !castLocked.value
+);
+const showCastHint = computed(
+  () =>
+    castSource.value &&
+    !card.value?.magic &&
+    isSpell(ui.selected) &&
+    playing.value &&
+    !castLocked.value
+);
+const showHeal = computed(
+  () => onBoard.value && !!damageOf(ui.selected) && !enemyLocked.value
+);
+const showPutDown = computed(
+  () => (logging.value || editing.value) && !!heldBy.value && !enemyLocked.value
+);
+const hasButtons = computed(
+  () =>
+    !assumed.value &&
+    (showCast.value ||
+      showCastHint.value ||
+      liveAbilities.value.length > 0 ||
+      unitInPlay.value ||
+      hasRange.value ||
+      (isAvatarInPlay.value && (atlasCount.value || spellbookCount.value)) ||
+      chargeable.value ||
+      showHeal.value ||
+      canPickUp.value ||
+      showPutDown.value ||
+      holding.value.length > 0)
+);
+const hasHint = computed(
+  () =>
+    !!armingAbility.value ||
+    canFinishPicks() ||
+    canDeclineActivate() ||
+    moving.value ||
+    attacking.value ||
+    shooting.value ||
+    carrying.value ||
+    assumed.value ||
+    !!heldBy.value ||
+    (sick.value && onBoard.value && !enemyLocked.value) ||
+    enemyLocked.value
+);
+
+// Art thumbnails stand in for a card's name (names are printed on the card);
+// a span with a background, not an <img>, so a host theme's img rules can't
+// blow it up.
+const artStyle = (id) => {
+  const img = state.cards[id]?.img;
+  return img ? { backgroundImage: `url("${img}")` } : null;
+};
+const cardLabel = (id) => state.cards[id]?.name || "a card";
 </script>
 
 <template>
+  <!-- In the column there is always a line under "On the table", even when
+       the card has no table actions, so the heading never sits over nothing. -->
+  <p
+    v-if="
+      inColumn &&
+      card &&
+      !ui.awaitingDefender &&
+      !ui.storyChoice &&
+      !hasButtons &&
+      !hasHint
+    "
+    class="ca-hint ca-none"
+  >
+    {{
+      inPool
+        ? "Drag it onto the table to place a copy."
+        : "Nothing to do with this card right now."
+    }}
+  </p>
   <div
-    v-if="card && !ui.awaitingDefender && !ui.storyChoice"
-    class="card-actions"
+    v-else-if="card && !ui.awaitingDefender && !ui.storyChoice"
+    :class="inColumn ? 'ca-column' : 'card-actions'"
     role="toolbar"
+    :aria-orientation="inColumn ? 'vertical' : null"
     :aria-label="`Actions for ${card.name}`"
   >
-    <!-- No card art here on purpose: this bar was the app's only image sized
-         in absolute pixels, so a host theme's `img { width: 100% }` blew it up
-         to the full width of the bar. The card itself is highlighted on the
-         board, and its name is right here, so the thumbnail earned nothing. -->
-    <div class="ca-id">
-      <div class="ca-name">{{ card.name }}</div>
-      <div v-if="providesText" class="ca-zone">provides {{ providesText }}</div>
-    </div>
-
-    <div class="ca-buttons">
+    <!-- No name or "provides" line: both are printed on the card, which is
+         highlighted on the board and shown in the inspector. The name stays
+         only in the toolbar's aria-label. No art thumbnail either: a host
+         theme's `img { width: 100% }` once blew it up to the bar's width. -->
+    <p v-if="!hasButtons && !hasHint" class="ca-hint">
+      Nothing to do with this card right now.
+    </p>
+    <div v-if="!assumed" class="ca-buttons">
       <button
-        v-if="
-          castSource &&
-          card.magic &&
-          (state.mode === 'play' || state.recording) &&
-          !castLocked
-        "
+        v-if="showCast"
         class="btn primary"
         :class="{ active: casting }"
         :disabled="
@@ -318,16 +365,7 @@ function onRemove() {
               }`
         }}
       </button>
-      <p
-        v-if="
-          castSource &&
-          !card.magic &&
-          isSpell(ui.selected) &&
-          (state.mode === 'play' || state.recording) &&
-          !castLocked
-        "
-        class="ca-hint"
-      >
+      <p v-if="showCastHint" class="ca-hint">
         Drag onto the board (or click a square) to cast.
       </p>
       <button
@@ -411,7 +449,7 @@ function onRemove() {
         ⚡ Charge for mana
       </button>
       <button
-        v-if="onBoard && damageOf(ui.selected) && !enemyLocked"
+        v-if="showHeal"
         class="btn"
         @click="markDamage(ui.selected, -1)"
       >
@@ -426,222 +464,30 @@ function onRemove() {
         {{ carrying ? "Cancel pick up" : "Pick up" }}
       </button>
       <button
-        v-if="(logging || editing) && heldBy && !enemyLocked"
+        v-if="showPutDown"
         class="btn"
         @click="dropCarried(ui.selected)"
       >
         ▽ Put down
       </button>
+      <!-- One per carried card: its art, not its name (printed on the card);
+           the name is only for screen readers. -->
       <button
         v-for="id in holding"
         :key="id"
-        class="btn"
-        :title="`Put down ${state.cards[id]?.name}`"
+        class="btn ca-drop"
+        :aria-label="`Put down ${cardLabel(id)}`"
         @click="dropCarried(id)"
       >
-        ▽ Drop {{ state.cards[id]?.name }}
-      </button>
-      <button v-if="editing" class="btn" @click="toggleControl(ui.selected)">
-        ⇅ {{ card.enemy ? "Give to player" : "Give to opponent" }}
-      </button>
-      <button
-        v-if="editing"
-        class="btn"
-        :class="{ active: abilityCount }"
-        @click="showAbilities = true"
-      >
-        ✧ Abilities{{ abilityCount ? ` (${abilityCount})` : "" }}
-      </button>
-      <button
-        v-if="editing && inPool"
-        class="btn"
-        :class="{ active: card.unit && !card.avatar }"
-        @click="toggleUnit(ui.selected)"
-      >
-        ♟ {{ card.unit && !card.avatar ? "Not a minion" : "Mark as minion" }}
-      </button>
-      <button
-        v-if="editing && inPool"
-        class="btn"
-        :class="{ active: card.avatar }"
-        @click="toggleAvatar(ui.selected)"
-      >
-        {{ card.avatar ? "Not an avatar" : "Mark as avatar" }}
-      </button>
-      <button
-        v-if="editing && inPool"
-        class="btn"
-        :class="{ active: card.site }"
-        @click="toggleSite(ui.selected)"
-      >
-        ⛰ {{ card.site ? "Not a site" : "Mark as site" }}
-      </button>
-      <button
-        v-if="editing && inPool"
-        class="btn"
-        :class="{ active: card.aura }"
-        @click="toggleAura(ui.selected)"
-      >
-        ✦ {{ card.aura ? "Not an aura" : "Mark as aura" }}
-      </button>
-      <button
-        v-if="editing && inPool"
-        class="btn"
-        :class="{ active: card.artifact }"
-        @click="toggleArtifact(ui.selected)"
-      >
-        ⚱ {{ card.artifact ? "Not an artifact" : "Mark as artifact" }}
-      </button>
-      <button
-        v-if="editing && inPool"
-        class="btn"
-        :class="{ active: card.magic }"
-        title="A magic spell: cast from hand, resolves, then goes to the cemetery"
-        @click="toggleMagic(ui.selected)"
-      >
-        ✦ {{ card.magic ? "Not a magic" : "Mark as magic" }}
-      </button>
-      <button
-        v-if="editing && isSpell(ui.selected)"
-        class="btn"
-        :class="{ active: card.castFromCemetery }"
-        :title="
-          card.castFromCemetery
-            ? 'May be cast from the cemetery as well as the hand'
-            : 'Can only be cast from the hand (default)'
-        "
-        @click="toggleCastFromCemetery(ui.selected)"
-      >
-        ⚰ {{ card.castFromCemetery ? "Casts from cemetery" : "Hand-cast only" }}
-      </button>
-      <button
-        v-if="editing && card.artifact"
-        class="btn"
-        :class="{ active: card.monument }"
-        :title="
-          card.monument
-            ? 'A monument can be targeted but not carried'
-            : 'Make this artifact a Monument (cannot be carried)'
-        "
-        @click="toggleMonument(ui.selected)"
-      >
-        ▤ {{ card.monument ? "Not a monument" : "Monument" }}
-      </button>
-      <button
-        v-if="editing && card.artifact"
-        class="btn"
-        :class="{ active: card.lanceToken }"
-        title="Lance token: +1 strike damage and first strike; breaks when its carrier strikes"
-        @click="toggleLanceToken(ui.selected)"
-      >
-        ⌇ {{ card.lanceToken ? "Not a lance" : "Lance token" }}
-      </button>
-      <!-- Designate this card as a token kind's template: generated tokens of
-           that kind then use its art, name and abilities. -->
-      <label
-        v-if="editing"
-        class="btn"
-        :class="{ active: card.tokenKind }"
-        title="Use this card as the art (and abilities) for generated tokens of this kind"
-        style="display: inline-flex; align-items: center; gap: 0.3em"
-      >
-        ◈ Token
-        <select
-          :value="card.tokenKind || ''"
-          style="font: inherit"
-          @change="setTokenTemplate(ui.selected, $event.target.value)"
-        >
-          <option value="">none</option>
-          <option v-for="k in TOKEN_TEMPLATE_KINDS" :key="k" :value="k">
-            {{ TOKEN_NAMES[k] }}
-          </option>
-        </select>
-      </label>
-      <button v-if="editing" class="btn danger" @click="onRemove">
-        × Remove card
+        <span
+          class="ca-thumb"
+          :class="{ 'no-art': !artStyle(id) }"
+          :style="artStyle(id)"
+          aria-hidden="true"
+        ></span>
+        ▽ Put down{{ holding.length > 1 ? " this one" : " the carried card" }}
       </button>
     </div>
-
-    <!-- Combat stats: authored for the engine, shown here only in the editor
-         (the card art shows them to players). Avatars use the side's life. -->
-    <div v-if="editing && isUnit(ui.selected)" class="ca-num-row">
-      <label>
-        Power
-        <input
-          v-model.number="card.power"
-          type="number"
-          class="text-input ca-num"
-        />
-      </label>
-      <label
-        v-if="!card.avatar"
-        title="Defense power (toughness). Leave blank to use Power."
-      >
-        Defense
-        <input
-          v-model.number="card.defense"
-          type="number"
-          placeholder="=Pow"
-          class="text-input ca-num"
-        />
-      </label>
-    </div>
-
-    <!-- Cast cost, authored on the spell card: mana (spent) + elemental
-         thresholds (required). Shown in the editor for spell cards. -->
-    <div
-      v-if="editing && isSpell(ui.selected) && card.spellCost"
-      class="ca-num-row"
-    >
-      <label>
-        Cost ◇
-        <input
-          v-model.number="card.spellCost.mana"
-          type="number"
-          min="0"
-          title="mana cost"
-          class="text-input ca-num"
-        />
-      </label>
-      <label v-for="el in ['air', 'earth', 'fire', 'water']" :key="el">
-        <ThresholdIcon :element="el" />
-        <input
-          v-model.number="card.spellCost[el]"
-          type="number"
-          min="0"
-          :title="`${el} threshold required`"
-          class="text-input ca-num"
-        />
-      </label>
-    </div>
-
-    <!-- What this card provides in play: mana + elemental affinity. Only sites
-         provide these, so the row is shown only once a card is marked a site.
-         Affinity is the threshold spells are checked against. -->
-    <div v-if="editing && card.site && card.affinity" class="ca-num-row">
-      <span style="opacity: 0.7">Provides</span>
-      <label>
-        ◇
-        <input
-          v-model.number="card.manaProvided"
-          type="number"
-          min="0"
-          title="mana provided"
-          class="text-input ca-num"
-        />
-      </label>
-      <label v-for="el in ['air', 'earth', 'fire', 'water']" :key="el">
-        <ThresholdIcon :element="el" />
-        <input
-          v-model.number="card.affinity[el]"
-          type="number"
-          min="0"
-          :title="`${el} affinity provided`"
-          class="text-input ca-num"
-        />
-      </label>
-    </div>
-
     <p v-if="armingAbility" class="ca-hint">
       {{
         ui.activating.dest
@@ -680,6 +526,13 @@ function onRemove() {
     <p v-else-if="moving" class="ca-hint">
       Now click a destination square to move and tap this minion.
     </p>
+    <p v-else-if="attacking && ui.attackTarget" class="ca-hint">
+      Several crossings reach that target — click the one to move to and attack from.
+    </p>
+    <p v-else-if="attacking && oversizedSelected" class="ca-hint">
+      Click a crossing to move to, then a unit or site under it — or click the
+      target first. This unit moves, attacks, and taps.
+    </p>
     <p v-else-if="attacking" class="ca-hint">
       Now click the target — this unit moves to it, attacks, and taps.
     </p>
@@ -689,9 +542,27 @@ function onRemove() {
     <p v-else-if="carrying" class="ca-hint">
       Now click the card to pick up — it travels with this one until dropped.
     </p>
+    <p v-else-if="assumed" class="ca-hint">
+      Assumed as a form by
+      <span
+        class="ca-thumb inline"
+        :class="{ 'no-art': !artStyle(heldBy) }"
+        :style="artStyle(heldBy)"
+        role="img"
+        :aria-label="cardLabel(heldBy)"
+      ></span>
+      — its abilities are used from there.
+    </p>
     <p v-else-if="heldBy" class="ca-hint">
-      Carried by {{ state.cards[heldBy]?.name }} and travelling with it. Put it
-      down to move it on its own.
+      Carried by
+      <span
+        class="ca-thumb inline"
+        :class="{ 'no-art': !artStyle(heldBy) }"
+        :style="artStyle(heldBy)"
+        role="img"
+        :aria-label="cardLabel(heldBy)"
+      ></span>
+      and travelling with it. Put it down to move it on its own.
     </p>
     <p v-else-if="sick && onBoard && !enemyLocked" class="ca-hint">
       Summoned this turn: summoning sickness stops it tapping to move, attack,
@@ -703,6 +574,7 @@ function onRemove() {
     </p>
 
     <button
+      v-if="!inColumn"
       class="ca-close"
       title="Deselect (Esc)"
       aria-label="Deselect this card (Escape)"
@@ -710,11 +582,68 @@ function onRemove() {
     >
       ×
     </button>
-
-    <TriggerEditor
-      v-if="showAbilities && editing"
-      :card-id="ui.selected"
-      @close="showAbilities = false"
-    />
   </div>
 </template>
+
+<style scoped>
+/* A carried card's art in place of its name. */
+.ca-thumb {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 25px;
+  border-radius: 2px;
+  border: 1px solid var(--c-cream-lo);
+  background: var(--c-raised-2) center / cover no-repeat;
+  vertical-align: middle;
+}
+.ca-thumb.inline {
+  width: 14px;
+  height: 20px;
+  margin: 0 2px;
+}
+/* No art uploaded: a dashed outline says "a card" without naming it. */
+.ca-thumb.no-art {
+  border-style: dashed;
+  border-color: var(--c-muted-2);
+}
+.ca-drop {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+/* Column: the same actions stacked full width in the editor's Card tab. No
+   floating chrome -- the tab panel is the frame. */
+.ca-column {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sp-2);
+}
+.ca-column .ca-buttons {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sp-2);
+}
+.ca-column .btn {
+  width: 100%;
+  text-align: left;
+}
+.ca-column .ca-drop {
+  display: flex;
+}
+.ca-column .ca-hint,
+.ca-none {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+  color: var(--c-muted);
+}
+.ca-column .btn:focus-visible,
+.card-actions .btn:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: 2px;
+}
+</style>

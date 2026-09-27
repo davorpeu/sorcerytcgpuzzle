@@ -3,3 +3,12 @@ dist/
 *.local
 .idea/
 *.iml
+
+# Redesign reference material (local only)
+.mockup/
+cards_test/
+
+# Local-only files
+*.stackdump
+SorceryRulebook.pdf
+.claude/settings.local.json

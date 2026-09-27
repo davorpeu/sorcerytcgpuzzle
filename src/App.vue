@@ -3,28 +3,11 @@ import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import {
   state,
   ui,
-  config,
-  undo,
-  startRecording,
-  stopRecording,
-  enterPlay,
-  enterEditor,
-  resetPlay,
-  solveStatus,
   playLocked,
   MAX_MISTAKES,
   hasUnsavedWork,
-  savePuzzle,
-  listPuzzles,
   loadById,
-  deletePuzzle,
-  newPuzzle,
-  removeSolutionLine,
-  loadPuzzle,
-  serializePortable,
-  shareLink,
   loadDaily,
-  localToday,
   endDrag,
   declineDefender,
   declineStoryChoice,
@@ -36,8 +19,6 @@ import {
   finishStoryPicks,
 } from './store.js'
 import Board from './components/Board.vue'
-import Hand from './components/Hand.vue'
-import CardPool from './components/CardPool.vue'
 import MoveLog from './components/MoveLog.vue'
 import DropZone from './components/DropZone.vue'
 import CardToken from './components/CardToken.vue'
@@ -48,35 +29,38 @@ import FxOverlay from './components/FxOverlay.vue'
 import ChoicePopup from './components/ChoicePopup.vue'
 import StatsBar from './components/StatsBar.vue'
 import ArchiveCalendar from './components/ArchiveCalendar.vue'
+import CardInspector from './components/CardInspector.vue'
+import TopBar from './components/TopBar.vue'
+import OpponentStrip from './components/OpponentStrip.vue'
+import HandTray from './components/HandTray.vue'
+import EditorSidebar from './components/EditorSidebar.vue'
+import SolutionsPanel from './components/SolutionsPanel.vue'
+import RecordingFrame from './components/RecordingFrame.vue'
+import EditorNarrowNotice from './components/EditorNarrowNotice.vue'
 import { enableDragScroll } from './dragScroll.js'
 
-const saved = ref([])
-const importInput = ref(null)
 let stopDragScroll = null
+
+// Under 1024 px the editor table isn't usable: the editor shows a notice with
+// Play test and Share instead. Only the view changes -- the puzzle lives in
+// the store, so nothing is unmounted from it or reset.
+const NARROW_QUERY = '(max-width: 1023px)'
+const narrowMq = typeof window !== 'undefined' && window.matchMedia ? window.matchMedia(NARROW_QUERY) : null
+const narrow = ref(!!narrowMq?.matches)
+const onNarrow = (e) => (narrow.value = e.matches)
+const editorTooNarrow = computed(() => state.mode === 'editor' && narrow.value)
+
+// Phones and portrait tablets (the stacked layout, style.css <=1000px;
+// .mockup/phone.html): your stats are one row and an empty storyline is one
+// line, as in the editor, so the board and your hand fit on the screen.
+const phoneMq = typeof window !== 'undefined' && window.matchMedia ? window.matchMedia('(max-width: 1000px)') : null
+const phone = ref(!!phoneMq?.matches)
+const onPhone = (e) => (phone.value = e.matches)
+const storyCompact = computed(
+  () => !state.zones.storyline.length && (state.mode === 'editor' || phone.value)
+)
 const notice = ref('')
 const showArchive = ref(false)
-// Your side lives in the left column, which had 550px of nothing under the
-// folded panels; as a band under the mat it cost the grid 210px of height.
-// The opponent's zones are reference rather than workspace, so they stay a
-// tray over the mat's top edge and start shut.
-const oppOpen = ref(false)
-
-const count = (zone) => state.zones[zone].length
-
-// ...unless the puzzle puts something there: then the opponent's hand,
-// cemetery or collection is part of what the solver needs to read, so a play
-// session opens with the tray down. Keyed on the puzzle too, so loading
-// another one while already in play re-decides.
-watch(
-  () => [state.mode, state.puzzleId],
-  ([mode]) => {
-    if (mode !== 'play') return
-    oppOpen.value = ['hand:opponent', 'grave:opponent', 'collection:opponent'].some(
-      (z) => count(z) > 0
-    )
-  },
-  { immediate: true }
-)
 
 async function onArchiveSelect(id) {
   if (!(await loadById(id))) flash('That puzzle is not available.')
@@ -90,105 +74,9 @@ function flash(msg) {
   }, 3000)
 }
 
-async function refreshSaved() {
-  saved.value = await listPuzzles()
-}
-
-async function onSave() {
-  try {
-    await savePuzzle()
-    flash(`Saved "${state.puzzleName || 'Untitled puzzle'}"`)
-  } catch (e) {
-    flash(`Save failed: ${e.message}`)
-  }
-  refreshSaved()
-}
-
-// Deleting a stored puzzle, wiping the board and dropping a recorded line are
-// all one click and none of them are undoable -- Undo only walks back moves.
-// So each one asks first, naming what it is about to destroy.
-async function onDelete(id, name) {
-  if (!confirm(`Delete "${name || 'this puzzle'}" for good? This cannot be undone.`))
-    return
-  try {
-    await deletePuzzle(id)
-  } catch (e) {
-    flash(`Delete failed: ${e.message}`)
-  }
-  refreshSaved()
-}
-
-function onNew() {
-  if (
-    hasUnsavedWork() &&
-    !confirm('Start a blank puzzle? The cards, board and solutions here have not been saved.')
-  )
-    return
-  newPuzzle()
-  flash('New blank puzzle.')
-}
-
-function onRemoveSolution(i) {
-  if (!confirm(`Delete solution ${i + 1}? This cannot be undone.`)) return
-  removeSolutionLine(i)
-}
-
 async function onLoadDaily() {
   if (!(await loadDaily())) flash('No puzzle has been released yet.')
 }
-
-async function onExport() {
-  // Re-inline any Media-Library/remote images so the file is self-contained and
-  // portable; this fetches each image, so let the user know it may take a beat.
-  flash('Preparing export…')
-  const data = await serializePortable()
-  const blob = new Blob([JSON.stringify(data, null, 2)], {
-    type: 'application/json',
-  })
-  const a = document.createElement('a')
-  a.href = URL.createObjectURL(blob)
-  a.download = `${(state.puzzleName || 'puzzle').replace(/[^\w-]+/g, '_')}.json`
-  a.click()
-  URL.revokeObjectURL(a.href)
-}
-
-async function onImport(e) {
-  const file = e.target.files[0]
-  if (!file) return
-  try {
-    loadPuzzle(JSON.parse(await file.text()), { play: false })
-    flash(`Imported "${state.puzzleName}"`)
-  } catch {
-    flash('Import failed: not a valid puzzle file.')
-  }
-  e.target.value = ''
-}
-
-async function onCopyLink() {
-  const link = shareLink()
-  try {
-    await navigator.clipboard.writeText(link.url)
-    if (!link.oversized) {
-      flash('Share link copied to clipboard.')
-    } else if (config.apiUrl && config.canEdit) {
-      // On the server the puzzle can get a short ?puzzle= link once it's saved.
-      flash('This puzzle is large. Save it, then Copy Link for a short ?puzzle= link.')
-    } else {
-      flash('Link copied — but it is very long. For big puzzles, export JSON and host it, then link with ?src=<url>.')
-    }
-  } catch {
-    window.prompt('Copy this link:', link.url)
-  }
-}
-
-// Shortest recorded solution line; what the play header advertises.
-const targetMoves = computed(() =>
-  state.solutions.length
-    ? Math.min(...state.solutions.map((l) => l.length))
-    : 0
-)
-
-const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
 
 // Hold Alt while hovering a card to see it enlarged.
 const previewCard = computed(() =>
@@ -256,7 +144,8 @@ onMounted(() => {
   window.addEventListener('dragend', endDrag)
   window.addEventListener('drop', endDrag)
   stopDragScroll = enableDragScroll()
-  if (config.canEdit) refreshSaved()
+  narrowMq?.addEventListener('change', onNarrow)
+  phoneMq?.addEventListener('change', onPhone)
 })
 
 onUnmounted(() => {
@@ -267,30 +156,8 @@ onUnmounted(() => {
   window.removeEventListener('dragend', endDrag)
   window.removeEventListener('drop', endDrag)
   stopDragScroll?.()
-})
-
-// The solve is detected automatically as the player moves -- there is no submit
-// button. A wrong move is snapped back and counted; after MAX_MISTAKES a limited
-// player fails for the day. `state.solved`/`failed` are the persisted daily lock
-// (non-editors); `solveStatus` is the live read that also drives an editor's
-// preview, where nothing is sealed.
-const solvedMsg = () =>
-  (state.solveQuality || solveStatus.value) === 'optimal' && state.mistakes === 0
-    ? '✔ Solved! This is the optimal solution.'
-    : '✔ Solved — but not the optimal path.'
-
-const result = computed(() => {
-  if (state.mode !== 'play') return null
-  if (state.failed)
-    return {
-      ok: false,
-      msg: `✘ Out of moves — ${MAX_MISTAKES} mistakes. Come back tomorrow.`,
-    }
-  if (state.solved) return { ok: true, msg: solvedMsg() }
-  // Editor preview (and the instant before the daily lock is written): read the
-  // live verdict directly.
-  if (solveStatus.value) return { ok: true, msg: solvedMsg() }
-  return null
+  narrowMq?.removeEventListener('change', onNarrow)
+  phoneMq?.removeEventListener('change', onPhone)
 })
 
 // A wrong move increments the counter; announce it as it happens. The board has
@@ -298,517 +165,274 @@ const result = computed(() => {
 watch(
   () => state.mistakes,
   (n, prev) => {
-    if (n > prev && !state.failed)
-      flash(`✘ Wrong move — ${n}/${MAX_MISTAKES} mistakes.`)
+    if (n <= prev) return
+    // The last mistake fails the day; the header verdict says so, and a
+    // lingering "4/5" flash would contradict it.
+    if (state.failed) notice.value = ''
+    else flash(`✘ Wrong move — ${n}/${MAX_MISTAKES} mistakes.`)
   }
 )
 </script>
 
 <template>
-  <div class="app">
-    <header class="topbar">
-      <h1>Sorcery TCG Puzzle</h1>
-      <div v-if="config.canEdit" class="mode-switch">
-        <button
-          class="btn"
-          :class="{ active: state.mode === 'editor' }"
-          @click="enterEditor"
-        >
-          Editor
-        </button>
-        <button
-          class="btn"
-          :class="{ active: state.mode === 'play' }"
-          :disabled="state.mode === 'play'"
-          @click="enterPlay"
-        >
-          Play
-        </button>
-      </div>
-      <!-- Undo and Reset are what you reach for on every move, so they sit next
-           to Play rather than in a sidebar panel. The solve is detected
-           automatically, so there is no Submit button; a wrong move is snapped
-           back and counted instead. -->
-      <div v-if="state.mode === 'play'" class="topbar-actions">
-        <button
-          class="btn"
-          :disabled="!state.moves.length || playLocked"
-          @click="undo"
-        >
-          Undo
-        </button>
-        <button class="btn" @click="resetPlay">Reset</button>
-        <span
-          v-if="!config.canEdit && state.solutions.length"
-          class="mistakes"
-          :class="{ danger: state.mistakes >= MAX_MISTAKES }"
-        >
-          {{ state.mistakes }}/{{ MAX_MISTAKES }} mistakes
-        </span>
-      </div>
+  <!-- One grid for both modes (see "play layout" in style.css):
+         header | opp | left | board | right | tray
+       Only the left column changes with the mode: the selected card in play,
+       the editor's panels in the editor. -->
+  <div v-if="editorTooNarrow" class="narrow-shell">
+    <EditorNarrowNotice />
+  </div>
+  <div v-else class="app" :class="[`mode-${state.mode}`, { locked: playLocked }]">
+    <TopBar class="area-header" :notice="notice" />
 
-      <div v-if="state.puzzleName && state.mode === 'play'" class="puzzle-title">
-        {{ state.puzzleName }}
-        <span v-if="state.solutions.length" class="target">
-          · solve in {{ plural(targetMoves, 'move') }}<template
-            v-if="state.solutions.length > 1"
-          >
-            · {{ state.solutions.length }} possible solutions</template
-          >
-        </span>
-      </div>
-      <!-- Both of these appear without the user moving focus, so they have to
-           be announced rather than merely drawn. The wrappers stay in the DOM
-           when empty: a live region inserted at the same moment as its text is
-           not reliably read. -->
-      <output class="notice" aria-live="polite">{{ notice }}</output>
-    </header>
+    <OpponentStrip class="area-opp" />
 
-    <div aria-live="polite">
-      <div v-if="result" class="result-banner" :class="result.ok ? 'ok' : 'bad'">
-        {{ result.msg }}
-      </div>
-    </div>
+    <!-- Everything in the left column scrolls inside it, so the editor's
+         panels can be as tall as they like without pushing the board or your
+         hand off the window. -->
+    <aside class="area-left">
+      <EditorSidebar v-if="state.mode === 'editor'" />
 
-    <div class="layout" :class="{ locked: playLocked }">
-      <aside class="sidebar">
-        <!-- Everything above your own zones scrolls inside the column, so the
-             editor's panels can be as tall as they like without pushing your
-             hand off the bottom of the window. Your side stays pinned to the
-             foot of the column, beside the board, where it is in reach
-             whatever the panels above it are doing. -->
-        <div class="sidebar-scroll">
-        <template v-if="state.mode === 'editor'">
-          <div class="panel">
-            <div class="zone-title">Puzzle</div>
-            <label class="sr-only" for="puzzle-title">Puzzle title</label>
-            <input
-              id="puzzle-title"
-              v-model="state.puzzleName"
-              class="text-input"
-              placeholder="Puzzle title"
-            />
-            <label class="sr-only" for="puzzle-brief">
-              Brief — what kind of puzzle is this and what should the player
-              achieve?
-            </label>
-            <textarea
-              id="puzzle-brief"
-              v-model="state.puzzleDesc"
-              class="text-input text-area"
-              rows="3"
-              placeholder="Brief — what kind of puzzle is this and what should the player achieve?"
-            ></textarea>
-            <p class="hint">
-              Shown to players before they start. Say what the goal is, e.g.
-              &ldquo;Lethal: put the opponent at Death&rsquo;s Door this
-              turn&rdquo;.
-            </p>
-            <label class="field-label" for="puzzle-date">
-              Release date
-              <input
-                id="puzzle-date"
-                v-model="state.puzzleDate"
-                type="date"
-                class="text-input"
-              />
-            </label>
-            <p class="hint">
-              Players see this puzzle from this date. Leave empty to keep it
-              unpublished.
-            </p>
-            <label
-              style="display: flex; align-items: center; gap: 0.4rem; margin: 0.4rem 0"
-            >
-              <input type="checkbox" v-model="state.enforce" />
-              Enforce movement &amp; attacks
-            </label>
-            <label
-              style="display: flex; align-items: center; gap: 0.4rem; margin: 0.4rem 0"
-            >
-              <input type="checkbox" v-model="state.combat" />
-              Resolve combat damage
-            </label>
-            <p class="hint">
-              Enforce = Move/Attack obey reach, regions and keywords. Resolve
-              combat = attack/strike/shoot deal Power damage and kill by Life or
-              Lethal. Both are independent; leave off for free-form puzzles.
-            </p>
-            <label
-              style="display: flex; align-items: center; gap: 0.4rem; margin: 0.4rem 0"
-            >
-              <input type="checkbox" v-model="state.hideAtlas" />
-              Hide Atlas
-            </label>
-            <label
-              style="display: flex; align-items: center; gap: 0.4rem; margin: 0.4rem 0"
-            >
-              <input type="checkbox" v-model="state.hideSpellbook" />
-              Hide Spellbook
-            </label>
-            <p class="hint">
-              For puzzles that don't use the draw decks. A hidden deck still
-              shows while it has cards in it.
-            </p>
-            <div class="btn-row">
-              <button v-if="!state.recording" class="btn primary" @click="startRecording">
-                ● {{ state.solutions.length ? 'Record another solution' : 'Record solution' }}
-              </button>
-              <button v-else class="btn danger" @click="stopRecording">
-                ■ Stop recording
-              </button>
-              <button v-if="state.recording" class="btn" @click="undo">Undo</button>
-            </div>
-            <p v-if="state.recording" class="hint">
-              Recording solution {{ state.solutions.length + 1 }}: every card
-              you move is added to this line. The board starts from the
-              puzzle's start position for every line.
-            </p>
-            <ul v-if="state.solutions.length" class="saved-list">
-              <li v-for="(line, i) in state.solutions" :key="i">
-                <span class="saved-name">
-                  Solution {{ i + 1 }} · {{ plural(line.length, 'move') }}
-                </span>
-                <button
-                  class="btn small danger"
-                  :title="`Delete solution ${i + 1}`"
-                  :aria-label="`Delete solution ${i + 1}`"
-                  @click="onRemoveSolution(i)"
-                >
-                  🗑
-                </button>
-              </li>
-            </ul>
-            <p v-if="!state.solutions.length && !state.recording" class="hint warn">
-              No solution recorded yet — until you record one, players can move
-              cards but the puzzle can never be detected as solved.
-            </p>
-            <div class="btn-row">
-              <button class="btn" @click="onSave">Save</button>
-              <button class="btn" @click="onExport">Export</button>
-              <button class="btn" @click="importInput.click()">Import</button>
-              <button class="btn" @click="onCopyLink">Copy link</button>
-              <button class="btn" @click="onNew">New</button>
-            </div>
-            <label class="sr-only" for="import-file">Import a puzzle JSON file</label>
-            <input
-              id="import-file"
-              ref="importInput"
-              type="file"
-              accept="application/json"
-              hidden
-              @change="onImport"
-            />
+      <template v-else>
+        <!-- The selected card: it is what you are working with right now. -->
+        <CardInspector />
+
+        <!-- One panel, whichever state you are in. Loaded or not, the two
+             things you can do are the same: play the current puzzle or open
+             the archive. -->
+        <div class="panel">
+          <div class="zone-title">
+            {{ state.puzzleName ? 'Puzzles' : 'No puzzle loaded' }}
           </div>
-
-          <CardPool />
-
-          <div class="panel">
-            <div class="zone-title">Saved puzzles</div>
-            <ul v-if="saved.length" class="saved-list">
-              <li v-for="p in saved" :key="p.id">
-                <span class="saved-name" :title="p.id">
-                  {{ p.name }}<span v-if="p.date" class="saved-date"> · {{ p.date }}</span>
-                  <span v-if="!p.date" class="saved-badge">draft</span>
-                  <span v-else-if="p.date > localToday()" class="saved-badge">upcoming</span>
-                </span>
-                <button
-                  class="btn small"
-                  :title="`Play ${p.name}`"
-                  :aria-label="`Play ${p.name}`"
-                  @click="loadById(p.id)"
-                >
-                  ▶
-                </button>
-                <button
-                  class="btn small"
-                  :title="`Edit ${p.name}`"
-                  :aria-label="`Edit ${p.name}`"
-                  @click="loadById(p.id, { play: false })"
-                >
-                  ✎
-                </button>
-                <button
-                  class="btn small danger"
-                  :title="`Delete ${p.name}`"
-                  :aria-label="`Delete ${p.name}`"
-                  @click="onDelete(p.id, p.name)"
-                >
-                  🗑
-                </button>
-              </li>
-            </ul>
-            <p v-else class="hint">Nothing saved yet.</p>
-            <button class="btn small" @click="onLoadDaily">
-              Load current puzzle
-            </button>
-          </div>
-        </template>
-
-        <template v-else>
-          <div v-if="state.puzzleName || state.puzzleDesc" class="panel brief">
-            <div class="zone-title">Puzzle</div>
-            <h2 class="brief-title">
-              {{ state.puzzleName || 'Untitled puzzle' }}
-            </h2>
-            <p v-if="state.puzzleDesc" class="brief-desc">
-              {{ state.puzzleDesc }}
-            </p>
-            <p v-else class="hint">No brief was written for this puzzle.</p>
-            <p v-if="state.solutions.length" class="brief-goal">
-              Solve in {{ plural(targetMoves, 'move') }}
-              <template v-if="state.solutions.length > 1">
-                · {{ state.solutions.length }} possible solutions
-              </template>
-            </p>
-            <p v-else class="hint warn">
-              This puzzle has no recorded solution, so a solve cannot be
-              detected.
-            </p>
-          </div>
-
-          <!-- One panel, whichever state you are in. Loaded or not, the two
-               things you can do are the same: play the current puzzle or open
-               the archive. Two panels offering both, a row apart and under two
-               names for the same button, only made you read them twice. -->
-          <div class="panel">
-            <div class="zone-title">
-              {{ state.puzzleName ? 'Puzzles' : 'No puzzle loaded' }}
-            </div>
-            <p v-if="!state.puzzleName" class="hint">
-              Pick a puzzle to play — the current one, or any date in the
-              archive.
-            </p>
-            <div class="btn-row">
-              <button
-                class="btn"
-                :class="{ primary: !state.puzzleName }"
-                @click="onLoadDaily"
-              >
-                Play current puzzle
-              </button>
-              <button
-                class="btn"
-                :aria-expanded="showArchive"
-                @click="showArchive = !showArchive"
-              >
-                {{ showArchive ? 'Hide archive' : 'Archive' }}
-              </button>
-            </div>
-          </div>
-
-          <ArchiveCalendar v-if="showArchive" @select="onArchiveSelect" />
-        </template>
-
-        <MoveLog />
-
-        <details class="panel legend">
-          <summary class="panel-summary">Legend</summary>
-          <ul class="legend-list">
-            <li><kbd class="legend-kbd">Alt</kbd> hover a card to enlarge it</li>
-            <li class="legend-keys">
-              <kbd class="legend-kbd">Tab</kbd> to a card and
-              <kbd class="legend-kbd">Enter</kbd> to select it, then
-              <kbd class="legend-kbd">Tab</kbd> to a zone and
-              <kbd class="legend-kbd">Enter</kbd> to move it there.
-              <kbd class="legend-kbd">Esc</kbd> deselects
-            </li>
-            <li>
-              <span class="legend-swatch unit"></span>
-              Minion (blue border) — can move, attack or shoot (each taps it), and use its abilities
-            </li>
-            <li>
-              <span class="legend-swatch avatar"></span>
-              Avatar (orange border) — special minion representing the player
-            </li>
-            <li>
-              <span class="legend-swatch"></span>
-              Site (violet border) — occupies a square of the grid
-            </li>
-            <li>
-              <span class="legend-swatch aura"></span>
-              Aura (teal border) — sits on an intersection, always drawn on top
-            </li>
-            <li>
-              <span class="legend-icon">🂠</span>
-              Upside-down card — controlled by the opponent
-            </li>
-            <li>
-              <span class="legend-badge under">BURIED</span> /
-              <span class="legend-badge under">SUBMERGED</span>
-              Card under a land / water site — darkened; drag or move it onto the lower strip
-              of a square to send it below, the upper part to surface it
-            </li>
-            <li>
-              <span class="legend-icon">☞</span>
-              Click a card to select it — its actions (cast, move, attack,
-              abilities, pick up) appear under the board
-            </li>
-            <li>
-              <span class="legend-icon">✋</span>
-              Carried card — picked up by another card, travels with it until
-              its holder drops it
-            </li>
-            <li>
-              <span class="legend-icon">→</span>
-              With a card selected, click any zone to move it there (works
-              without dragging, e.g. on a tablet)
-            </li>
-            <li class="legend-elements">
-              <span v-for="el in ['air', 'earth', 'fire', 'water']" :key="el" class="legend-el">
-                <ThresholdIcon :element="el" /> {{ el }}
-              </span>
-            </li>
-          </ul>
-        </details>
-        </div>
-
-        <!-- Your side of the table, nearest you, exactly as it sits on a real
-             one. The cemetery and collection wrap onto their own row here
-             because the column is too narrow for three zones abreast. -->
-        <div class="your-side">
-          <Hand side="player" />
-        </div>
-      </aside>
-
-      <main class="table">
-        <div class="mat-area">
-          <!-- The opponent's zones are reference, not workspace, so they ride
-               over the top edge of the mat as a count bar and open only when
-               you actually need to look. -->
-          <div class="zone-tray opp-tray" :class="{ open: oppOpen }">
+          <p v-if="!state.puzzleName" class="hint">
+            Pick a puzzle to play — the current one, or any date in the
+            archive.
+          </p>
+          <div class="btn-row">
             <button
-              class="tray-toggle"
-              :title="oppOpen ? 'Hide the opponent zones' : 'Show the opponent zones'"
-              @click="oppOpen = !oppOpen"
+              class="btn"
+              :class="{ primary: !state.puzzleName }"
+              @click="onLoadDaily"
             >
-              <span class="tray-caret">{{ oppOpen ? '▴' : '▾' }}</span>
-              Opponent
-              <span class="tray-counts">
-                hand {{ count('hand:opponent') }} &middot; cemetery
-                {{ count('grave:opponent') }} &middot; collection
-                {{ count('collection:opponent') }}
-              </span>
+              Play current puzzle
             </button>
-            <div v-show="oppOpen" class="tray-body">
-              <Hand side="opponent" />
-            </div>
-          </div>
-
-          <Board />
-
-          <!-- The one thing that still wants to be near the mat. It exists
-               only while a card is selected, so it costs the grid height
-               only while you are actually using it. -->
-          <CardActions />
-        </div>
-
-        <!-- Life, mana and thresholds sit beside the board rather than inside
-             the hand rows: no vertical cost, and each side's numbers sit on
-             that side's edge of the table. -->
-        <div class="stat-rail">
-          <StatsBar side="opponent" />
-
-          <!-- The storyline is the shared resolution space, so it sits between
-               the two players' rails. Triggered-ability and defender prompts
-               resolve here too, rather than under the mat. -->
-          <div class="zone-block storyline-block">
-            <div class="zone-title">Storyline (shared)</div>
-            <DropZone zone="storyline" class="storyline">
-              <CardToken
-                v-for="id in state.zones.storyline"
-                :key="id"
-                :card-id="id"
-                from="storyline"
-              />
-            </DropZone>
-
-            <!-- What the last move triggered: compact chips, replaced by the
-                 next move. Click one for its rules text. -->
-            <TriggerFeed />
-
-            <!-- An attack paused for a defender. Highlighted units on the mat
-                 can take the hit; or press to let the attack through. -->
-            <div
-              v-if="ui.awaitingDefender"
-              class="story-prompt defender-prompt"
+            <button
+              class="btn"
+              :aria-expanded="showArchive"
+              @click="showArchive = !showArchive"
             >
-              <span>Attack: click a highlighted defender, or</span>
-              <button class="btn small primary" @click="declineDefender">Attack directly</button>
-              <button class="btn small" @click="ui.awaitingDefender = null">Cancel</button>
-            </div>
-
-            <!-- "An ally shoots a projectile": the player picks the ally, then
-                 the unit its projectile hits (a spell may be drag-cast onto the
-                 ally, so this lives here rather than on the selected card). -->
-            <div v-if="shooterStage()" class="story-prompt trigger-prompt">
-              <span v-if="shooterStage() === 'shooter'">
-                <strong>{{ state.cards[ui.activating.cardId]?.name }}</strong>
-                — click the ally who shoots the projectile.
-              </span>
-              <span v-else>
-                <strong>{{ state.cards[ui.activating.shooterId]?.name }}</strong>
-                shoots — click the highlighted unit the projectile hits.
-              </span>
-              <button class="btn small" @click="ui.activating = null">Cancel</button>
-            </div>
-
-            <!-- A spell (possibly drag-cast, so not selected) waits for its
-                 destination: where to teleport / where its token appears. -->
-            <div v-if="ui.activating?.dest && ui.activating.cast" class="story-prompt trigger-prompt">
-              <span>
-                <strong>{{ state.cards[ui.activating.cardId]?.name }}</strong>
-                — {{ destPrompt(activeAbility()) }}
-              </span>
-              <button class="btn small" @click="ui.activating = null">Cancel</button>
-            </div>
-
-            <!-- A triggered ability is waiting for the player to pick its target.
-                 An optional ("may") one can also be declined. -->
-            <div v-if="ui.storyChoice && !ui.storyChoice.pickModes" class="story-prompt trigger-prompt">
-              <span>
-                <strong>{{ state.cards[ui.storyChoice.ownerId]?.name }}</strong>
-                — {{ ui.storyChoice.ability.name || 'triggered ability' }}:
-                {{
-                  ui.storyChoice.dest
-                    ? destPrompt(ui.storyChoice.ability)
-                    : storyShooterStage() === 'shooter'
-                    ? 'click the ally who shoots the projectile.'
-                    : storyShooterStage() === 'hit'
-                    ? `${state.cards[ui.storyChoice.shooterId]?.name} shoots — click the unit the projectile hits.`
-                    : ui.storyChoice.ability.target.prompt || 'click a highlighted target.'
-                }}
-                <template v-if="storyPickState()">
-                  ({{ storyPickState().picked }}/{{ storyPickState().upTo ? 'up to ' : '' }}{{ storyPickState().needed }})
-                </template>
-              </span>
-              <button
-                v-if="storyPickState()?.upTo && storyPickState().picked"
-                class="btn small primary"
-                @click="finishStoryPicks"
-              >
-                Done
-              </button>
-              <button
-                v-if="ui.storyChoice.ability.target.optional && !ui.storyChoice.dest"
-                class="btn small"
-                @click="declineStoryChoice"
-              >
-                No target
-              </button>
-            </div>
+              {{ showArchive ? 'Hide archive' : 'Archive' }}
+            </button>
           </div>
-
-          <StatsBar side="player" />
         </div>
-      </main>
-    </div>
+
+        <ArchiveCalendar v-if="showArchive" @select="onArchiveSelect" />
+      </template>
+
+      <!-- In the editor the Solutions panel (right) and the Card/Pool tabs
+           replace the move log and the legend. -->
+      <MoveLog v-if="state.mode !== 'editor'" />
+
+      <details v-if="state.mode !== 'editor'" class="panel legend">
+        <summary class="panel-summary">Legend</summary>
+        <ul class="legend-list">
+          <li><kbd class="legend-kbd">Alt</kbd> hover a card to enlarge it</li>
+          <li class="legend-keys">
+            <kbd class="legend-kbd">Tab</kbd> to a card and
+            <kbd class="legend-kbd">Enter</kbd> to select it, then
+            <kbd class="legend-kbd">Tab</kbd> to a zone and
+            <kbd class="legend-kbd">Enter</kbd> to move it there.
+            <kbd class="legend-kbd">Esc</kbd> deselects
+          </li>
+          <li>
+            <span class="legend-swatch unit"></span>
+            Your card (cream edge) — minions can move, attack or shoot (each taps it), and use their abilities
+          </li>
+          <li>
+            <span class="legend-swatch opp"></span>
+            Opponent's card (slate edge)
+          </li>
+          <li>
+            <span class="legend-swatch avatar"></span>
+            Avatar (heavier edge) — special minion representing the player
+          </li>
+          <li>
+            <span class="legend-swatch"></span>
+            Site (parchment border) — occupies a square of the grid
+          </li>
+          <li>
+            <span class="legend-swatch aura"></span>
+            Aura (teal border) — sits on an intersection, always drawn on top
+          </li>
+          <li>
+            <span class="legend-icon">🂠</span>
+            Upside-down card — controlled by the opponent
+          </li>
+          <li>
+            <span class="legend-badge under">Buried</span> /
+            <span class="legend-badge under">Submerged</span>
+            Card under a land / water site — darkened; drag or move it onto the lower strip
+            of a square to send it below, the upper part to surface it
+          </li>
+          <li>
+            <span class="legend-icon">☞</span>
+            Click a card to select it — its actions (cast, move, attack,
+            abilities, pick up) appear under the board
+          </li>
+          <li>
+            <span class="legend-icon">✋</span>
+            Carried card — picked up by another card, travels with it until
+            its holder drops it
+          </li>
+          <li>
+            <span class="legend-icon">→</span>
+            With a card selected, click any zone to move it there (works
+            without dragging, e.g. on a tablet)
+          </li>
+          <li class="legend-elements">
+            <span v-for="el in ['air', 'earth', 'fire', 'water']" :key="el" class="legend-el">
+              <ThresholdIcon :element="el" /> {{ el }}
+            </span>
+          </li>
+        </ul>
+      </details>
+    </aside>
+
+    <main class="area-board mat-area">
+      <Board />
+
+      <!-- Editor: "Start position" caption, or the red viewfinder while a
+           solution line is being recorded. -->
+      <RecordingFrame v-if="state.mode === 'editor'" />
+
+      <!-- The one thing that still wants to be near the mat. It exists
+           only while a card is selected, so it costs the grid height
+           only while you are actually using it. -->
+      <CardActions v-if="state.mode !== 'editor'" />
+    </main>
+
+    <aside class="area-right">
+      <SolutionsPanel v-if="state.mode === 'editor'" />
+
+      <!-- The storyline is the shared resolution space. Triggered-ability and
+           defender prompts resolve here too, rather than under the mat. -->
+      <section
+        class="zone-block storyline-block"
+        :class="{ compact: storyCompact }"
+        aria-label="Storyline"
+      >
+        <h2 class="section-title">Storyline</h2>
+        <DropZone zone="storyline" class="storyline">
+          <CardToken
+            v-for="id in state.zones.storyline"
+            :key="id"
+            :card-id="id"
+            from="storyline"
+          />
+          <!-- Empty, it says what it is for, so it isn't mistaken for a
+               spare drop area. -->
+          <p v-if="!state.zones.storyline.length" class="storyline-empty">
+            <template v-if="!storyCompact">
+              Spells and abilities wait here in order while they resolve.
+              Both players share it.
+            </template>
+            Nothing is resolving.
+          </p>
+        </DropZone>
+
+        <!-- What the last move triggered: compact chips, replaced by the
+             next move. Click one for its rules text. -->
+        <TriggerFeed />
+
+        <!-- An attack paused for a defender. Highlighted units on the mat
+             can take the hit; or press to let the attack through. -->
+        <div
+          v-if="ui.awaitingDefender"
+          class="story-prompt defender-prompt"
+        >
+          <span>Attack: click a highlighted defender, or</span>
+          <button class="btn small primary" @click="declineDefender">Attack directly</button>
+          <button class="btn small" @click="ui.awaitingDefender = null">Cancel</button>
+        </div>
+
+        <!-- "An ally shoots a projectile": the player picks the ally, then
+             the unit its projectile hits (a spell may be drag-cast onto the
+             ally, so this lives here rather than on the selected card). -->
+        <div v-if="shooterStage()" class="story-prompt trigger-prompt">
+          <span v-if="shooterStage() === 'shooter'">
+            <strong>{{ state.cards[ui.activating.cardId]?.name }}</strong>
+            — click the ally who shoots the projectile.
+          </span>
+          <span v-else>
+            <strong>{{ state.cards[ui.activating.shooterId]?.name }}</strong>
+            shoots — click the highlighted unit the projectile hits.
+          </span>
+          <button class="btn small" @click="ui.activating = null">Cancel</button>
+        </div>
+
+        <!-- A spell (possibly drag-cast, so not selected) waits for its
+             destination: where to teleport / where its token appears. -->
+        <div v-if="ui.activating?.dest && ui.activating.cast" class="story-prompt trigger-prompt">
+          <span>
+            <strong>{{ state.cards[ui.activating.cardId]?.name }}</strong>
+            — {{ destPrompt(activeAbility()) }}
+          </span>
+          <button class="btn small" @click="ui.activating = null">Cancel</button>
+        </div>
+
+        <!-- A triggered ability is waiting for the player to pick its target.
+             An optional ("may") one can also be declined. -->
+        <div v-if="ui.storyChoice && !ui.storyChoice.pickModes" class="story-prompt trigger-prompt">
+          <span>
+            <strong>{{ state.cards[ui.storyChoice.ownerId]?.name }}</strong>
+            — {{ ui.storyChoice.ability.name || 'triggered ability' }}:
+            {{
+              ui.storyChoice.dest
+                ? destPrompt(ui.storyChoice.ability)
+                : storyShooterStage() === 'shooter'
+                ? 'click the ally who shoots the projectile.'
+                : storyShooterStage() === 'hit'
+                ? `${state.cards[ui.storyChoice.shooterId]?.name} shoots — click the unit the projectile hits.`
+                : ui.storyChoice.ability.target.prompt || 'click a highlighted target.'
+            }}
+            <template v-if="storyPickState()">
+              ({{ storyPickState().picked }}/{{ storyPickState().upTo ? 'up to ' : '' }}{{ storyPickState().needed }})
+            </template>
+          </span>
+          <button
+            v-if="storyPickState()?.upTo && storyPickState().picked"
+            class="btn small primary"
+            @click="finishStoryPicks"
+          >
+            Done
+          </button>
+          <button
+            v-if="ui.storyChoice.ability.target.optional && !ui.storyChoice.dest"
+            class="btn small"
+            @click="declineStoryChoice"
+          >
+            No target
+          </button>
+        </div>
+      </section>
+
+      <!-- Phone / tablet: one row like the opponent's strip (.mockup/phone.html
+           "You Life 14 Mana 5 ..."), so the hand stays near the board. -->
+      <section v-if="phone" class="you-strip" aria-label="You">
+        <span class="you-name">You</span>
+        <div class="you-stats">
+          <StatsBar side="player" variant="strip" />
+        </div>
+      </section>
+      <StatsBar v-else side="player" />
+    </aside>
+
+    <HandTray class="area-tray" />
 
     <FxOverlay />
     <ChoicePopup />
 
     <div v-if="previewCard" class="card-preview-overlay">
-
       <img
         v-if="previewCard.img"
         :src="previewCard.img"
@@ -822,3 +446,153 @@ watch(
     </div>
   </div>
 </template>
+
+<style scoped>
+.narrow-shell {
+  padding: var(--sp-5) var(--sp-3);
+  color: var(--c-text);
+  font-family: var(--font-ui);
+}
+
+/* Positioned for the editor RecordingFrame overlay; its caption straddles the
+   top edge, so the area must not clip it. */
+.area-board {
+  position: relative;
+  overflow: visible;
+}
+
+/* The right column: storyline on top taking the spare height, your stats
+   under it (mockup: "Storyline" + "You"). */
+.area-right {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Stacked layouts (style.css, <=1000px): storyline and You sit side by side
+   and wrap. Restated here because the scoped column rule above outranks the
+   global one, which turned their 240px basis into a height. */
+@media (max-width: 1000px) {
+  .area-right {
+    flex-direction: row;
+    flex-wrap: wrap;
+    overflow: visible;
+  }
+
+  .area-right > * {
+    flex: 1 1 240px;
+  }
+}
+
+/* Grows into spare height but never shrinks under its content: on a short
+   board row (embedded under a tall theme header) it was squeezed to a sliver
+   with its heading spilling out; the column scrolls instead. */
+.storyline-block {
+  flex: 1 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  padding: var(--sp-4);
+}
+
+
+/* Editor (and phones), nothing resolving: one line, so Solutions (or the
+   board and hand) get the height. */
+.storyline-block.compact {
+  flex: 0 0 auto;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  padding: var(--sp-2) var(--sp-4);
+}
+
+.storyline-block.compact .storyline {
+  flex: 1 1 120px;
+  min-height: 0;
+  padding: 4px 10px;
+}
+
+@media (max-width: 700px) {
+  .area-right > .storyline-block,
+  .area-right > .storyline-block.compact {
+    flex: 1 1 100%;
+  }
+}
+
+/* Trigger chips and prompts take their own line under the one-line row. */
+.storyline-block.compact > :not(.section-title, .storyline) {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+.storyline-block.compact .storyline-empty {
+  margin: 0;
+  padding: 0;
+  max-width: none;
+  text-align: left;
+}
+
+.section-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: var(--fs-lg);
+  color: var(--c-cream-hi);
+}
+
+.storyline-block .storyline {
+  flex: 1 1 auto;
+}
+
+.storyline-empty {
+  margin: auto;
+  padding: 8px;
+  max-width: 30ch;
+  text-align: center;
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  color: var(--c-muted-lo);
+  pointer-events: none;
+}
+
+.area-right :deep(.stats-panel) {
+  padding: var(--sp-4);
+}
+
+.you-strip {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 4px var(--sp-3);
+  background: var(--c-panel);
+  border: 1px solid var(--c-line);
+  border-radius: var(--r-lg);
+}
+
+.you-name {
+  flex: none;
+  font-family: var(--font-display);
+  font-size: 19px;
+  color: var(--c-gold);
+}
+
+.you-stats {
+  min-width: 0;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+
+.area-right :deep(.stat-side) {
+  font-family: var(--font-display);
+  font-size: var(--fs-lg);
+  color: var(--c-gold);
+}
+</style>

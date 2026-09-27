@@ -1,12 +1,13 @@
 <script setup>
 import { computed } from 'vue'
 
+// Element colours from the mockup (light enough to read on the felt).
 // Classic alchemical symbols: fire △, water ▽, air △ with bar, earth ▽ with bar.
 const DEFS = {
-  air: { color: '#9fb4c7', up: true, bar: true },
-  earth: { color: '#7fb069', up: false, bar: true },
-  fire: { color: '#e25822', up: true, bar: false },
-  water: { color: '#3b82f6', up: false, bar: false },
+  air: { color: '#dce4eb', up: true, bar: true },
+  earth: { color: '#d1b56a', up: false, bar: true },
+  fire: { color: '#ee9474', up: true, bar: false },
+  water: { color: '#7dbbe6', up: false, bar: false },
 }
 
 const props = defineProps({ element: { type: String, required: true } })

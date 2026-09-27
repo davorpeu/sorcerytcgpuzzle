@@ -1,0 +1,160 @@
+{
+  "version": 1,
+  "name": "Art test",
+  "enforce": true,
+  "combat": true,
+  "cards": {
+    "s7": {
+      "id": "s7",
+      "name": "Joyous Garde",
+      "site": true,
+      "img": "/cards_test/004-joyous_garde-b-s.webp"
+    },
+    "s11": {
+      "id": "s11",
+      "name": "Joyous Garde",
+      "site": true,
+      "img": "/cards_test/004-joyous_garde-b-s.webp"
+    },
+    "s12": {
+      "id": "s12",
+      "name": "Joyous Garde",
+      "site": true,
+      "img": "/cards_test/004-joyous_garde-b-s.webp"
+    },
+    "s13": {
+      "id": "s13",
+      "name": "Joyous Garde",
+      "site": true,
+      "img": "/cards_test/004-joyous_garde-b-s.webp"
+    },
+    "s17": {
+      "id": "s17",
+      "name": "Joyous Garde",
+      "site": true,
+      "img": "/cards_test/004-joyous_garde-b-s.webp"
+    },
+    "gk": {
+      "id": "gk",
+      "name": "The Green Knight",
+      "unit": true,
+      "power": 3,
+      "img": "/cards_test/004-the_green_knight-b-s.webp"
+    },
+    "sk": {
+      "id": "sk",
+      "name": "Skeleton",
+      "unit": true,
+      "power": 1,
+      "enemy": true,
+      "img": "/cards_test/006-skeleton-bt-s.webp"
+    },
+    "sk2": {
+      "id": "sk2",
+      "name": "Skeleton",
+      "unit": true,
+      "power": 1,
+      "img": "/cards_test/006-skeleton-bt-s.webp"
+    },
+    "nc": {
+      "id": "nc",
+      "name": "Necromancer",
+      "unit": true,
+      "avatar": true,
+      "power": 1,
+      "img": "/cards_test/006-necromancer-b-s.webp"
+    },
+    "lb": {
+      "id": "lb",
+      "name": "Lightning Bolt",
+      "magic": true,
+      "spellCost": {
+        "mana": 2,
+        "fire": 1
+      },
+      "img": "/cards_test/002-lightning_bolt-b-s.webp"
+    },
+    "sk3": {
+      "id": "sk3",
+      "name": "Skeleton",
+      "unit": true,
+      "power": 1,
+      "spellCost": {
+        "mana": 1
+      },
+      "img": "/cards_test/006-skeleton-bt-s.webp"
+    },
+    "au": {
+      "id": "au",
+      "name": "Test Aura",
+      "aura": true,
+      "img": "/cards_test/002-lightning_bolt-b-s.webp"
+    }
+  },
+  "initial": {
+    "site:7": [
+      "s7"
+    ],
+    "site:11": [
+      "s11"
+    ],
+    "site:12": [
+      "s12"
+    ],
+    "site:13": [
+      "s13"
+    ],
+    "site:17": [
+      "s17"
+    ],
+    "cell:12:top": [
+      "gk"
+    ],
+    "cell:7:top": [
+      "sk"
+    ],
+    "cell:12:bot": [
+      "sk2"
+    ],
+    "cell:17:top": [
+      "nc"
+    ],
+    "hand:player": [
+      "lb",
+      "sk3"
+    ],
+    "aura:5": [
+      "au"
+    ]
+  },
+  "initialDamage": {
+    "gk": 1
+  },
+  "stats": {
+    "player": {
+      "life": 20,
+      "mana": 2,
+      "air": 0,
+      "earth": 0,
+      "fire": 0,
+      "water": 0
+    },
+    "opponent": {
+      "life": 3,
+      "mana": 0,
+      "air": 0,
+      "earth": 0,
+      "fire": 0,
+      "water": 0
+    }
+  },
+  "solutions": [
+    [
+      {
+        "cardId": "gk",
+        "from": "cell:12:top",
+        "to": "cell:7:top"
+      }
+    ]
+  ]
+}

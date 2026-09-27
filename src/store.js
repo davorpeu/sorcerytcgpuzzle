@@ -1,4 +1,4 @@
-import { reactive, computed, watch } from 'vue'
+import { reactive, computed, watch, nextTick } from 'vue'
 
 export const GRID_COLS = 5
 export const GRID_ROWS = 4
@@ -141,6 +141,11 @@ export const ui = reactive({
   hoverCard: null, // card id currently under the mouse
   alt: false, // Alt key held -> show enlarged preview of hovered card
   attacker: null, // card id armed to attack; next click on a unit/site targets it
+  // An oversized attacker also picks the crossing it steps to: the one chosen
+  // (clicked before or after the target), and a target picked while several
+  // crossings could reach it, waiting for that choice.
+  attackCrossing: null,
+  attackTarget: null,
   carrier: null, // card id armed to pick up; next click on a card carries it
   striker: null, // card id armed to strike; next click on a unit/site targets it
   moving: null, // card id armed for formal Move action; next zone click moves & taps unit
@@ -150,7 +155,7 @@ export const ui = reactive({
   shooting: null, // card id armed to shoot (Ranged); next click on a unit fires
   intercepting: null, // card id armed to intercept; next click on an enemy fights it
   // An attack is paused for the defending side to interpose a defender:
-  // { attackerId, targetId }. Resolved by chooseDefender / declineDefender.
+  // { attackerId, targetId, crossing }. Resolved by chooseDefender / declineDefender.
   awaitingDefender: null,
   // The storyline is paused for a triggered ability to be given a target the
   // player picks: { ownerId, ability, entry, triggeringId }. Resolved by
@@ -973,9 +978,13 @@ function sacrificeable(sourceId, id) {
 
 // The cards a discard ('hand') or banish-from-cemetery ('grave') cost draws on,
 // in the order they are paid: the source's side, first cards first (there is no
-// choice UI for costs yet), never the source itself.
+// choice UI for costs yet), never the source itself. With cemeteries swapped,
+// "your cemetery" is the opponent's, so a banish cost draws on theirs.
 function costCards(sourceId, zonePrefix) {
-  return (state.zones[`${zonePrefix}:${sideOf(sourceId)}`] || []).filter((id) => id !== sourceId)
+  const own = sideOf(sourceId)
+  const side =
+    zonePrefix === 'grave' && cemeteriesSwapped() ? (own === 'player' ? 'opponent' : 'player') : own
+  return (state.zones[`${zonePrefix}:${side}`] || []).filter((id) => id !== sourceId)
 }
 
 // Pay an activated ability's card costs (after it is logged, so their events
@@ -986,8 +995,13 @@ function payCardCosts(cardId, ability, targetId, entry) {
   const side = sideOf(cardId)
   for (const id of costCards(cardId, 'hand').slice(0, Number(cost.discard) || 0))
     effectMove(id, `grave:${side}`, entry, 'Discarded', `${cardName(id)} is discarded as a cost.`)
-  for (const id of costCards(cardId, 'grave').slice(0, Number(cost.banish) || 0))
-    effectMove(id, `banished:${side}`, entry, 'Banished', `${cardName(id)} is banished from the cemetery as a cost.`)
+  // A banish cost takes the cards the player picked from the cemetery first
+  // ("banish three spells to cast one"), then the first others.
+  const grave = costCards(cardId, 'grave')
+  const picked = (entry?.targetIds || (targetId ? [targetId] : [])).filter((id) => grave.includes(id))
+  const banishOrder = [...picked, ...grave.filter((id) => !picked.includes(id))]
+  for (const id of banishOrder.slice(0, Number(cost.banish) || 0))
+    effectMove(id, `banished:${sideOf(id)}`, entry, 'Banished', `${cardName(id)} is banished from the cemetery as a cost.`)
   const victim = cost.sacrifice === 'self' ? cardId : cost.sacrifice === 'target' ? targetId : null
   if (victim && sacrificeable(cardId, victim)) {
     const text = `${cardName(victim)} is sacrificed.`
@@ -1633,7 +1647,11 @@ export function canAttack(attackerId, targetId) {
 export function armedAttackLegal(targetId) {
   if (!ui.attacker || ui.attacker === targetId) return false
   if (blockedByStealth(ui.attacker, targetId)) return false
-  return enforcing() ? canAttack(ui.attacker, targetId) : true
+  if (enforcing() && !canAttack(ui.attacker, targetId)) return false
+  // An oversized attacker with its crossing chosen hits only what lies under it.
+  if (ui.attackCrossing != null && isOversized(ui.attacker))
+    return engageCrossings(ui.attacker, targetId).includes(ui.attackCrossing)
+  return true
 }
 
 // null = no move armed, or a realm zone in a free-form puzzle (no highlight);
@@ -1644,6 +1662,38 @@ export function armedMoveLegal(zone) {
   if (!inRealm(routeZone(ui.moving, zone))) return false
   if (!enforcing()) return null
   return canMoveUnit(ui.moving, zone)
+}
+
+// The one cue a whole square wears while something is armed: the verb a click
+// there performs ('move' / 'attack' / 'shoot' / 'summon'), 'out' for a square an
+// armed Move can't reach, or null for no cue. Like the other legality hints it
+// only speaks while enforcing -- a free-form puzzle leaves every square open.
+export function squareCue(idx) {
+  if (!enforcing()) return null
+  const cards = () => [
+    ...(state.zones[`site:${idx}`] || []),
+    ...state.zones[`cell:${idx}:top`],
+    ...state.zones[`cell:${idx}:bot`],
+  ]
+  if (ui.attacker) return cards().some(armedAttackLegal) ? 'attack' : null
+  if (ui.shooting) {
+    return cards().some((id) => id !== ui.shooting && armedShootLegal(id)) ? 'shoot' : null
+  }
+  if (ui.moving) {
+    // Where the mover already stands is not a move; its other layer may be.
+    // Its own square is never dimmed -- that is where the eye starts from.
+    const from = zoneOf(ui.moving)
+    const legal = (z) => z !== from && armedMoveLegal(z)
+    if (legal(`cell:${idx}:top`) || legal(`cell:${idx}:bot`)) return 'move'
+    return from === `cell:${idx}:top` || from === `cell:${idx}:bot` ? null : 'out'
+  }
+  const sel = ui.selected
+  const c = sel && state.cards[sel]
+  if (c && c.unit && !c.avatar && canCast(sel)) {
+    const ok = (z) => legalSummonLocation(sel, z)
+    return ok(`cell:${idx}:top`) || ok(`cell:${idx}:bot`) ? 'summon' : null
+  }
+  return null
 }
 
 // ---------- ranged (line-of-fire) ----------
@@ -2337,9 +2387,23 @@ const AMOUNT_OPS = new Set([
 // Whose action fires a trigger: the card's own move, anyone's, or one side's.
 export const TRIGGER_SUBJECTS = ['self', 'any', 'enemy', 'friendly']
 
-// What a grant-style ability's gained abilities are lost to (Layer 4). 'never'
-// keeps them for good.
-export const LOSE_CONDITIONS = ['never', 'damaged', 'dies', 'leaves-realm', 'taps']
+// What a grant-style ability's gained abilities are lost to (Layer 4). An
+// ability's `loseWhen` is a list of these -- any one ends the form; an empty
+// list keeps it for good. 'reassumes': using the ability again sheds the form
+// it gave before.
+export const LOSE_CONDITIONS = ['damaged', 'dies', 'leaves-realm', 'taps', 'reassumes']
+export const LOSE_LABELS = {
+  damaged: 'it takes damage',
+  dies: 'it dies',
+  'leaves-realm': 'it leaves the realm',
+  taps: 'it taps',
+  reassumes: 'it assumes a form again',
+}
+// Older files store one condition as a string ('never' = none).
+export function loseConditions(v) {
+  const list = Array.isArray(v) ? v : v ? [v] : []
+  return LOSE_CONDITIONS.filter((c) => list.includes(c))
+}
 
 // Card-kind filter for a target picker. 'unit' = avatar or minion; 'minion' =
 // non-avatar unit; 'monument' = an artifact that can't be carried. As in the
@@ -2741,7 +2805,7 @@ function buildAbility(a) {
       shooter: TARGET_SHOOTERS.includes(a.target?.shooter) ? a.target.shooter : 'source',
     },
     effects: Array.isArray(a.effects) ? a.effects.map(normalizeEffect) : [],
-    loseWhen: a.loseWhen || 'never',
+    loseWhen: loseConditions(a.loseWhen),
     // Modal ("choose one..."): only saved when the ability has modes.
     ...(Array.isArray(a.modes) && a.modes.length
       ? {
@@ -3253,6 +3317,21 @@ function placePoolCopy(cardId, to) {
   copy.id = copyId
   state.cards[copyId] = copy
   state.zones[to].push(copyId)
+  ownByZone(copyId, to)
+}
+
+// The player an off-board zone belongs to (hand, cemetery, banished,
+// collection, atlas, spellbook), or null for the board and shared zones.
+function zoneOwner(zone) {
+  const m = /^(hand|grave|banished|collection|atlas|spellbook):(player|opponent)$/.exec(zone || '')
+  return m ? m[2] : null
+}
+
+// A card set up in a player's hand, cemetery, etc. is that player's: placing it
+// there in the editor hands it to them, so it doesn't need toggling by hand.
+function ownByZone(cardId, zone) {
+  const owner = zoneOwner(zone)
+  if (owner && state.cards[cardId]) state.cards[cardId].enemy = owner === 'opponent'
 }
 
 // Tapping that a move can trigger. A unit moved cell-to-cell via the dedicated
@@ -3381,6 +3460,7 @@ function moveCardImpl(cardId, from, to, { tapOnMove, draw } = {}) {
   const prevFloodedSites = clone(state.floodedSites)
   src.splice(i, 1)
   state.zones[to].push(cardId)
+  if (editingStart()) ownByZone(cardId, to)
 
   const card = state.cards[cardId]
   if (card?.site && from.startsWith('site:')) {
@@ -3598,21 +3678,98 @@ export function targetAttack(targetId) {
   // Illegal target while enforcing: ignore the click, keep the attack armed so
   // the player can pick a legal one.
   if (enforcing() && !canAttack(attackerId, targetId)) return
+  // An oversized attacker steps to a crossing over the target first. With a
+  // crossing already picked, the target must lie under it; with none picked and
+  // several that reach the target, wait for the player to choose one.
+  let crossing = null
+  if (isOversized(attackerId)) {
+    const options = engageCrossings(attackerId, targetId)
+    if (ui.attackCrossing != null) {
+      if (!options.includes(ui.attackCrossing)) return
+      crossing = ui.attackCrossing
+    } else if (options.length > 1) {
+      ui.attackTarget = targetId
+      return
+    } else {
+      crossing = options[0] ?? null
+    }
+  }
   // With combat on: the opponent defends automatically (its own AI), while a
   // player-side target still prompts the solver to choose.
   if (combatActive()) {
     const target = state.cards[targetId]
     if (target?.enemy) {
-      performAttack(attackerId, targetId, chooseAutoDefender(attackerId, targetId))
+      performAttack(attackerId, targetId, chooseAutoDefender(attackerId, targetId), crossing)
       return
     }
     if (legalDefenders(attackerId, targetId).length) {
-      ui.awaitingDefender = { attackerId, targetId }
+      ui.awaitingDefender = { attackerId, targetId, crossing }
       ui.attacker = null
       return
     }
   }
-  performAttack(attackerId, targetId, null)
+  performAttack(attackerId, targetId, null, crossing)
+}
+
+// The crossings an oversized attacker can step to that stand over the target
+// (any of the target's squares, on the surface) -- its own crossing included,
+// when it already stands over it. Sorted, so the choice reads in board order.
+export function engageCrossings(attackerId, targetId) {
+  if (!isOversized(attackerId)) return []
+  const t = nodeOf(targetId)
+  if (!t || t.layer !== 'top') return []
+  const squares = squaresOf(targetId)
+  return [...reachableIntersections(attackerId)]
+    .filter((i) => intersectionSquares(i).some((sq) => squares.includes(sq)))
+    .sort((a, b) => a - b)
+}
+
+// Is crossing `i` a pick for the armed oversized attacker? With a target waiting,
+// only the crossings over it; otherwise any crossing it can reach (clicking the
+// chosen one again clears it).
+export function attackCrossingPickable(i) {
+  const a = ui.attacker
+  if (!a || !isOversized(a)) return false
+  if (ui.attackTarget) return engageCrossings(a, ui.attackTarget).includes(i)
+  return reachableIntersections(a).has(i)
+}
+
+export function pickAttackCrossing(i) {
+  if (!attackCrossingPickable(i)) return
+  if (ui.attackTarget) {
+    const targetId = ui.attackTarget
+    ui.attackTarget = null
+    ui.attackCrossing = i
+    targetAttack(targetId)
+    return
+  }
+  ui.attackCrossing = ui.attackCrossing === i ? null : i
+}
+
+// A fresh (or cancelled) attack starts with no crossing chosen.
+watch(
+  () => ui.attacker,
+  () => {
+    ui.attackCrossing = null
+    ui.attackTarget = null
+  }
+)
+
+// Step an oversized unit to the chosen crossing (the Move half of its Move &
+// Attack). Recorded on the entry so undo puts it back and a solution can tell
+// which crossing it attacked from (the attacker's only: `record`).
+function engageCrossing(unitId, crossing, entry, record = true) {
+  const from = zoneOf(unitId)
+  if (crossing == null || !/^aura:\d+$/.test(from || '')) return
+  const to = `aura:${crossing}`
+  if (record) entry.crossing = crossing
+  if (from === to) return
+  const src = state.zones[from]
+  const i = src.indexOf(unitId)
+  if (i === -1) return
+  snapshotStructural(entry)
+  src.splice(i, 1)
+  state.zones[to].push(unitId)
 }
 
 // Move a unit onto the target's square to engage it -- the "move" half of Move &
@@ -3635,7 +3792,7 @@ function engageMove(unitId, targetId, entry) {
 
 // Carry out an attack: the attacker moves to engage and taps, an interposing
 // defender moves in and taps too, then the fight resolves.
-function performAttack(attackerId, targetId, defenderId) {
+function performAttack(attackerId, targetId, defenderId, crossing = null) {
   const prevTapped = clone(state.tapped)
   if (isUnit(attackerId)) state.tapped[attackerId] = true
   if (defenderId && isUnit(defenderId)) state.tapped[defenderId] = true
@@ -3648,8 +3805,17 @@ function performAttack(attackerId, targetId, defenderId) {
   }
   // Move to engage is the "Move" half of the action -- always happens when the
   // unit can reach the target (independent of the combat/enforce flags).
-  engageMove(attackerId, targetId, entry)
-  if (defenderId) engageMove(defenderId, targetId, entry)
+  // An oversized unit steps crossing to crossing instead: the attacker to the
+  // one chosen, a defender to one over the target (staying put if it already is).
+  if (crossing != null) engageCrossing(attackerId, crossing, entry)
+  else engageMove(attackerId, targetId, entry)
+  if (defenderId) {
+    const options = engageCrossings(defenderId, targetId)
+    const here = oversizedAt(defenderId)
+    if (options.length)
+      engageCrossing(defenderId, options.includes(here) ? here : options[0], entry, false)
+    else engageMove(defenderId, targetId, entry)
+  }
   logEntry(entry)
   if (defenderId) {
     state.events.push({
@@ -4521,6 +4687,9 @@ export function dropCarried(itemId) {
   const carrierId = state.carry[itemId]
   if (!carrierId) return
   if (!playerControls(carrierId)) return
+  // An assumed form isn't held, it's worn: only its lose conditions or a
+  // release effect end it.
+  if (isAssumedForm(itemId)) return
   const zone = zoneOf(carrierId)
   if (!zone) return
   const to = dropTarget(itemId, zone)
@@ -4557,6 +4726,10 @@ function matchesFilter(card, filter) {
   if (filter === 'spell') return isSpell(card.id)
   return true // 'any'
 }
+
+// A card taken on as an assumed form (grantFrom): it rides with its carrier,
+// whose abilities its own now are, so it has no actions of its own.
+export const isAssumedForm = (cardId) => !!state.grants[cardId]
 
 // Find an ability by id on a card or anything it carries -- a card gains the
 // abilities of whatever it is holding (a granted "assumed" card, say), so the
@@ -4856,10 +5029,19 @@ export function destPrompt(ability) {
   return spec ? `Click a highlighted square: ${spec.label}.` : ''
 }
 
+// A spell being aimed (armed cast, or a drag-cast looking for its target) takes
+// sides as its caster -- the other side when it is cast out of a swapped
+// cemetery or by permit -- though control only passes to them as it resolves.
+let dropCastId = null
+const beingCast = (id) => dropCastId === id || (!!ui.activating?.cast && ui.activating.cardId === id)
+const actsAsEnemy = (id) =>
+  beingCast(id) ? castSide(id) === 'opponent' : !!state.cards[id]?.enemy
+const opposes = (sourceId, id) => actsAsEnemy(sourceId) !== !!state.cards[id]?.enemy
+
 // The target must be on the right side relative to the source.
 function matchesTargetSide(sourceId, targetId, side, invert = false) {
   if (side === 'any' || !side) return true
-  const same = (!!state.cards[sourceId]?.enemy === !!state.cards[targetId]?.enemy) !== invert
+  const same = !opposes(sourceId, targetId) !== invert
   return side === 'friendly' ? same : !same
 }
 
@@ -4890,9 +5072,9 @@ function satisfiesTarget(sourceId, targetId, t, shooterId = null) {
   const swappedGrave = t.from === 'cemetery' && cemeteriesSwapped()
   if (!matchesTargetSide(sourceId, targetId, t.side, swappedGrave)) return false
   if (!withinTargetRange(sourceId, targetId, t.within, t.range, shooterId)) return false
-  if (blockedByStealth(sourceId, targetId)) return false
-  // A passive "can't be targeted" only shields against the opponent.
-  if (cantBeTargeted(targetId) && oppositeSides(sourceId, targetId)) return false
+  // Stealth and a passive "can't be targeted" only shield against the opponent.
+  if (isStealthed(targetId) && opposes(sourceId, targetId)) return false
+  if (cantBeTargeted(targetId) && opposes(sourceId, targetId)) return false
   return true
 }
 
@@ -4946,7 +5128,7 @@ function canShootFor(sourceId, id) {
     id !== sourceId &&
     isUnit(id) &&
     inPlay(id) &&
-    !oppositeSides(sourceId, id) &&
+    !opposes(sourceId, id) &&
     !isDisabled(id)
   )
 }
@@ -4967,8 +5149,13 @@ function findDropShooter(sourceId, t, zone, sq) {
     sq != null
       ? [`cell:${sq}:top`, `cell:${sq}:bot`].flatMap((z) => state.zones[z] || [])
       : [...(state.zones[zone] || [])]
-  const allies = shootersFor(sourceId, t)
-  return ids.find((id) => allies.includes(id)) || null
+  dropCastId = sourceId
+  try {
+    const allies = shootersFor(sourceId, t)
+    return ids.find((id) => allies.includes(id)) || null
+  } finally {
+    dropCastId = null
+  }
 }
 
 // How many cards the armed ability picks, and whether it then asks which of
@@ -5183,6 +5370,9 @@ function grantFrom(carrierId, targetId, ability, entry, eff) {
   const i = arr?.indexOf(targetId) ?? -1
   if (i === -1) return
   snapshotStructural(entry)
+  // "Lost when assumed again": the form this ability gave before is shed first.
+  if (loseConditions(ability.loseWhen).includes('reassumes'))
+    releaseGrant(carrierId, entry, { abilityId: ability.id })
   arr.splice(i, 1)
   state.carry[targetId] = carrierId
   state.grants[targetId] = {
@@ -5210,11 +5400,14 @@ function grantReleaseZone(cardId, g) {
 
 // Release every grant a carrier holds: the carried card is removed from the
 // carrier and put where its grant says (grantReleaseZone). Used by an explicit
-// `release` effect and by the loseWhen watcher.
-function releaseGrant(carrierId, entry) {
+// `release` effect and by the loseWhen watcher. `only` narrows it to one
+// grant's card, or to the grants one ability made ({ abilityId }).
+function releaseGrant(carrierId, entry, only = null) {
   for (const t of Object.keys(state.grants)) {
     const g = state.grants[t]
     if (g.carrierId !== carrierId) continue
+    if (typeof only === 'string' && t !== only) continue
+    if (only?.abilityId && g.abilityId !== only.abilityId) continue
     snapshotStructural(entry)
     delete state.carry[t]
     delete state.grants[t]
@@ -5225,11 +5418,19 @@ function releaseGrant(carrierId, entry) {
 // Banish the picked cemetery cards; the one chosen may then be cast (paying its
 // cost, or free) by the ability's controller -- from banishment, and back to
 // banishment once a magic resolves. The permission is a cast permit, so the
-// player casts it through the normal cast flow as a move of its own.
+// cast is a move of its own through the normal cast flow -- started for the
+// player straight away (autoCastPermit), with the permit left as the way back
+// in should they cancel it. If the spell can't be cast (not enough mana or
+// threshold), the activation takes itself back.
 function banishAndCast(eff, cardId, targetId, entry) {
   const ids = entry?.targetIds || (targetId ? [targetId] : [])
   const banished = []
   for (const id of ids) {
+    // Already banished by the ability's own banish cost: it counts as banished.
+    if (cardZoneCategory(id) === 'banished') {
+      banished.push(id)
+      continue
+    }
     if (cardZoneCategory(id) !== 'cemetery') continue
     snapshotStructural(entry)
     removeFromZones(state.zones, id)
@@ -5241,6 +5442,8 @@ function banishAndCast(eff, cardId, targetId, entry) {
   const castId = entry?.castId || (ids.length === 1 ? ids[0] : null)
   if (castId && banished.includes(castId) && isSpell(castId)) {
     state.castPermits[castId] = { side: sideOf(cardId), free: !!eff.free }
+    // After the granting move has finished resolving (and been judged).
+    nextTick(() => autoCastPermit(castId, entry))
   }
   if (!banished.length) return
   const names = banished.map(cardName).join(', ')
@@ -5254,6 +5457,33 @@ function banishAndCast(eff, cardId, targetId, entry) {
         ? `${names} ${banished.length > 1 ? 'are' : 'is'} banished. ${cardName(castId)} may be cast${eff.free ? ' for free' : ''}.`
         : `${names} ${banished.length > 1 ? 'are' : 'is'} banished.`,
   })
+}
+
+// Start casting a spell a banishAndCast just permitted, if it still may be: a
+// magic arms (or resolves) its cast as if Cast were clicked; a permanent is
+// selected, ready to be dropped onto the board. When it can't be cast -- the
+// caster lacks the mana or threshold -- the activated ability that granted it
+// is undone, so the banishment and its paid costs are taken back.
+function autoCastPermit(castId, entry) {
+  // Already gone: the granting move was snapped back (or otherwise undone).
+  if (!state.castPermits[castId] || ui.activating) return
+  if (!canCast(castId)) {
+    undoGrantingAbility(entry)
+    return
+  }
+  ui.selected = castId
+  if (state.cards[castId].magic) beginCast(castId)
+}
+
+// Take back an activated ability whose granted cast turned out unaffordable --
+// only when it is still the latest logged move (a trigger's banishAndCast, or a
+// move already rewound, is left alone). A plain undo: no mistake is counted.
+function undoGrantingAbility(entry) {
+  if (entry?.type !== 'ability') return
+  const list = state.recording ? state.draft : state.mode === 'play' ? state.moves : null
+  if (!list?.length || entry.seq == null || list[list.length - 1].seq !== entry.seq) return
+  undo()
+  ui.selected = null
 }
 
 // Animate: a non-unit object in the realm becomes a minion of the given power
@@ -5960,9 +6190,13 @@ function counterEvent(entry, id, name, delta) {
 
 // ---------- loseWhen: gained abilities fall away ----------
 
-// Does this entry meet a grant's loss condition for its carrier?
-function matchesLoseWhen(cond, carrierId, entry) {
-  if (!cond || cond === 'never') return false
+// Does this entry meet any of a grant's loss conditions for its carrier?
+// ('reassumes' is handled by grantFrom itself.)
+function matchesLoseWhen(loseWhen, carrierId, entry) {
+  return loseConditions(loseWhen).some((c) => matchesLoseCondition(c, carrierId, entry))
+}
+
+function matchesLoseCondition(cond, carrierId, entry) {
   if (cond === 'damaged')
     return entry.type === 'damage' && entry.cardId === carrierId && (entry.amount || 0) > 0
   // A damage event is done *to* the carrier, not an action it took.
@@ -5976,13 +6210,13 @@ function matchesLoseWhen(cond, carrierId, entry) {
 }
 
 // After each logged entry, drop any grant whose loss condition it just met.
+// Each grant answers to the ability that made it.
 function checkGrantLoss(entry) {
-  const carriers = new Set(Object.values(state.grants).map((g) => g.carrierId))
-  for (const carrierId of carriers) {
-    const g = Object.values(state.grants).find((x) => x.carrierId === carrierId)
-    const ability = findAbility(carrierId, g.abilityId)
-    if (matchesLoseWhen(ability?.loseWhen, carrierId, entry)) {
-      releaseGrant(carrierId, entry.root || entry)
+  for (const [t, g] of Object.entries(state.grants)) {
+    if (!state.grants[t]) continue
+    const ability = findAbility(g.carrierId, g.abilityId)
+    if (matchesLoseWhen(ability?.loseWhen, g.carrierId, entry)) {
+      releaseGrant(g.carrierId, entry.root || entry, t)
     }
   }
 }
@@ -6270,6 +6504,27 @@ export function canCastFrom(cardId) {
 export const castControlled = (cardId) =>
   state.mode !== 'play' || castSide(cardId) === 'player'
 
+// What stands between a castable-from-here spell and casting it, for the hand to
+// say out loud: [{ kind: 'mana'|'air'|'earth'|'fire'|'water', short: n }] plus
+// { kind: 'caster' } when a magic/aura has no one to cast it. Empty when it can
+// be cast, or when it isn't the solver's to cast from here at all.
+export function castShortfall(cardId) {
+  if (!castControlled(cardId) || !spellCastable(cardId)) return []
+  const side = castSide(cardId)
+  const s = state.stats[side]
+  if (!s) return []
+  const out = []
+  const mana = castManaCost(cardId) - (s.mana || 0)
+  if (mana > 0) out.push({ kind: 'mana', short: mana })
+  const cost = castCostOf(cardId)
+  for (const el of ELEMENTS) {
+    const short = cost[el] - effectiveThreshold(side, el)
+    if (short > 0) out.push({ kind: el, short })
+  }
+  if (!canCastFrom(cardId)) out.push({ kind: 'caster' })
+  return out
+}
+
 export function canCast(cardId) {
   return (
     castControlled(cardId) &&
@@ -6481,7 +6736,12 @@ function findDropTarget(casterId, ability, zone, sq) {
           (z) => state.zones[z] || []
         )
       : [...(state.zones[zone] || [])]
-  return ids.find((id) => satisfiesTarget(casterId, id, ability.target)) || null
+  dropCastId = casterId
+  try {
+    return ids.find((id) => satisfiesTarget(casterId, id, ability.target)) || null
+  } finally {
+    dropCastId = null
+  }
 }
 
 // Invoke a cast from the bar. A spell whose effect needs a target/square arms the
@@ -6958,7 +7218,12 @@ const sameEntry = (a, b) => {
   if (type === 'damage') return (a.amount || 0) === (b.amount || 0)
   if (type === 'charge') return true
   if (type === 'attack')
-    return a.targetId === b.targetId && (a.defenderId || null) === (b.defenderId || null)
+    return (
+      a.targetId === b.targetId &&
+      (a.defenderId || null) === (b.defenderId || null) &&
+      // The crossing an oversized attacker attacked from (absent for the rest).
+      (a.crossing ?? null) === (b.crossing ?? null)
+    )
   if (type === 'pickup' || type === 'shoot' || type === 'intercept')
     return a.targetId === b.targetId
   if (type === 'drop') return a.to === b.to
@@ -7859,6 +8124,10 @@ export function loadPuzzle(data, { play = true } = {}) {
     delete c.allowOpponentSiteSummon
   }
   state.initialZones = normalizeZones(data.initial)
+  // Older setups could leave a card in the opponent's hand or cemetery still
+  // marked as the player's; the zone it starts in says whose it is.
+  for (const [zone, ids] of Object.entries(state.initialZones))
+    for (const id of ids) ownByZone(id, zone)
   state.initialFloodedSites = normalizeFloodedSites(
     data.initialFloodedSites ?? data.floodedSites
   )
@@ -8157,4 +8426,16 @@ export async function initFromUrl(options = {}) {
     console.error('Failed to load puzzle from URL', e)
   }
   return false
+}
+
+// Internals exposed for the unit tests in tests/ only. Not part of the app's
+// API: components must not import this.
+export const __test = {
+  sameEntry,
+  sameLine,
+  lineOutcome,
+  entryCards,
+  solutionCards,
+  routeZone,
+  wouldCycle,
 }

@@ -11,6 +11,8 @@ import {
   targetShoot,
   armedDefendLegal,
   chooseDefender,
+  attackCrossingPickable,
+  pickAttackCrossing,
   isStoryChoiceTarget,
   resolveStoryChoice,
   canActivateTarget,
@@ -31,6 +33,8 @@ import {
   pickAnyDest,
   isWaterSite,
   isFloodedSite,
+  squareCue,
+  intersectionSquares,
   GRID_SIZE,
   GRID_COLS,
   GRID_ROWS,
@@ -142,6 +146,16 @@ function clickAura(card) {
     targetActivate(card.id)
     return
   }
+  // An oversized attacker picking its crossing: a card already standing there
+  // (its own token, to attack from where it is) stands for the crossing, unless
+  // it is itself something to attack.
+  if (ui.attacker && !armedAttackLegal(card.id)) {
+    const crossing = Number(zoneOf(card.id)?.slice('aura:'.length))
+    if (attackCrossingPickable(crossing)) {
+      pickAttackCrossing(crossing)
+      return
+    }
+  }
   // An animated aura is an oversized minion, so it can be the target of the
   // same armed actions a unit token answers to.
   if (isOversized(card.id)) {
@@ -194,17 +208,60 @@ const auraSelected = computed(
   () => !!ui.selected && !!state.cards[ui.selected]?.aura
 )
 
+// The empty crossings only show while an aura is the card in hand or in
+// flight -- they are no destination for anything else.
+const auraInPlay = computed(
+  () => auraSelected.value || !!(ui.dragCard && state.cards[ui.dragCard]?.aura)
+)
+
+// The four squares a selected aura touches, outlined so its reach is never a
+// guess. Empty unless the selection is a card standing on a crossing.
+const auraReach = computed(() => {
+  const zone = ui.selected && zoneOf(ui.selected)
+  if (!zone || !zone.startsWith('aura:')) return []
+  return intersectionSquares(Number(zone.slice('aura:'.length)))
+})
+
+// A crossing holding only plain auras draws them as round seals on the point
+// where the four squares meet. Any animated aura there is an oversized minion
+// and keeps the whole node card-shaped, as it always was.
+const sealed = (idx) => auraCards(idx).every((card) => !isOversized(card.id))
+
+// A piece on a crossing overlaps the corner of each square it touches, so a
+// band keeps that corner clear: cards start beside the seal instead of under it
+// (it hid their damage badges). Returns the band's padding classes -- 'seal'
+// for a round seal, 'big' for an animated aura, which is card-sized.
+function cornerPiece(idx, dr, dc) {
+  const r = Math.floor(idx / GRID_COLS) + dr
+  const c = (idx % GRID_COLS) + dc
+  if (r < 0 || c < 0 || r >= GRID_ROWS - 1 || c >= INTERSECTION_COLS) return null
+  const m = r * INTERSECTION_COLS + c
+  if (!auraCards(m).length) return null
+  return sealed(m) ? 'seal' : 'big'
+}
+function cornerPads(idx, band) {
+  const dr = band === 'top' ? -1 : 0
+  const left = cornerPiece(idx, dr, -1)
+  const right = cornerPiece(idx, dr, 0)
+  return [left && `pad-l-${left}`, right && `pad-r-${right}`]
+}
+
 // A square's regions are derived from its site: the surface is 'surface' with a
 // site and 'void' without one; the below band is 'underground'/'underwater' on a
 // land/water site and nothing at all with no site. Rendered as a tint + label so
 // the realm reads at a glance without a legend.
+// While an action is armed, each square says what a click there does. The word
+// rides with the colour so the state never depends on colour alone; an armed
+// Move dims what it can't reach instead of labelling it.
+const CUE_WORD = { move: 'Move', attack: 'Attack', shoot: 'Shoot', summon: 'Summon' }
+
 const topRegion = (idx) => regionOf(idx, 'top')
 const botRegion = (idx) => regionOf(idx, 'bot')
 const REGION_ABBR = {
-  surface: 'surface',
-  void: 'void',
-  underground: 'underground',
-  underwater: 'underwater',
+  surface: 'Surface',
+  void: 'Void',
+  underground: 'Underground',
+  underwater: 'Underwater',
 }
 
 // Position each intersection node on the grid line crossing it marks.
@@ -219,12 +276,26 @@ function nodeStyle(idx) {
 </script>
 
 <template>
-  <div class="board" :class="{ dragging: ui.dragging }">
+  <div class="board" :class="{ dragging: ui.dragging, 'aura-armed': auraInPlay }">
     <!-- Sized by the height it is given, not by its own width: the grid
          and the aura overlay share one 5x4 stage that shrinks to fit. -->
     <div class="board-stage">
       <div class="board-grid">
-        <div v-for="n in GRID_SIZE" :key="n" class="cell">
+        <div
+          v-for="n in GRID_SIZE"
+          :key="n"
+          class="cell"
+          :class="[
+            squareCue(n - 1) && `cue-${squareCue(n - 1)}`,
+            {
+              reach: auraReach.includes(n - 1),
+              void: !siteCard(n - 1),
+            },
+          ]"
+        >
+          <span v-if="CUE_WORD[squareCue(n - 1)]" class="cue-tag" aria-hidden="true">
+            {{ CUE_WORD[squareCue(n - 1)] }}
+          </span>
           <!-- Not a drop zone: a square had three stacked targets -- the site
                slot over the whole cell, plus surface and below -- and the site
                slot earned none of them. moveCard routes a site card into the
@@ -277,6 +348,22 @@ function nodeStyle(idx) {
               @focus="ui.hoverCard = siteCard(n - 1).id"
               @blur="ui.hoverCard = null"
             />
+            <!-- The square's frame: a thin line for whose site it is (solid for
+                 yours, dashed for the opponent's), gold when it is selected and
+                 red dashed when an armed attack/strike can hit it. Drawn over
+                 the art, under the cards, never taking the pointer. -->
+            <span
+              v-if="siteCard(n - 1)"
+              class="site-frame"
+              :class="{
+                opp: siteCard(n - 1).enemy,
+                selected: ui.selected === siteCard(n - 1).id,
+                targetable:
+                  armedAttackLegal(siteCard(n - 1).id) ||
+                  (ui.striker && ui.striker !== siteCard(n - 1).id),
+              }"
+              aria-hidden="true"
+            />
             <span
               v-if="siteCard(n - 1) && carriedBy(siteCard(n - 1).id).length"
               class="site-badge carry-badge"
@@ -293,7 +380,11 @@ function nodeStyle(idx) {
           <DropZone
             :zone="`cell:${n - 1}:top`"
             class="cell-half top"
-            :class="[`region-${topRegion(n - 1)}`, { split: belowCount(n - 1), crowded: surfaceCount(n - 1) > 1 }]"
+            :class="[
+              `region-${topRegion(n - 1)}`,
+              { split: belowCount(n - 1), crowded: surfaceCount(n - 1) > 1 },
+              ...cornerPads(n - 1, 'top'),
+            ]"
             :style="{ '--n': surfaceCount(n - 1) || 1 }"
           >
             <CardToken
@@ -302,8 +393,8 @@ function nodeStyle(idx) {
               :card-id="id"
               :from="`cell:${n - 1}:top`"
             />
-            <span v-if="topRegion(n - 1) === 'void'" class="region-tag" aria-hidden="true">
-              void
+            <span v-if="topRegion(n - 1) === 'void'" class="void-tag" aria-hidden="true">
+              Void
             </span>
           </DropZone>
           <!-- The lower half: cards below the surface, laid out like the surface. -->
@@ -313,6 +404,7 @@ function nodeStyle(idx) {
             :class="[
               botRegion(n - 1) ? `region-${botRegion(n - 1)}` : 'region-none',
               { split: surfaceCount(n - 1), crowded: belowCount(n - 1) > 1 },
+              ...cornerPads(n - 1, 'bot'),
             ]"
             :style="{ '--n': belowCount(n - 1) || 1 }"
             :keyboard="false"
@@ -335,7 +427,10 @@ function nodeStyle(idx) {
           :key="n"
           :zone="`aura:${n - 1}`"
           class="aura-node"
-          :class="{ occupied: auraCards(n - 1).length }"
+          :class="{
+            occupied: auraCards(n - 1).length,
+            sealed: auraCards(n - 1).length && sealed(n - 1),
+          }"
           :style="nodeStyle(n - 1)"
           :keyboard="auraSelected"
         >
@@ -345,6 +440,7 @@ function nodeStyle(idx) {
             class="aura-token"
             :class="{
               stacked: k > 0,
+              seal: sealed(n - 1),
               oversized: isOversized(card.id),
               tapped: isTapped(card.id),
               selected: ui.selected === card.id,
@@ -400,44 +496,184 @@ function nodeStyle(idx) {
 </template>
 
 <style scoped>
-/* Region tints, derived from the site on each square. Subtle insets so they
-   read as terrain without fighting the card art on top. Surface is the default
-   and gets no tint; only the below bands and the open void are coloured. */
+/* ---------- the realm: felt squares on thin lines ---------- */
+
+/* The board is the table itself, not a panel on it: no card behind the grid. */
+.board {
+  background: transparent;
+  border-color: transparent;
+}
+.board-grid {
+  background: var(--c-square);
+  border: 1px solid var(--c-square-line);
+  border-radius: 6px;
+}
+/* Each square is a size container so portrait site art can be measured against
+   the square it lies in (see .site-bg.portrait). */
+.cell {
+  container-type: size;
+  background: var(--c-square);
+  border: 0;
+  border-right: 1px solid color-mix(in srgb, var(--c-cream) 9%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--c-cream) 9%, transparent);
+  transition: opacity 160ms ease;
+}
+.cell:nth-child(5n) {
+  border-right: 0;
+}
+.cell:nth-last-child(-n + 5) {
+  border-bottom: 0;
+}
+
+/* The open void: no site, so no place to stand below. Dotted, darker felt and
+   a quiet word, rather than stripes. */
+.cell.void {
+  background-color: var(--c-felt-deep);
+  background-image: radial-gradient(
+    color-mix(in srgb, var(--c-cream) 10%, transparent) 1px,
+    transparent 1.5px
+  );
+  background-size: 12px 12px;
+}
+.cell.void .cell-half.bot {
+  background: none;
+}
+.void-tag {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  transform: translateY(50%);
+  text-align: center;
+  font-size: var(--fs-xs);
+  font-style: italic;
+  color: var(--c-muted-lo);
+  opacity: 0.7;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* ---------- site art: fills its square, cropped by the frame ---------- */
+
+/* The art lies landscape across the whole square, cover-cropped, and is dimmed
+   so the units standing on it stay legible. It brightens when hovered or
+   selected so you can still see what you picked. */
+.site-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  object-fit: cover;
+  border-radius: 0;
+  transform: none;
+  opacity: 1;
+  filter: brightness(0.55) saturate(0.8);
+  transition: filter 160ms ease;
+}
+.site-bg:hover,
+.site-bg.selected {
+  filter: brightness(0.85) saturate(0.95);
+}
+.site-bg.flipped {
+  top: 0;
+  bottom: 0;
+  transform: rotate(180deg);
+}
+/* Portrait scans are turned a quarter: the box is the square's size swapped
+   (height x width), centred, then rotated so it covers the square exactly. */
+.site-bg.portrait {
+  inset: auto;
+  left: 50%;
+  top: 50%;
+  width: 100cqh;
+  height: 100cqw;
+  transform: translate(-50%, -50%) rotate(90deg);
+}
+.site-bg.portrait.flipped {
+  transform: translate(-50%, -50%) rotate(270deg);
+}
+/* Selection and targeting are drawn by the square's frame (.site-frame);
+   the square clips, so the art's own outline would only be half visible. */
+.site-bg.selected,
+.site-bg.targetable {
+  outline: none;
+}
+.site-bg:focus-visible {
+  outline: 3px solid var(--c-focus);
+  outline-offset: -3px;
+}
+
+.site-strip > .site-frame {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c-cream) 22%, transparent);
+}
+.site-strip > .site-frame.opp {
+  box-shadow: none;
+  border: 1px dashed color-mix(in srgb, var(--c-opp) 55%, transparent);
+}
+.site-strip > .site-frame.targetable {
+  box-shadow: none;
+  border: 2px dashed var(--c-danger);
+}
+.site-strip > .site-frame.selected {
+  box-shadow: inset 0 0 0 2px var(--c-gold);
+  border: 0;
+}
+
+/* The below band's region word (Underground / Underwater) only shows on the
+   band you are about to pick -- hovered while a card is armed, or under a drag
+   -- so it never sits over the art otherwise. The void has none: there is no
+   below there. */
+.region-tag {
+  position: absolute;
+  right: 4px;
+  bottom: 3px;
+  z-index: 3;
+  padding: 0 5px;
+  border-radius: var(--r-pill);
+  background: color-mix(in srgb, var(--c-felt-deep) 80%, transparent);
+  font-size: 11px;
+  font-style: italic;
+  color: var(--c-muted-hi);
+  pointer-events: none;
+  user-select: none;
+  display: none;
+}
+.cell-half.over .region-tag,
+.cell-half.armed:hover .region-tag {
+  display: block;
+}
+
+/* Region tints under the art (seen only where the art does not reach). */
 .cell-half.region-underground {
   box-shadow: inset 0 0 0 100px rgba(122, 84, 45, 0.22);
 }
 .cell-half.region-underwater {
   box-shadow: inset 0 0 0 100px rgba(44, 96, 160, 0.24);
 }
-.cell-half.region-void {
-  box-shadow: inset 0 0 0 100px rgba(90, 70, 150, 0.16);
-}
-/* A below band with no site above it is not a place at all -- you cannot go
-   below the open void -- so it is dimmed and hatched to read as unavailable. */
-.cell-half.region-none {
-  background-image: repeating-linear-gradient(
-    45deg,
-    rgba(255, 255, 255, 0.04) 0,
-    rgba(255, 255, 255, 0.04) 4px,
-    transparent 4px,
-    transparent 9px
-  );
-}
-/* Animated water treatment under a water/flooded site. Confined to the lower
+
+/* Animated water treatment over a water/flooded site. Confined to the lower
    band (matching `.cell-half.bot`'s 50%) so it marks the underwater region
-   rather than washing over the whole square. Sits under the site art, and never
-   takes the pointer (the global `.site-strip > *` rule would otherwise make it
-   swallow clicks, so it is overridden back here). */
+   rather than washing over the whole square. It lies over the art (the art now
+   fills the square) but never takes the pointer (the global `.site-strip > *`
+   rule would otherwise make it swallow clicks, so it is overridden back here). */
 .water-overlay {
   position: absolute;
   left: 0;
   right: 0;
   bottom: 0;
   height: 50%;
-  z-index: 0;
+  z-index: 1;
   pointer-events: none;
-  border-radius: 0 0 6px 6px;
   overflow: hidden;
+  opacity: 0.85;
   background:
     linear-gradient(0deg, rgba(28, 74, 128, 0.34), rgba(44, 110, 176, 0.22)),
     repeating-linear-gradient(
@@ -479,16 +715,175 @@ function nodeStyle(idx) {
     background-position: 0 0, 56px 28px;
   }
 }
-.region-tag {
+
+/* ---------- square cues ---------- */
+
+/* The frame is drawn over the art and the cards (it is only an edge, and never
+   takes the pointer); the word sits in the top-right corner, clear of surface
+   cards, which pack from the left. Solid gold = go, solid red = a fight, dashed
+   gold inset = somewhere a card from hand can land. Colours come from the root
+   tokens (--cue-go / --cue-fight). */
+.cell[class*='cue-']::after {
+  content: '';
   position: absolute;
-  right: 3px;
-  bottom: 2px;
-  z-index: 1;
-  font-size: 9px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.55);
+  inset: 0;
+  z-index: 5;
+  box-shadow: inset 0 0 0 3px var(--cue-color);
+  pointer-events: none;
+}
+.cell.cue-move,
+.cell.cue-summon {
+  --cue-color: var(--cue-go);
+}
+.cell.cue-attack,
+.cell.cue-shoot {
+  --cue-color: var(--cue-fight);
+}
+.cell.cue-summon::after {
+  inset: 6px;
+  box-shadow: none;
+  border: 2px dashed var(--cue-color);
+  border-radius: var(--r-sm);
+}
+.cell.cue-out::after {
+  content: none;
+}
+/* Out of reach of an armed Move: dimmed, not labelled. */
+.cell.cue-out {
+  opacity: 0.42;
+}
+.cue-tag {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  z-index: 6;
+  padding: 1px 7px;
+  border-radius: var(--r-pill);
+  background: var(--cue-color);
+  color: var(--c-ink);
+  font-family: var(--font-ui);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  line-height: 1.35;
   pointer-events: none;
   user-select: none;
+}
+
+/* Keep a corner clear under a piece on the crossing (see cornerPads). Half the
+   seal's width (.aura-node.sealed: max(28px, 7% of the stage) = 35cqw of a
+   square) plus its ring; an animated aura is card-sized (clamp(9%, 36px, 12%)
+   of the stage). cq units resolve against the square (.cell is the container). */
+.cell-half.pad-l-seal {
+  padding-left: calc(max(14px, 17.5cqw) + 4px);
+}
+.cell-half.pad-r-seal {
+  padding-right: calc(max(14px, 17.5cqw) + 4px);
+}
+.cell-half.pad-l-big {
+  padding-left: calc(clamp(22.5cqw, 18px, 30cqw) + 4px);
+}
+.cell-half.pad-r-big {
+  padding-right: calc(clamp(22.5cqw, 18px, 30cqw) + 4px);
+}
+
+/* A tapped card turns only its art (CardToken), so its layout box stays
+   portrait while the picture lies landscape, 88/63 = 1.4 times as wide -- and
+   the square clipped the overhang. The tapped token keeps exactly its slot
+   instead: 0.72 of the width plus 0.14 margin each side, so the turned art is
+   one slot wide (0.72 x 1.4 = 1) and a shared square never wraps. --card-w is
+   a percentage of the band, as are margins, so the sum is exact. */
+.cell-half :deep(.card-token.is-tapped) {
+  width: calc(var(--card-w) * 0.72);
+  margin-inline: calc(var(--card-w) * 0.14);
+}
+
+/* ---------- auras ---------- */
+
+/* A selected aura's reach: the four squares around its crossing, a teal wash
+   and a double line, so it reads apart from the solid and dashed cues. It sits
+   just inside any cue frame, so both show when a cue is armed as well. Level
+   with the card tokens and the aura overlay, and before both in the document,
+   so it runs under the seal rather than across it. */
+.cell.reach::before {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  z-index: 4;
+  border: 3px double var(--c-aura);
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--c-aura) 12%, transparent);
+  pointer-events: none;
+}
+
+/* Empty crossings are drop spots only for an aura: hidden on the table, they
+   appear (dashed teal) while an aura is selected or in flight, or when the
+   crossing itself is hovered by a drag or focused. */
+.aura-node:not(.occupied) {
+  opacity: 0;
+  border: 1px dashed var(--c-aura);
+  background: var(--c-felt-deep);
+  transition: opacity 160ms ease;
+}
+.board.aura-armed .aura-node:not(.occupied),
+.aura-node.over:not(.occupied),
+.aura-node:not(.occupied):focus-visible {
+  opacity: 1;
+}
+.aura-node.over:not(.occupied) {
+  border-style: solid;
+  background: color-mix(in srgb, var(--c-aura) 30%, var(--c-felt-deep));
+}
+
+/* A plain aura is a round seal on the point where four squares meet: its art
+   cropped to a coin in a teal ring. Smaller than a site so the squares it
+   touches stay readable; the full card is still an Alt-hover away. */
+.aura-node.sealed {
+  width: clamp(28px, 7%, 9%);
+}
+.aura-node .aura-token.seal {
+  height: auto;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--c-aura) 22%, var(--c-felt-deep));
+  box-shadow: 0 0 0 2px var(--c-aura), var(--shadow-card);
+}
+.aura-node .aura-token.seal img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  /* The art box sits in the upper half of a card; the rules text below it is
+     already on the card, so the coin shows the picture. */
+  object-position: 50% 28%;
+  border-radius: 50%;
+}
+.aura-node .aura-token.seal .aura-name {
+  padding: 2px;
+  line-height: 1.1;
+  color: var(--c-cream-hi);
+}
+/* Selected: a gold ring outside the teal one. */
+.aura-node .aura-token.seal.selected {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--c-aura), 0 0 0 5px var(--c-gold), var(--shadow-card);
+}
+.aura-node .aura-token.seal:focus-visible {
+  outline: 3px solid var(--c-focus);
+  outline-offset: 3px;
+  border-radius: 50%;
+}
+.aura-node .aura-token.seal.targetable:hover {
+  border-radius: 50%;
+}
+.aura-node .aura-token.seal .carry-badge {
+  bottom: -6px;
+  right: -6px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cell,
+  .site-bg,
+  .aura-node:not(.occupied) {
+    transition: none;
+  }
 }
 </style>

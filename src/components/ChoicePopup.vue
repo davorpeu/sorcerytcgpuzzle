@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { state, pendingModeChoice, chooseModes, cancelModeChoice } from '../store.js'
 
 // "Choose one / choose two": a modal ability asks for its modes before any
@@ -8,13 +8,36 @@ import { state, pendingModeChoice, chooseModes, cancelModeChoice } from '../stor
 // click; multi-mode ones tick checkboxes and confirm.
 const choice = computed(() => pendingModeChoice())
 const picked = ref([])
+const firstMode = ref(null)
 watch(
   () => choice.value && `${choice.value.cardId}:${choice.value.ability.id}`,
-  () => (picked.value = [])
+  async (key) => {
+    picked.value = []
+    // Put the keyboard on the first mode so the choice can be made at once.
+    if (key) {
+      await nextTick()
+      firstMode.value?.focus()
+    }
+  }
 )
 
 const single = computed(() => choice.value?.count === 1)
 const ready = computed(() => picked.value.length === choice.value?.count)
+
+// The card is shown by its art; its name (printed on the card) is only for
+// screen readers.
+const card = computed(() => choice.value && state.cards[choice.value.cardId])
+const countWord = computed(() => {
+  const n = choice.value?.count
+  return ['', 'one', 'two', 'three', 'four'][n] || n
+})
+const label = computed(() => {
+  const c = choice.value
+  if (!c) return ''
+  const who = card.value?.name || 'This card'
+  const what = c.ability.name ? `, ${c.ability.name}` : ''
+  return `${who}${what}: choose ${countWord.value}`
+})
 
 function toggle(i) {
   if (single.value) {
@@ -25,90 +48,187 @@ function toggle(i) {
   if (at !== -1) picked.value.splice(at, 1)
   else if (picked.value.length < choice.value.count) picked.value.push(i)
 }
+
+function setFirst(i, el) {
+  if (i === 0) firstMode.value = el
+}
 </script>
 
 <template>
-  <div v-if="choice" class="event-modal" role="dialog" aria-modal="true" aria-label="Choose a mode">
-    <div class="event-dialog">
-      <div class="event-head">
-        {{ state.cards[choice.cardId]?.name }} — {{ choice.ability.name || 'Ability' }}:
-        choose {{ choice.count === 1 ? 'one' : choice.count }}
+  <div v-if="choice" class="choice-modal" role="dialog" aria-modal="true" :aria-label="label">
+    <div class="dlg">
+      <div class="dh">
+        <img
+          v-if="card?.img"
+          class="art"
+          :class="{ landscape: card.site }"
+          :src="card.img"
+          alt=""
+          draggable="false"
+        />
+        <span v-else class="art blank" aria-hidden="true"></span>
+        <h2>
+          Choose {{ countWord }}
+          <span v-if="!single" class="count">{{ picked.length }} of {{ choice.count }} picked</span>
+        </h2>
       </div>
-      <p v-if="choice.ability.text" class="event-text">{{ choice.ability.text }}</p>
-      <div class="mode-list">
-        <button
-          v-for="(m, i) in choice.ability.modes"
-          :key="i"
-          class="btn mode-btn"
-          :class="{ primary: picked.includes(i) }"
-          :aria-pressed="picked.includes(i)"
-          @click="toggle(i)"
-        >
-          {{ m.name || `Mode ${i + 1}` }}
+      <div class="db">
+        <div class="mode-list">
+          <button
+            v-for="(m, i) in choice.ability.modes"
+            :key="i"
+            :ref="(el) => setFirst(i, el)"
+            type="button"
+            class="btn mode-btn"
+            :class="{ picked: picked.includes(i) }"
+            :aria-pressed="single ? undefined : picked.includes(i)"
+            @click="toggle(i)"
+          >
+            <span v-if="!single" class="tick" aria-hidden="true">{{ picked.includes(i) ? '✓' : '' }}</span>
+            {{ m.name || `Mode ${i + 1}` }}
+          </button>
+        </div>
+      </div>
+      <div v-if="!single || !choice.story" class="df">
+        <span class="sp"></span>
+        <button v-if="!choice.story" type="button" class="btn ghost" @click="cancelModeChoice">
+          Cancel
         </button>
-      </div>
-      <div class="btn-row">
-        <button v-if="!single" class="btn primary" :disabled="!ready" @click="chooseModes(picked)">
+        <button
+          v-if="!single"
+          type="button"
+          class="btn primary"
+          :disabled="!ready"
+          @click="chooseModes(picked)"
+        >
           Confirm
         </button>
-        <button v-if="!choice.story" class="btn" @click="cancelModeChoice">Cancel</button>
       </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.event-modal {
+.choice-modal {
   position: fixed;
   inset: 0;
   z-index: 1100;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 1rem;
-  background: rgba(0, 0, 0, 0.5);
+  padding: var(--sp-4);
+  background: rgba(0, 0, 0, 0.55);
 }
-.event-dialog {
+.dlg {
   width: min(420px, 100%);
-  background: var(--panel, #1b1f2a);
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 10px;
-  padding: 1rem;
-  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.55);
-  animation: event-pop 0.16s ease-out;
+  max-height: calc(100vh - 32px);
+  display: flex;
+  flex-direction: column;
+  color: var(--c-text);
+  font-family: var(--font-ui);
+  background: var(--c-panel);
+  border: 1px solid var(--c-line-strong);
+  border-radius: 12px;
+  box-shadow: var(--shadow-pop);
 }
-@keyframes event-pop {
+@media (prefers-reduced-motion: no-preference) {
+  .dlg {
+    animation: choice-in 0.14s ease-out;
+  }
+}
+@keyframes choice-in {
   from {
-    transform: scale(0.94);
     opacity: 0;
-  }
-  to {
-    transform: scale(1);
-    opacity: 1;
+    transform: translateY(6px);
   }
 }
-.event-head {
-  font-weight: 600;
-  margin-bottom: 0.6rem;
-  letter-spacing: 0.02em;
+.dh {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-4) 18px;
+  border-bottom: 1px solid var(--c-line);
 }
-.event-text {
-  font-size: 0.9rem;
-  line-height: 1.35;
-  white-space: pre-wrap;
-  margin: 0 0 0.6rem;
+.dh h2 {
+  margin: 0;
+  flex-grow: 1;
+  display: flex;
+  flex-direction: column;
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: 24px;
+  line-height: 1.15;
+  color: var(--c-cream-hi);
+}
+.count {
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  color: var(--c-muted);
+}
+.art {
+  width: 40px;
+  height: 56px;
+  flex-shrink: 0;
+  object-fit: cover;
+  border-radius: var(--r-sm);
+  box-shadow: var(--shadow-card);
+}
+.art.landscape {
+  width: 56px;
+  height: 40px;
+}
+.art.blank {
+  border: 1.5px solid var(--c-line-strong);
+  box-shadow: none;
+}
+.db {
+  padding: var(--sp-4) 18px;
+  overflow-y: auto;
 }
 .mode-list {
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
-  margin-bottom: 0.8rem;
+  gap: var(--sp-2);
 }
 .mode-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 36px;
   text-align: left;
 }
-.btn-row {
+/* Picked shows a tick and a gold outline, not just a fill. */
+.mode-btn.picked {
+  border-color: var(--c-gold);
+  background: var(--c-gold-bg);
+  font-weight: 700;
+}
+.tick {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid var(--c-line-strong);
+  border-radius: var(--r-sm);
+  color: var(--c-gold);
+  font-size: 13px;
+}
+.mode-btn.picked .tick {
+  border-color: var(--c-gold);
+}
+.df {
   display: flex;
-  gap: 0.5rem;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3) 18px;
+  border-top: 1px solid var(--c-line);
+}
+.sp {
+  flex-grow: 1;
+}
+.btn.ghost {
+  background: transparent;
 }
 </style>

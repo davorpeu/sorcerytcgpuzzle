@@ -19,6 +19,9 @@ import {
 const props = defineProps({
   t: { type: Object, required: true },
   triggered: { type: Boolean, default: false },
+  // The lead word; hidden (kept for screen readers) where a step already shows it.
+  label: { type: String, default: 'Choose' },
+  hideLabel: { type: Boolean, default: false },
 })
 const emit = defineEmits(['pick'])
 
@@ -50,7 +53,7 @@ const choices = () => [
 <template>
   <div class="tgt">
     <label class="choose span2">
-      <span class="step-word">Choose</span>
+      <span class="step-word" :class="{ 'sr-only': hideLabel }">{{ label }}</span>
       <select :value="choice()" class="text-input" @change="setChoice($event.target.value)">
         <option v-for="[v, l] in choices()" :key="v" :value="v">{{ l }}</option>
       </select>
@@ -95,7 +98,7 @@ const choices = () => [
           <option value="enemy">the opponent's</option>
         </select>
       </div>
-      <p v-if="t.from === 'realm' && t.within === 'projectile'" class="hint span2">{{ PROJECTILE_HINT }}</p>
+      <p v-if="t.from === 'realm' && t.within === 'projectile'" class="help span2">{{ PROJECTILE_HINT }}</p>
       <label class="chk">
         <input v-model="t.optional" type="checkbox" />
         optional (&ldquo;you may&rdquo;)
@@ -105,7 +108,7 @@ const choices = () => [
         up to that many
       </label>
       <label class="field-label span2">
-        Prompt
+        <span>Prompt <span class="lo">— shown while the player picks</span></span>
         <input v-model="t.prompt" class="text-input" placeholder="e.g. Choose a minion" />
       </label>
     </template>
@@ -143,13 +146,13 @@ const choices = () => [
 
 <style scoped>
 .tgt {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.4rem;
-  margin: 0.3rem 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
 }
 .tgt .span2 {
-  grid-column: 1 / -1;
+  flex: 1 1 100%;
 }
 .row {
   display: flex;
@@ -175,18 +178,32 @@ const choices = () => [
 }
 .step-word {
   font-weight: 700;
-  font-size: 0.9rem;
+  font-size: var(--fs-md);
+  color: var(--c-cream-hi);
+}
+.help {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--c-muted);
+  line-height: 1.4;
+}
+.lo {
+  color: var(--c-muted-lo);
+}
+.field-label .text-input {
+  width: 100%;
 }
 .field-label {
   display: flex;
   flex-direction: column;
-  gap: 0.2rem;
-  font-size: 0.85rem;
+  gap: var(--sp-1);
+  font-size: var(--fs-sm);
+  color: var(--c-muted-hi);
 }
 .chk {
   display: inline-flex;
   align-items: center;
-  gap: 0.3rem;
-  font-size: 0.85rem;
+  gap: 6px;
+  font-size: 14px;
 }
 </style>

@@ -44,6 +44,8 @@ import {
   beginDrag,
   moveCard,
   zoneOf,
+  canCast,
+  castShortfall,
 } from '../store.js'
 
 const props = defineProps({
@@ -57,8 +59,31 @@ const isUnder = computed(() => props.from.endsWith(':bot'))
 const underWord = computed(() =>
   zoneRegion(props.from) === 'underwater' ? 'submerged' : 'buried'
 )
+// Buried or submerged, said in words on a strip across the foot of the card.
+// The name is left off: the art right above it already shows which card it is.
+const underText = computed(() => (underWord.value === 'submerged' ? 'Submerged' : 'Buried'))
 const onBoard = computed(() => /^cell:\d+:(top|bot)$/.test(props.from))
 const tapped = computed(() => isTapped(props.cardId))
+// A spell you may cast from outside your hand -- out of a swapped cemetery, or
+// from banishment by a cast permit -- glows so it isn't missed.
+const castableHere = computed(
+  () => !props.from.startsWith('hand:') && !onBoard.value && canCast(props.cardId)
+)
+// A spell in hand you could cast from there but can't yet: what is missing, in
+// words ("Needs 2 mana", "Needs water 1"). Printed cost and threshold stay on the
+// art; only the gap between them and what you have now is game state.
+const SHORT_WORD = { mana: 'mana', air: 'air', earth: 'earth', fire: 'fire', water: 'water' }
+const shortText = computed(() => {
+  if (!props.from.startsWith('hand:')) return ''
+  const parts = castShortfall(props.cardId).map((s) =>
+    s.kind === 'caster'
+      ? 'a caster'
+      : s.kind === 'mana'
+        ? `${s.short} mana`
+        : `${SHORT_WORD[s.kind]} ${s.short}`
+  )
+  return parts.length ? `Needs ${parts.join(', ')}` : ''
+})
 // Strike is unenforced (any on-board target); attack highlights only legal
 // targets when the puzzle enforces (armedAttackLegal falls back to true otherwise).
 const targetable = computed(() => {
@@ -86,10 +111,10 @@ const disabled = computed(() => isDisabled(props.cardId))
 // Passive restrictions, badged like silence: no attack / no move / untargetable.
 const restrictions = computed(() => {
   const out = []
-  if (cantAttack(props.cardId)) out.push({ tag: 'NA', title: "Can't attack" })
-  if (cantMove(props.cardId)) out.push({ tag: 'NM', title: "Can't move" })
-  if (cantDefend(props.cardId)) out.push({ tag: 'ND', title: "Can't move to defend" })
-  if (cantBeTargeted(props.cardId)) out.push({ tag: 'NT', title: "Can't be targeted by opponents" })
+  if (cantAttack(props.cardId)) out.push({ tag: 'No attack', title: "Can't attack" })
+  if (cantMove(props.cardId)) out.push({ tag: 'No move', title: "Can't move" })
+  if (cantDefend(props.cardId)) out.push({ tag: 'No defend', title: "Can't move to defend" })
+  if (cantBeTargeted(props.cardId)) out.push({ tag: 'Untargetable', title: "Can't be targeted by opponents" })
   return out
 })
 // Only gameplay changes are shown: a net strength modifier and any keywords
@@ -141,6 +166,7 @@ const label = computed(() => {
   if (c.aura) bits.push('aura')
   bits.push(c.enemy ? "opponent's" : 'yours')
   if (isUnder.value) bits.push(underWord.value)
+  if (shortText.value) bits.push(`can't cast yet: ${shortText.value.toLowerCase()}`)
   if (tapped.value) bits.push('tapped')
   if (disabled.value) bits.push('disabled')
   else if (silenced.value) bits.push('silenced')
@@ -242,6 +268,9 @@ function onClick() {
       'is-aura': card.aura,
       'is-unit': card.unit || isAnimated(cardId),
       'is-avatar': card.avatar,
+      'is-yours': !card.enemy,
+      'is-opp': card.enemy,
+      'no-art': !card.img,
       'is-tapped': tapped,
       'is-under': isUnder,
       attacker: ui.attacker === cardId,
@@ -250,6 +279,8 @@ function onClick() {
       selected: ui.selected === cardId,
       targetable: targetable || activatingTarget,
       'picked-target': isPickedTarget(cardId),
+      castable: castableHere,
+      'is-short': !!shortText,
 
       liftable,
       carrying: carried.length > 0,
@@ -276,18 +307,24 @@ function onClick() {
       v-if="card.img"
       :src="card.img"
       alt=""
+      class="face"
       :class="{ flipped: card.enemy }"
       draggable="false"
     />
-    <span v-else class="card-name" :class="{ flipped: card.enemy }">
+    <!-- No art: the name on a cream face is the only way to tell the card. -->
+    <span v-else class="card-name face" :class="{ flipped: card.enemy }">
       {{ card.name }}
     </span>
     <!-- Card type reads from the coloured ring around the art (see the type
          border rules in the stylesheet), not a text badge. -->
-    <span v-if="isUnder" class="site-badge under-badge">{{ underWord.toUpperCase() }}</span>
+    <span v-if="isUnder" class="under-strip" aria-hidden="true">{{ underText }}</span>
+    <!-- Can't be cast yet: the art greys out and this names the gap. -->
+    <span v-if="shortText" class="short-strip" aria-hidden="true">{{ shortText }}</span>
     <!-- Damage counters on the card, a small red pip so a wounded unit reads at
          a glance. The count is also in the token's aria-label above. -->
-    <span v-if="dmg" class="dmg-badge" aria-hidden="true">{{ dmg }}</span>
+    <span v-if="dmg" class="dmg-badge" :title="`${dmg} damage`" aria-hidden="true"
+      >{{ dmg }} dmg</span
+    >
     <!-- Silence / Disable from a passive aura. Both are gameplay states, so
          (unlike base keywords) they get a badge. -->
     <span
@@ -297,7 +334,7 @@ function onClick() {
       :title="disabled ? 'Disabled' : 'Silenced'"
       aria-hidden="true"
     >
-      {{ disabled ? 'DIS' : 'SIL' }}
+      {{ disabled ? 'Disabled' : 'Silenced' }}
     </span>
     <span
       v-else-if="restrictions.length"
@@ -305,7 +342,7 @@ function onClick() {
       :title="restrictions.map((r) => r.title).join(', ')"
       aria-hidden="true"
     >
-      {{ restrictions.map((r) => r.tag).join(' ') }}
+      {{ restrictions.map((r) => r.tag).join(' · ') }}
     </span>
     <!-- Gameplay strength change (base strength stays on the art). -->
     <span
@@ -375,6 +412,155 @@ function onClick() {
 </template>
 
 <style scoped>
+/* ---------- the token skin ----------
+   Art is the card. The token adds only game state: whose card it is (the
+   edge), what it is doing (rings, strips) and what changed in play (badges).
+   Scoped rules outrank the older .card-token rules in style.css. */
+.card-token {
+  /* Whose card: cream edge for yours, slate for the opponent's (whose cards
+     are also drawn upside down, so side is never colour alone). */
+  --edge: var(--c-cream-lo);
+  --edge-w: 2px;
+  font-family: var(--font-ui);
+  font-variant-numeric: lining-nums tabular-nums;
+}
+.card-token.is-opp {
+  --edge: var(--c-opp);
+}
+/* An avatar wears a heavier edge than a minion (replaces the old blue minion /
+   orange avatar rings). Sites stay parchment and auras teal. */
+.card-token.is-avatar {
+  --edge-w: 3px;
+}
+.card-token.is-site {
+  --edge: var(--c-cream-lo);
+}
+.card-token.is-aura {
+  --edge: var(--c-aura);
+}
+.card-token .face,
+.card-token.is-unit .face,
+.card-token.is-site .face,
+.card-token.is-aura .face,
+.card-token.is-avatar .face {
+  box-shadow: 0 0 0 var(--edge-w) var(--edge), var(--shadow-card);
+}
+
+/* No art: a cream face with the name, the only way to tell the card. */
+.card-token .card-name.face,
+.carry-chip-name {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 63 / 88;
+  padding: var(--sp-1) 3px;
+  border: 0;
+  border-radius: var(--r-md);
+  background: var(--c-cream);
+  color: var(--c-ink);
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.1;
+  text-align: center;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+/* Selected: a doubled gold ring on the face. Two lines are the non-colour
+   cue; drawn on the face it stays round the card when tapped. Squares clip
+   what is drawn outside a card, so only the outer line sits outside (as wide
+   as the normal edge); the dark gap is the border and the inner gold line is
+   the padding, both inside the card. */
+.card-token.selected {
+  outline: none;
+}
+.card-token.selected .face {
+  padding: 2px;
+  border: 2px solid var(--c-felt-deep);
+  background: var(--c-gold);
+  background-clip: padding-box;
+  box-shadow: 0 0 0 2px var(--c-gold), var(--shadow-card);
+}
+.card-token.selected .card-name.face {
+  background: var(--c-cream);
+  outline: 2px solid var(--c-gold);
+  outline-offset: -2px;
+}
+/* Selecting drops the outline above, so the keyboard ring comes back here. */
+.card-token:focus-visible {
+  outline: 3px solid var(--c-focus);
+  outline-offset: -3px;
+}
+
+/* Armed to fight: attacker solid red, striker dashed red (was orange). */
+.card-token.striker {
+  outline: 2px dashed var(--c-danger);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .card-token.attacker,
+  .card-token.striker {
+    animation: armed-fight 1.2s ease-in-out infinite;
+  }
+  .card-token.carrier {
+    animation: armed-go 1.2s ease-in-out infinite;
+  }
+}
+@keyframes armed-fight {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+  50% {
+    box-shadow: 0 0 10px 3px color-mix(in srgb, var(--c-danger) 70%, transparent);
+  }
+}
+@keyframes armed-go {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+  50% {
+    box-shadow: 0 0 10px 3px color-mix(in srgb, var(--c-gold) 70%, transparent);
+  }
+}
+
+/* Foot-of-card strips: a state said in a short sentence-case phrase. */
+.under-strip,
+.short-strip {
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  bottom: 3px;
+  z-index: 3;
+  padding: 1px var(--sp-1);
+  border-radius: var(--r-sm);
+  font-size: 0.66em;
+  font-weight: 700;
+  line-height: 1.35;
+  text-align: center;
+  color: var(--c-cream-hi);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.under-strip {
+  background: color-mix(in srgb, var(--c-felt-deep) 88%, transparent);
+  border: 1px solid var(--c-line-strong);
+}
+.short-strip {
+  background: var(--c-danger-deep);
+  white-space: normal;
+}
+.card-token.is-under .str-badge,
+.card-token.is-under .kw-tags {
+  bottom: 1.8em;
+}
+.card-token.is-short > .face {
+  filter: grayscale(0.85) brightness(0.62);
+}
 .ward-token-art {
   position: absolute;
   left: 2px;
@@ -382,71 +568,89 @@ function onClick() {
   z-index: 3;
   width: 34% !important;
   height: auto;
-  border-radius: 4px;
+  border-radius: var(--r-sm);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
   pointer-events: none;
+}
+
+/* Badges: sentence case, never colour alone (also in the aria-label). */
+.dmg-badge,
+.state-badge,
+.str-badge,
+.ctr-tag,
+.kw-tag {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+  white-space: nowrap;
 }
 .dmg-badge {
   position: absolute;
   top: 2px;
   right: 2px;
   z-index: 3;
-  min-width: 1.1em;
-  padding: 0 0.25em;
-  border-radius: 999px;
-  background: #c0392b;
-  color: #fff;
-  font-size: 0.72em;
+  padding: 0 0.35em;
+  border: 1px solid var(--c-danger);
+  border-radius: var(--r-pill);
+  background: var(--c-danger-deep);
+  color: var(--c-cream-hi);
+  font-size: 0.68em;
   font-weight: 700;
-  line-height: 1.5;
-  text-align: center;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
-  pointer-events: none;
+  line-height: 1.4;
 }
 .state-badge {
   position: absolute;
   top: 2px;
   left: 2px;
   z-index: 3;
-  padding: 0 0.25em;
-  border-radius: 3px;
+  max-width: calc(100% - 4px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 0 0.3em;
+  border-radius: var(--r-sm);
   font-size: 0.6em;
   font-weight: 700;
-  letter-spacing: 0.03em;
-  color: #fff;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
-  pointer-events: none;
+  line-height: 1.4;
+}
+.dmg-badge ~ .state-badge {
+  max-width: calc(100% - 3.2em);
 }
 .silenced-badge {
-  background: #7a5cc0;
+  background: var(--c-raised-2);
+  color: var(--c-cream-hi);
+  border: 1px dashed var(--c-muted);
 }
 .disabled-badge {
-  background: #555b66;
+  background: var(--c-raised);
+  color: var(--c-muted-hi);
+  border: 1px solid var(--c-line-strong);
 }
 .restrict-badge {
-  background: #a0522d;
+  background: var(--c-danger-deep);
+  color: var(--c-cream-hi);
+  border: 1px solid var(--c-danger);
 }
-
 .str-badge {
   position: absolute;
   bottom: 2px;
   left: 2px;
   z-index: 3;
   min-width: 1.1em;
-  padding: 0 0.25em;
-  border-radius: 3px;
-  font-size: 0.62em;
+  padding: 0 0.3em;
+  border-radius: var(--r-sm);
+  font-size: 0.64em;
   font-weight: 700;
-  color: #fff;
+  line-height: 1.4;
   text-align: center;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
-  pointer-events: none;
 }
 .str-badge.up {
-  background: #2e8b57;
+  background: var(--c-life);
+  color: var(--c-life-ink);
+  border: 1px solid var(--c-ok);
 }
 .str-badge.down {
-  background: #b5652b;
+  background: var(--c-danger-deep);
+  color: var(--c-cream-hi);
+  border: 1px solid var(--c-danger);
 }
 .kw-tags {
   position: absolute;
@@ -462,7 +666,7 @@ function onClick() {
 }
 .ctr-tags {
   position: absolute;
-  top: 1.4em;
+  top: 1.5em;
   left: 2px;
   z-index: 3;
   display: flex;
@@ -471,34 +675,28 @@ function onClick() {
   gap: 1px;
   pointer-events: none;
 }
+.kw-tag,
 .ctr-tag {
-  padding: 0 0.25em;
-  border-radius: 2px;
-  background: rgba(150, 110, 40, 0.92);
-  color: #fff;
-  font-size: 0.5em;
+  padding: 0 0.3em;
+  border: 1px solid var(--c-cream-lo);
+  border-radius: var(--r-sm);
+  background: var(--c-cream);
+  color: var(--c-ink);
+  font-size: 0.54em;
   font-weight: 700;
-  line-height: 1.5;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  line-height: 1.4;
+}
+/* Keyword names arrive lower case; say them in sentence case. */
+.kw-tag::first-letter,
+.ctr-tag::first-letter {
+  text-transform: uppercase;
 }
 .ctr-tag.shield {
-  background: rgba(70, 140, 170, 0.95);
-}
-.kw-tag {
-
-  padding: 0 0.2em;
-  border-radius: 2px;
-  background: rgba(60, 120, 200, 0.9);
-  color: #fff;
-  font-size: 0.5em;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  line-height: 1.5;
+  border-color: var(--c-gold);
+  background: var(--c-gold);
 }
 
-/* Transient event flashes. Each kind runs once when its ui.fx entry appears;
-   the entry self-expires, dropping the class. Suppressed for reduced motion.
-   (cast/death play in FxOverlay, since those cards move to the cemetery.) */
+/* Transient event flashes, once per ui.fx entry; off for reduced motion. */
 @media (prefers-reduced-motion: no-preference) {
   .card-token.fx-genesis {
     animation: fx-genesis 0.8s ease-out;
@@ -510,52 +708,48 @@ function onClick() {
     animation: fx-trigger 1.2s ease-out;
   }
 }
-/* Two soft violet pulses as one of the card's abilities triggers. */
 @keyframes fx-trigger {
   0%,
   50%,
   100% {
-    box-shadow: 0 0 0 0 rgba(200, 120, 255, 0);
+    box-shadow: 0 0 0 0 transparent;
   }
   20%,
   70% {
-    box-shadow: 0 0 14px 5px rgba(200, 120, 255, 0.85);
+    box-shadow: 0 0 14px 5px color-mix(in srgb, var(--c-gold) 85%, transparent);
   }
 }
-/* Bright flash-in as a card enters the realm. */
 @keyframes fx-genesis {
   0% {
     transform: scale(0.7);
-    box-shadow: 0 0 24px 10px rgba(120, 220, 150, 0.95);
+    box-shadow: 0 0 24px 10px color-mix(in srgb, var(--c-ok) 95%, transparent);
     filter: brightness(1.8);
   }
   60% {
     transform: scale(1.06);
-    box-shadow: 0 0 12px 4px rgba(120, 220, 150, 0.5);
+    box-shadow: 0 0 12px 4px color-mix(in srgb, var(--c-ok) 50%, transparent);
     filter: brightness(1.15);
   }
   100% {
     transform: scale(1);
-    box-shadow: 0 0 0 0 rgba(120, 220, 150, 0);
+    box-shadow: 0 0 0 0 transparent;
     filter: none;
   }
 }
-/* Quick jolt when a projectile lands. */
 @keyframes fx-impact {
   0% {
-    box-shadow: 0 0 0 0 rgba(255, 90, 60, 0);
+    box-shadow: 0 0 0 0 transparent;
   }
   25% {
-    box-shadow: 0 0 16px 6px rgba(255, 90, 60, 0.9);
+    box-shadow: 0 0 16px 6px color-mix(in srgb, var(--c-danger) 90%, transparent);
     transform: translateX(2px);
   }
   50% {
     transform: translateX(-2px);
   }
   100% {
-    box-shadow: 0 0 0 0 rgba(255, 90, 60, 0);
+    box-shadow: 0 0 0 0 transparent;
     transform: translateX(0);
   }
 }
 </style>
-

@@ -1,34 +1,187 @@
+/* ---------- fonts (bundled) ----------
+
+   Latin subsets only, extracted from the mockup's Google Fonts payload. They
+   are inlined into the IIFE as data: URLs (vite.config.js assetsInlineLimit),
+   so a host page still needs just the one <script> and no font request goes
+   out. Italic is not bundled: nothing in the design needs a true italic. */
+@font-face {
+  font-family: 'IM Fell English';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./fonts/im-fell-english-400-latin.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Alegreya Sans';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./fonts/alegreya-sans-400-latin.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Alegreya Sans';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('./fonts/alegreya-sans-500-latin.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Alegreya Sans';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('./fonts/alegreya-sans-700-latin.woff2') format('woff2');
+}
+
+/* ---------- design tokens ----------
+
+   Use these in every component (scoped styles included); don't hard-code
+   hexes. Source: .mockup/table.html.
+
+   Surfaces   --c-felt-deep  page behind the app      #141C18
+              --c-felt       table / app background   #1E2A24
+              --c-panel      panels, tray, strip      #18221D
+              --c-raised     buttons, inputs, chips   #223029
+              --c-raised-2   hover / card-back felt   #2B3A32
+              --c-square     board squares            #16201B
+   Lines      --c-line       panel borders            #2F3D35
+              --c-line-strong button/zone borders     #3F5046
+              --c-square-line board grid lines        #33423A
+   Text       --c-text       body text (cream)        #E8E1CF
+              --c-cream-hi   headings, emphasis       #F1EBDB
+              --c-cream-lo   card-face edge, parchment #B9AE92
+              --c-ink        text on cream / gold     #1E2A24
+              --c-muted-hi   secondary labels         #C9CFC4
+              --c-muted      secondary text           #AEB6A8
+              --c-muted-2    tertiary text            #8E978A
+              --c-muted-lo   placeholders, "Empty"    #7F887C
+   Meaning    --c-gold       yours / allowed / move / selected   #D2AE62
+              --c-gold-bg    gold wash (7%)
+              --c-danger     attack / blocked / refused          #F07A5C
+              --c-danger-deep power chip, blocked strip          #8A3A26
+              --c-danger-soft Death's Door text                  #F4927A
+              --c-danger-bg  red wash
+              --c-life       life chip                           #2F5A3E
+              --c-life-ink   text on life chip                   #EAF7EE
+              --c-ok         success text (derived from life)    #9CCBA8
+              --c-warn       warnings (gold, lighter)            #E2C47E
+              --c-opp        opponent (slate) text               #9FB4C7
+              --c-opp-hi     opponent emphasis                   #C9D6E2
+              --c-opp-deep   opponent surface                    #2E3947
+              --c-aura       aura (teal)                         #6FC2C4
+              --c-focus      keyboard focus ring                 #F1EBDB
+   Type       --font-display 'IM Fell English'  (titles, names, big numbers)
+              --font-ui      'Alegreya Sans'    (everything else)
+              --fs-xs 12  --fs-sm 13  --fs-md 15  --fs-lg 21  --fs-xl 27
+   Radii      --r-sm 4  --r-md 8  --r-lg 10  --r-pill 999
+   Spacing    --sp-1 4  --sp-2 8  --sp-3 12  --sp-4 16  --sp-5 20  --sp-6 24
+   Shadows    --shadow-card (a card on the felt), --shadow-pop (drawers,
+              popovers over the table)
+
+   Legacy names (--bg, --panel, --panel-2, --border, --text, --muted,
+   --accent, --aura, --ok, --bad, --cue-go, --cue-fight) are kept as aliases
+   of the tokens above so older rules keep working; prefer the --c-* names
+   in new code. --accent is now gold (it was the old purple). */
 :root {
-  --bg: #16181d;
-  --panel: #1f2229;
-  --panel-2: #262a33;
-  --border: #363b47;
-  --text: #e7e9ee;
-  --muted: #9aa1af;
-  --accent: #7c5cff;
-  --aura: #0ea5b7;
-  --ok: #22c55e;
-  --bad: #ef4444;
-  /* An open tray's panel is a fixed height rather than content-sized, so the
-     mat can reserve exactly the margin it needs and the grid never ends up
-     underneath one. Zones scroll inside it. */
+  --c-felt-deep: #141c18;
+  --c-felt: #1e2a24;
+  --c-panel: #18221d;
+  --c-raised: #223029;
+  --c-raised-2: #2b3a32;
+  --c-square: #16201b;
+  --c-line: #2f3d35;
+  --c-line-strong: #3f5046;
+  --c-square-line: #33423a;
+
+  --c-text: #e8e1cf;
+  --c-cream: #e8e1cf;
+  --c-cream-hi: #f1ebdb;
+  --c-cream-lo: #b9ae92;
+  --c-ink: #1e2a24;
+  --c-muted-hi: #c9cfc4;
+  --c-muted: #aeb6a8;
+  --c-muted-2: #8e978a;
+  --c-muted-lo: #7f887c;
+
+  --c-gold: #d2ae62;
+  --c-gold-bg: rgba(210, 174, 98, 0.07);
+  --c-danger: #f07a5c;
+  --c-danger-deep: #8a3a26;
+  --c-danger-soft: #f4927a;
+  --c-danger-bg: rgba(240, 122, 92, 0.1);
+  --c-life: #2f5a3e;
+  --c-life-ink: #eaf7ee;
+  --c-ok: #9ccba8;
+  --c-warn: #e2c47e;
+  --c-opp: #9fb4c7;
+  --c-opp-hi: #c9d6e2;
+  --c-opp-deep: #2e3947;
+  --c-aura: #6fc2c4;
+  --c-focus: #f1ebdb;
+
+  --font-display: 'IM Fell English', Georgia, serif;
+  --font-ui: 'Alegreya Sans', 'Gill Sans', 'Trebuchet MS', sans-serif;
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-md: 15px;
+  --fs-lg: 21px;
+  --fs-xl: 27px;
+
+  --r-sm: 4px;
+  --r-md: 8px;
+  --r-lg: 10px;
+  --r-pill: 999px;
+
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+
+  --shadow-card: 0 2px 6px rgba(0, 0, 0, 0.5);
+  --shadow-pop: 0 8px 34px rgba(0, 0, 0, 0.7);
+
+  /* Legacy aliases. */
+  --bg: var(--c-felt);
+  --panel: var(--c-panel);
+  --panel-2: var(--c-raised);
+  --border: var(--c-line-strong);
+  --text: var(--c-text);
+  --muted: var(--c-muted);
+  --accent: var(--c-gold);
+  --aura: var(--c-aura);
+  --ok: var(--c-ok);
+  --bad: var(--c-danger);
+  --cue-go: var(--c-gold);
+  --cue-fight: var(--c-danger);
+
+  /* The opponent drawer's height; zones scroll inside it. */
   --tray-body-h: 184px;
 
-  /* What each tray takes out of the mat: a folded tab, or a tab plus panel.
-     .mat-area raises these when a tray opens. */
-  --tray-top: 26px;
+  /* What the mat keeps free above and below the grid: breathing room at the
+     top, and at the bottom the strip the selected-card action bar floats in
+     (raised by the :has(.card-actions) rule below). */
+  --tray-top: 14px;
   --tray-bottom: 8px;
 
-  /* Everything above the mat that the window has to pay for: the app's own
-     top bar and page padding (69px) plus the mat border (2px). Embedded in a
-     page there is a site header above that too, so main.js raises this to the
-     measured offset -- otherwise a mat sized to the whole window runs off the
-     bottom of the screen. */
+  /* Embedded in a page there is a site header above the app, so main.js
+     fitHeight() raises this from its 71px baseline to 71px + the measured
+     offset. The layout only reads the *difference* from 71px (the host's
+     share) -- the app's own chrome is --layout-chrome-h below. */
   --app-chrome-h: 71px;
 
-  /* How tall the mat may be. What is left for the grid once the trays take
-     their margin is --stage-h, derived on .app. */
-  --board-max-h: max(220px, calc(100vh - var(--app-chrome-h)));
+  /* Everything in the play table that is not the board row: page padding
+     (2 x 20), header 52, opponent strip 64, hand tray 190 and the three
+     12px row gaps. The board row gets the rest of the window. */
+  --layout-chrome-h: 382px;
+
+  /* How tall the board row may be. What is left for the grid once the mat's
+     own margins are taken is --stage-h, derived on .app. */
+  --board-max-h: max(
+    260px,
+    calc(100vh - (var(--app-chrome-h) - 71px) - var(--layout-chrome-h))
+  );
   color-scheme: dark;
 }
 
@@ -38,110 +191,128 @@
 
 body {
   margin: 0;
-  background: var(--bg);
-  color: var(--text);
-  font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
-  font-size: 14px;
+  background: var(--c-felt-deep);
+  color: var(--c-text);
+  font-family: var(--font-ui);
+  font-size: var(--fs-md);
 }
 
-/* A custom property substitutes var() where it is declared, so --stage-h has
-   to live on the element the :has() rules below write --tray-top and
-   --tray-bottom to. Declared at :root it would freeze at the folded values. */
-.app {
-  --stage-h: max(220px, calc(var(--board-max-h) - var(--tray-top) - var(--tray-bottom)));
-
-  /* The same figure with both trays folded and no action bar. Everything that
-     sets a *width* measures from this rather than from --stage-h, because
-     --stage-h shrinks the moment a tray opens or a card is selected: the app
-     re-centred around a narrower box and the title, the sidebar and every
-     piece on the board slid ~50px sideways. Heights still follow --stage-h,
-     so the mat really does make room for a tray -- it just does it by giving
-     the grid back some felt instead of by moving the whole page. 34px is the
-     two folded tray tabs. */
-  --stage-h-max: max(220px, calc(var(--board-max-h) - 34px));
-
-  /* The board is height-bound: a 5:4 grid capped at --stage-h tall can never
-     be wider than --stage-h x 1.25, so past that the app has no use for the
-     window. Stretched across an ultrawide it just grows dead gaps around the
-     mat and strands the stats rail at the far edge, so hug what the layout can
-     actually fill and centre it. 566px is everything beside the grid: the
-     column (340), the rail (150), the mat's padding and border (30) and the
-     three gaps. */
-  max-width: min(1700px, calc(var(--stage-h-max) * 1.25 + 566px));
-  margin: 0 auto;
-  padding: 12px;
-}
-
-/* ---------- top bar ---------- */
-
-.topbar {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  flex-wrap: wrap;
-  padding: 8px 4px;
-}
-
-.topbar h1 {
-  font-size: 18px;
-  margin: 0;
-  font-family: Georgia, serif;
-  letter-spacing: 0.5px;
-}
-
-.mode-switch {
-  display: flex;
-  gap: 4px;
-}
-
-.topbar-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.tries,
-.mistakes {
-  color: var(--muted);
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-/* The mistake counter turns red once the day's cap is reached. */
-.mistakes.danger {
-  color: var(--bad);
-  font-weight: 600;
-}
-
-.puzzle-title {
-  font-weight: 600;
-}
-
-.puzzle-title .target {
-  color: var(--muted);
+/* Scoped to the app: embedded in WordPress a bare h1-h3 rule restyled the
+   theme's own post titles. */
+:where(.app, .narrow-shell) :is(h1, h2, h3) {
+  font-family: var(--font-display);
   font-weight: 400;
 }
 
-.notice {
-  color: var(--accent);
-  margin-left: auto;
+/* ---------- play layout (both modes) ----------
+
+   One grid, matching .mockup/table.html:
+
+     header header header        <TopBar class="area-header">
+     opp    opp    opp           <OpponentStrip class="area-opp">
+     left   board  right         <aside class="area-left">  CardInspector /
+                                                            EditorSidebar
+                                 <main class="area-board mat-area"> Board +
+                                                            CardActions
+                                 <aside class="area-right"> Storyline + You
+     tray   tray   tray          <HandTray class="area-tray">
+
+   The left and right columns are exactly the board row's height and scroll
+   inside, so nothing they hold can push the board or the hand off screen. */
+.app {
+  /* A custom property substitutes var() where it is declared, so --stage-h
+     has to live on the element the :has() rule below writes --tray-bottom
+     to. Declared at :root it would freeze at the default. */
+  --stage-h: max(220px, calc(var(--board-max-h) - var(--tray-top) - var(--tray-bottom) - 2px));
+
+  /* The same figure without the action bar. Everything that sets a *width*
+     measures from this rather than from --stage-h, because --stage-h shrinks
+     the moment a card is selected: measured from it, the whole table would
+     re-centre and every piece on the board slide sideways. */
+  --stage-h-max: max(220px, calc(var(--board-max-h) - var(--tray-top) - 10px));
+
+  --left-w: 380px;
+  --right-w: 300px;
+
+  display: grid;
+  grid-template-columns: minmax(260px, var(--left-w)) minmax(0, 1fr) minmax(240px, var(--right-w));
+  grid-template-rows: auto auto var(--board-max-h) 190px;
+  grid-template-areas:
+    'header header header'
+    'opp    opp    opp'
+    'left   board  right'
+    'tray   tray   tray';
+  gap: var(--sp-3) var(--sp-6);
+
+  /* The board is height-bound, so past a point extra width is dead felt:
+     hug what the layout can fill (board + both columns + gaps + padding). */
+  max-width: min(
+    1800px,
+    calc(var(--stage-h-max) * 1.25 + 30px + var(--left-w) + var(--right-w) + 2 * var(--sp-6) + 40px)
+  );
+  margin: 0 auto;
+  padding: var(--sp-5);
+  background: var(--c-felt);
+  color: var(--c-text);
+  font-family: var(--font-ui);
+  font-size: var(--fs-md);
+  /* Alegreya's default old-style figures make 0 read as a letter o ("o moves
+     made", "Mana o"); counts are the point of most numbers here. */
+  font-variant-numeric: lining-nums;
 }
 
-.result-banner {
-  padding: 10px 14px;
-  border-radius: 8px;
-  margin: 4px 0 10px;
-  font-weight: 600;
+.area-header {
+  grid-area: header;
+  min-width: 0;
 }
 
-.result-banner.ok {
-  background: rgba(34, 197, 94, 0.15);
-  border: 1px solid var(--ok);
+.area-opp {
+  grid-area: opp;
+  min-width: 0;
+  z-index: 25; /* its drawer opens over the board row */
 }
 
-.result-banner.bad {
-  background: rgba(239, 68, 68, 0.12);
-  border: 1px solid var(--bad);
+.area-left {
+  grid-area: left;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* The gutter is given back as negative margin, so the panels keep the
+     column's full width and only the scrollbar sits in the extra 6px. */
+  padding-right: 6px;
+  margin-right: -6px;
+}
+
+.area-board {
+  grid-area: board;
+  min-width: 0;
+  min-height: 0;
+}
+
+.area-right {
+  grid-area: right;
+  min-width: 0;
+}
+
+.area-tray {
+  grid-area: tray;
+  min-width: 0;
+}
+
+/* Once a limited player has solved or failed for the day, the play surface is
+   sealed: the verdict stays up in the header and the table no longer takes
+   input. The header (Reset, mode switch) stays live. */
+.app.locked > .area-opp,
+.app.locked > .area-left,
+.app.locked > .area-board,
+.app.locked > .area-right,
+.app.locked > .area-tray {
+  pointer-events: none;
+  opacity: 0.85;
 }
 
 /* Screen-reader-only label: the field's own placeholder is not a label, and
@@ -160,12 +331,12 @@ body {
 
 /* ---------- keyboard focus ---------- */
 
-/* The board already spends outlines on four other meanings -- selected,
-   targetable, armed to attack, armed to carry -- all of them in accent or red.
-   Focus is white and thicker so it reads as "you are here" against every one
-   of them, and against the artwork underneath. */
+/* The board already spends outlines on other meanings -- selected (gold),
+   targetable / attack (red), armed to carry. Focus is cream and thicker so it
+   reads as "you are here" against every one of them, and against the artwork
+   underneath. */
 :focus-visible {
-  outline: 3px solid #fff;
+  outline: 3px solid var(--c-focus);
   outline-offset: 2px;
 }
 
@@ -175,84 +346,19 @@ body {
 .site-bg:focus-visible,
 .aura-token:focus-visible,
 .dropzone:focus-visible {
-  outline: 3px solid #fff;
+  outline: 3px solid var(--c-focus);
   outline-offset: -3px;
 }
 
-/* ---------- layout ---------- */
-
-.layout {
-  display: grid;
-  grid-template-columns: 340px 1fr;
-  gap: 12px;
-  align-items: start;
-}
-
-/* Once a limited player has solved or failed for the day, the play surface is
-   sealed: the verdict banner stays up and the board no longer takes input. */
-.layout.locked {
-  pointer-events: none;
-  opacity: 0.85;
-}
-
-.sidebar {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-/* The editor's panels are taller than any window, and as ordinary flow they
-   pushed your hand and storyline ~450px below the fold -- with the mat pinned
-   at the top you could not see the board and your own cards at once, which is
-   the one pairing the app exists to support. So the column is the height of
-   the window, the panels scroll inside it, and your side stays on the floor of
-   the column next to the board. Only above the single-column breakpoint: below
-   it the sidebar is a header strip and there is nothing to pin. */
-@media (min-width: 1001px) {
-  .sidebar {
-    position: sticky;
-    top: 12px;
-    max-height: calc(100vh - var(--app-chrome-h) - 12px);
-    min-height: 0;
-  }
-
-  .sidebar-scroll {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    flex: 1 1 auto;
-    overflow-y: auto;
-    /* The gutter is given back as negative margin, so the panels keep the
-       column's full width and only the scrollbar sits in the extra 6px. */
-    padding-right: 6px;
-    margin-right: -6px;
-    /* Never squeezed to nothing: below this the panels stop being usable and
-       the scroll region may as well not be there. Given a roomier floor now
-       that the storyline no longer rides in your side of the column. */
-    min-height: 220px;
-  }
-
-  /* Your zones keep their natural height and the panels above absorb the
-     shrinking -- they are the ones with somewhere to put it. The cap is for
-     short windows, where your side scrolls internally rather than pushing the
-     panels off the top of the column. With only the hand left here (the
-     storyline moved to the rail), the cap can be lower so the scroll region
-     above gets more room. */
-  .your-side {
-    flex: 0 0 auto;
-    max-height: 45%;
-    min-height: 0;
-    overflow-y: auto;
-  }
-}
+/* ---------- panels ---------- */
 
 .panel,
 .card-pool,
 .move-log {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 10px;
+  background: var(--c-panel);
+  border: 1px solid var(--c-line);
+  border-radius: var(--r-lg);
+  padding: var(--sp-3);
 }
 
 /* A panel that folds. The summary carries the same weight as a .zone-title
@@ -263,10 +369,9 @@ body {
   gap: 6px;
   list-style: none;
   cursor: pointer;
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  color: var(--muted);
+  font-family: var(--font-display);
+  font-size: 17px;
+  color: var(--c-cream-hi);
 }
 
 .panel-summary::-webkit-details-marker {
@@ -291,11 +396,12 @@ details[open] > .panel-summary {
   color: var(--text);
 }
 
+/* Section titles: sentence case in the display face, never all-caps. */
 .zone-title {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  color: var(--muted);
+  font-family: var(--font-display);
+  font-size: 17px;
+  line-height: 1.2;
+  color: var(--c-cream-hi);
   margin-bottom: 6px;
 }
 
@@ -374,11 +480,13 @@ details[open] > .panel-summary {
 }
 
 .btn {
-  background: var(--panel-2);
-  border: 1px solid var(--border);
-  color: var(--text);
-  border-radius: 6px;
-  padding: 6px 10px;
+  background: var(--c-raised);
+  border: 1px solid var(--c-line-strong);
+  color: var(--c-text);
+  border-radius: var(--r-md);
+  padding: 6px 12px;
+  font-family: var(--font-ui);
+  font-size: var(--fs-md);
   cursor: pointer;
 }
 
@@ -393,65 +501,38 @@ details[open] > .panel-summary {
 
 .btn.active,
 .btn.primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
+  background: var(--c-gold);
+  border-color: var(--c-gold);
+  color: var(--c-ink);
+  font-weight: 700;
 }
 
 .btn.danger {
-  border-color: var(--bad);
-  color: #ffb4b4;
+  border-color: var(--c-danger);
+  border-style: dashed;
+  color: var(--c-danger-soft);
 }
 
 /* Still a small button, but 24px tall: the row buttons in the saved list and
    the pool header were 20px, under the WCAG 2.5.8 minimum. */
 .btn.small {
   padding: 4px 7px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   min-height: 24px;
 }
 
 .hint {
-  color: var(--muted);
-  font-size: 12px;
+  color: var(--c-muted);
+  font-size: var(--fs-sm);
   margin: 6px 2px;
-}
-
-/* ---------- puzzle brief (play mode) ---------- */
-
-.brief-title {
-  font-family: Georgia, serif;
-  font-size: 16px;
-  margin: 0 0 6px;
-}
-
-.brief-desc {
-  margin: 0 0 6px;
-  line-height: 1.45;
-  white-space: pre-wrap;
-}
-
-.brief-goal {
-  margin: 0;
-  color: var(--muted);
-  font-size: 12px;
 }
 
 /* ---------- table / board ---------- */
 
-.table {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: start;
-}
-
-/* The mat, plus the two trays that ride over it. It is exactly as tall as the
-   mat, so the trays can anchor to the mat's own top and bottom edges. */
+/* The mat, and the action bar that floats over its foot. It is exactly as
+   tall as the board row. */
 .mat-area {
   position: relative;
-  grid-column: 1;
-  grid-row: 1;
   min-width: 0;
 }
 
@@ -461,157 +542,19 @@ details[open] > .panel-summary {
 .mat-area > .board {
   margin-inline: auto;
   width: 100%;
+  height: 100%;
   max-width: calc(var(--stage-h-max) * 1.25 + 30px);
-  /* The felt runs the full height and the trays rest on its margins, so a
-     tray covers padding rather than playable squares. */
+  /* The action bar rests on the bottom margin, so it covers padding rather
+     than playable squares. */
   padding: var(--tray-top) 14px var(--tray-bottom);
-}
-
-.app:has(.opp-tray.open) {
-  --tray-top: calc(var(--tray-body-h) + 26px);
-}
-
-/* The action bar is the only thing left below the mat, and only while a card
-   is selected, so the bottom margin is nearly nothing the rest of the time. */
-.app:has(.card-actions) {
-  --tray-bottom: 66px;
-}
-
-/* ---------- zone trays (over the mat, not beside it) ---------- */
-
-/* Both sides float over the mat rather than reserving a row above and below
-   it. That is what buys the board the window height: reserved rows cost
-   ~380px of every viewport, a folded tray costs 26px of the mat edge. */
-.zone-tray {
-  position: absolute;
-  left: 0;
-  right: 0;
-  /* Same width and centring as the mat, so a tray reads as resting on the
-     table rather than overhanging it. */
-  max-width: calc(var(--stage-h-max) * 1.25 + 30px);
-  margin-inline: auto;
-  z-index: 20;
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  pointer-events: none;
-}
-
-/* The opponent hangs from the top edge and opens downward; your side sits on
-   the bottom edge and opens upward. Both put the tab above the body, so the
-   tab stays put and only the panel moves. */
-.opp-tray {
-  top: 0;
-}
-
-.zone-tray > * {
-  pointer-events: auto;
-}
-
-.tray-toggle {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  align-self: flex-start;
-  max-width: 100%;
-  background: var(--panel-2);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  color: var(--muted);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  padding: 4px 12px;
-  min-height: 24px;
-  cursor: pointer;
-}
-
-.tray-toggle:hover {
-  color: var(--text);
-  border-color: var(--accent);
-}
-
-/* Open, the tab merges into the panel below it. */
-.zone-tray.open .tray-toggle {
-  border-bottom: none;
-  border-radius: 8px 8px 0 0;
-}
-
-.tray-caret {
-  font-size: 12px;
-  line-height: 1;
-}
-
-/* Folded, the tab still says what is in the zones, so nothing is hidden
-   without a trace. */
-.tray-counts {
-  text-transform: none;
-  letter-spacing: 0;
-  font-size: 11px;
-  opacity: 0.75;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* Opaque, because it sits on top of the artwork: the zones have to read as a
-   panel over the table, not as clutter mixed into the board. */
-.tray-body {
-  display: flex;
-  flex-wrap: wrap;
   align-items: flex-start;
-  gap: 10px;
-  height: var(--tray-body-h);
-  overflow-y: auto;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 0 10px 10px 10px;
-  padding: 8px;
-  box-shadow: 0 8px 34px rgba(0, 0, 0, 0.85);
 }
 
-.storyline-block {
-  min-width: 0;
-}
-
-/* Your side of the table, stacked in the column. */
-.your-side {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-/* In a column the hand takes a whole row -- at three cards abreast it reads
-   as a hand -- and the two usually-empty zones share the row beneath it.
-   Left to wrap on their own the cemetery would sit beside the hand and cut
-   it to two cards. */
-.your-side .hand-block {
-  flex: 1 1 100%;
-}
-
-.your-side .grave-block {
-  flex: 1 1 calc(50% - 5px);
-  max-width: none;
-}
-
-/* Every pixel of chrome inside a tray is a pixel of grid, so the zones give
-   up padding rather than the cards giving up size: at these paddings a full
-   82px card row fits --tray-body-h exactly, with no inner scrollbar. */
-.tray-body .zone-block {
-  padding: 6px;
-}
-
-.tray-body .hand,
-.tray-body .grave,
-.tray-body .storyline {
-  padding: 6px;
-}
-
-/* In your tray the storyline sits beside the hand rather than above it; in
-   the opponent tray the row is the only child, so it just fills the width. */
-.tray-body > .hand-row {
-  flex: 2 1 360px;
-  min-width: 0;
+/* The action bar is the only thing below the grid, and only while a card is
+   selected, so the bottom margin is nearly nothing the rest of the time. */
+.app:has(.card-actions) {
+  /* The bar is a row of buttons plus a hint line, 81px + its 6px margin. */
+  --tray-bottom: 88px;
 }
 
 /* ---------- selected-card action bar ---------- */
@@ -692,8 +635,7 @@ details[open] > .panel-summary {
 
 /* 5x4 grid of actual squares. */
 .board {
-  background: var(--panel);
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   border-radius: 10px;
   padding: 14px;
   display: flex;
@@ -725,47 +667,21 @@ details[open] > .panel-summary {
 }
 
 .cell {
-  background: var(--panel-2);
-  border: 1px solid var(--border);
   position: relative;
   overflow: hidden;
   min-width: 0;
   min-height: 0;
 }
 
-/* max-width/max-height (rather than object-fit) keep the img box hugging the
-   image so the rounded corners clip the artwork, not empty letterbox space.
-   The image itself is the drag/click surface for moving the site. */
+/* The site art fills its square (sizing, flips and the portrait turn are in
+   Board.vue). The image itself is the drag/click surface for moving the site. */
 .site-bg {
-  position: absolute;
-  bottom: 3%;
-  left: 50%;
-  transform: translateX(-50%) rotate(0deg);
-  max-width: 82%;
-  max-height: 82%;
-  border-radius: 8px;
-  opacity: 0.9;
   cursor: grab;
   user-select: none;
 }
 
 .site-bg:active {
   cursor: grabbing;
-}
-
-.site-bg.flipped {
-  bottom: auto;
-  top: 3%;
-  transform: translateX(-50%) rotate(180deg);
-}
-
-/* Portrait site art (a scan of the upright card) is turned to lie landscape. */
-.site-bg.portrait {
-  transform: translateX(-50%) rotate(90deg);
-}
-
-.site-bg.portrait.flipped {
-  transform: translateX(-50%) rotate(270deg);
 }
 
 .cell-half {
@@ -811,8 +727,6 @@ details[open] > .panel-summary {
   right: 0;
   text-align: center;
   font-size: 8px;
-  letter-spacing: 1px;
-  text-transform: uppercase;
   color: var(--muted);
   opacity: 0.6;
   pointer-events: none;
@@ -912,8 +826,6 @@ details[open] > .panel-summary {
   height: 22px;
   transform: translate(-50%, -50%);
   border-radius: 50%;
-  border: 1px dashed var(--muted);
-  background: var(--bg);
   pointer-events: auto;
   /* Auras always paint above sites and any cards on them. */
   z-index: 4;
@@ -939,10 +851,6 @@ details[open] > .panel-summary {
   overflow: visible;
 }
 
-.aura-node.over {
-  border-style: solid;
-}
-
 .aura-node.occupied.over {
   outline: 2px solid var(--aura);
   outline-offset: 2px;
@@ -956,7 +864,7 @@ details[open] > .panel-summary {
   border-radius: 4px;
   font-size: 9px;
   font-weight: 700;
-  color: #fff;
+  color: var(--c-cream-hi);
   background: rgba(0, 0, 0, 0.7);
   pointer-events: none;
 }
@@ -971,8 +879,8 @@ details[open] > .panel-summary {
   font-size: 9px;
   font-weight: 700;
   text-align: center;
-  color: #fff;
-  background: #b3261e;
+  color: var(--c-cream-hi);
+  background: var(--c-danger-deep);
   pointer-events: none;
 }
 
@@ -1105,33 +1013,17 @@ details[open] > .panel-summary {
 
 /* ---------- stats rail (life, mana, thresholds) ---------- */
 
-/* A narrow column beside the board instead of a slab inside each hand row:
-   the opponent's numbers sit at the top of the table and yours at the
-   bottom, matching the end of the board each belongs to. It fills height the
-   board already occupies, so it costs no rows -- and it does not need to be
-   stuck to the viewport, because the capped board keeps it on screen. */
-.stat-rail {
-  grid-column: 2;
-  grid-row: 1;
-  align-self: stretch;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  gap: 10px;
-}
-
 .stat-card {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 8px;
+  background: var(--c-panel);
+  border: 1px solid var(--c-line);
+  border-radius: var(--r-lg);
+  padding: var(--sp-2);
 }
 
 .stat-side {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  color: var(--muted);
+  font-family: var(--font-display);
+  font-size: 17px;
+  color: var(--c-cream-hi);
   margin-bottom: 4px;
 }
 
@@ -1157,7 +1049,7 @@ details[open] > .panel-summary {
 
 .life-value {
   font-size: 17px;
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: lining-nums tabular-nums;
 }
 
 /* At 0 the count still reads as a count; the state it means is named on its
@@ -1170,16 +1062,6 @@ details[open] > .panel-summary {
   margin-right: 2px;
 }
 
-.door-note {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.3px;
-  text-transform: uppercase;
-  color: var(--bad);
-  text-align: center;
-  padding-bottom: 4px;
-}
-
 .mana-row .stat-value {
   font-size: 15px;
 }
@@ -1188,7 +1070,7 @@ details[open] > .panel-summary {
   min-width: 18px;
   text-align: center;
   font-weight: 600;
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: lining-nums tabular-nums;
 }
 
 /* 24px square is the smallest target WCAG 2.5.8 accepts, and these sit in
@@ -1235,28 +1117,13 @@ details[open] > .panel-summary {
 
 .storyline {
   min-height: 96px;
-  border: 1px dashed var(--border);
+  border: 1px dashed var(--c-line-strong);
   border-radius: 8px;
   padding: 6px;
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   align-items: flex-start;
-}
-
-/* The storyline lives in the rail between the two players' stat cards -- the
-   shared resolution space, sitting between the two sides. It takes the same
-   panel surface as a stat card and a width the space can actually use. */
-.stat-rail .storyline-block {
-  width: 220px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 8px;
-}
-
-.stat-rail .storyline-block .zone-title {
-  margin-bottom: 6px;
 }
 
 /* Trigger / defender prompts resolve in the storyline rather than under the
@@ -1272,14 +1139,12 @@ details[open] > .panel-summary {
   font-size: 0.85rem;
 }
 
-.defender-prompt {
-  border: 1px solid rgba(255, 200, 80, 0.5);
-  background: rgba(255, 200, 80, 0.12);
-}
-
+/* Both are waiting on you, so both wear the gold dashed "your move" edge
+   (mockup storyline entry); the words say which kind of wait it is. */
+.defender-prompt,
 .trigger-prompt {
-  border: 1px solid rgba(200, 120, 255, 0.55);
-  background: rgba(200, 120, 255, 0.14);
+  border: 1.5px dashed var(--c-gold);
+  background: var(--c-gold-bg);
 }
 
 /* ---------- carrying ---------- */
@@ -1318,7 +1183,7 @@ details[open] > .panel-summary {
   height: calc(100% + var(--carry-n, 0) * var(--carry-dy) + 2 * var(--carry-pad));
   border: 1px dashed var(--accent);
   border-radius: 11px;
-  background: rgba(124, 92, 255, 0.1);
+  background: var(--c-gold-bg);
 }
 
 /* --i is the card's place in the fan, written by the template. --lift keeps
@@ -1498,7 +1363,7 @@ details[open] > .panel-summary {
 }
 
 .card-token.striker {
-  outline: 2px solid #ea580c;
+  outline: 2px dashed var(--c-danger);
   outline-offset: 2px;
   border-radius: 8px;
 }
@@ -1507,11 +1372,6 @@ details[open] > .panel-summary {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
   border-radius: 8px;
-}
-
-.site-bg.selected {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
 }
 
 .aura-token.selected {
@@ -1526,6 +1386,14 @@ details[open] > .panel-summary {
   cursor: crosshair;
 }
 
+/* A spell castable from outside the hand (swapped cemetery, cast permit). */
+.card-token.castable {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 8px;
+  box-shadow: 0 0 10px var(--accent);
+}
+
 /* Already chosen by a multi-target pick still in progress. */
 .card-token.picked-target {
   outline: 2px solid var(--bad);
@@ -1538,11 +1406,6 @@ details[open] > .panel-summary {
   outline: 2px dashed var(--bad);
   outline-offset: 2px;
   border-radius: 8px;
-}
-
-.site-bg.targetable {
-  outline: 1px dashed var(--bad);
-  outline-offset: -1px;
 }
 
 /* Draw the eye to legal targets and to the card that's armed to act. Pure CSS,
@@ -1563,19 +1426,19 @@ details[open] > .panel-summary {
 @keyframes fx-target-pulse {
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+    box-shadow: 0 0 0 0 rgba(240, 122, 92, 0);
   }
   50% {
-    box-shadow: 0 0 10px 3px rgba(239, 68, 68, 0.75);
+    box-shadow: 0 0 10px 3px rgba(240, 122, 92, 0.75);
   }
 }
 @keyframes fx-armed-pulse {
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgba(234, 88, 12, 0);
+    box-shadow: 0 0 0 0 transparent;
   }
   50% {
-    box-shadow: 0 0 10px 3px rgba(234, 88, 12, 0.7);
+    box-shadow: 0 0 10px 3px color-mix(in srgb, var(--c-danger) 70%, transparent);
   }
 }
 
@@ -1632,8 +1495,8 @@ details[open] > .panel-summary {
   bottom: 3px;
   left: 50%;
   transform: translateX(-50%);
-  background: var(--accent);
-  color: #fff;
+  background: var(--c-gold);
+  color: var(--c-ink);
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.5px;
@@ -1643,71 +1506,36 @@ details[open] > .panel-summary {
   white-space: nowrap;
 }
 
-.under-badge {
-  background: #44403c;
-  bottom: auto;
-  top: 3px;
-  left: 3px;
-  transform: none;
-  /* SUBMERGED is long for a fanned-out card; clip rather than spill. */
-  max-width: calc(100% - 6px);
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* Card type reads from a coloured ring around the art rather than a text
-   badge: minion blue, avatar orange, site accent (violet), aura teal. The
-   ring is a box-shadow so it hugs the rounded corners without changing the
-   card's size, and it keeps the drop shadow that sits under every card.
-   Avatar is also a minion, so its orange ring comes last to win. */
-.card-token.is-unit img {
-  box-shadow: 0 0 0 2px #2563eb, 0 2px 6px rgba(0, 0, 0, 0.5);
-}
-.card-token.is-site img {
-  box-shadow: 0 0 0 2px var(--accent), 0 2px 6px rgba(0, 0, 0, 0.5);
-}
-.card-token.is-aura img {
-  box-shadow: 0 0 0 2px var(--aura), 0 2px 6px rgba(0, 0, 0, 0.5);
-}
-.card-token.is-avatar img {
-  box-shadow: 0 0 0 2px #f59e0b, 0 2px 6px rgba(0, 0, 0, 0.5);
-}
-
-/* Text-only cards (no art) carry the same colour on their border. */
-.card-token.is-unit .card-name {
-  border: 2px solid #2563eb;
-}
-.card-token.is-site .card-name {
-  border: 2px solid var(--accent);
-}
-.card-token.is-aura .card-name {
-  border: 2px solid var(--aura);
-}
-.card-token.is-avatar .card-name {
-  border: 2px solid #f59e0b;
-}
+/* Card type/side rings live in CardToken.vue (scoped skin): cream edge = yours,
+   slate = opponent, heavier edge = avatar, parchment = site, teal = aura. */
 
 .legend-badge.under {
-  background: #44403c;
+  background: var(--c-raised-2);
+  color: var(--c-text);
 }
 
 /* Type key: a small square with the same coloured border the card art wears,
-   so the legend matches the ring on the board. Site uses the base accent. */
+   so the legend matches the ring on the board. Site uses parchment. */
 .legend-swatch {
   display: inline-block;
   width: 16px;
   height: 16px;
-  border: 2px solid var(--accent);
+  border: 2px solid var(--c-cream-lo);
   border-radius: 4px;
   flex-shrink: 0;
 }
 
 .legend-swatch.unit {
-  border-color: #2563eb;
+  border-color: var(--c-cream);
+}
+
+.legend-swatch.opp {
+  border-color: var(--c-opp);
 }
 
 .legend-swatch.avatar {
-  border-color: #f59e0b;
+  border-color: var(--c-cream);
+  border-width: 3px;
 }
 
 .legend-swatch.aura {
@@ -1812,7 +1640,7 @@ details[open] > .panel-summary {
   top: 5px;
   right: 5px;
   background: var(--accent);
-  color: #fff;
+  color: var(--c-ink);
   font-size: 9px;
   line-height: 1;
   padding: 2px 4px;
@@ -1820,7 +1648,7 @@ details[open] > .panel-summary {
 }
 
 .hint.error {
-  color: #f87171;
+  color: var(--c-danger);
 }
 
 /* ---------- legend ---------- */
@@ -1858,10 +1686,9 @@ details[open] > .panel-summary {
 
 .legend-badge {
   background: var(--accent);
-  color: #fff;
-  font-size: 10px;
+  color: var(--c-ink);
+  font-size: 11px;
   font-weight: 700;
-  letter-spacing: 1px;
   padding: 2px 5px;
   border-radius: 3px;
   flex-shrink: 0;
@@ -1944,9 +1771,7 @@ details[open] > .panel-summary {
   border: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--muted);
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+  font-size: 11px;
 }
 
 .move-log ol {
@@ -1966,8 +1791,8 @@ details[open] > .panel-summary {
 }
 
 .move-log li.bad {
-  background: rgba(239, 68, 68, 0.15);
-  color: #ffb4b4;
+  background: var(--c-danger-bg);
+  color: var(--c-danger-soft);
 }
 
 .move-log li.after {
@@ -1977,7 +1802,7 @@ details[open] > .panel-summary {
 /* A hint that is a warning rather than an aside: the editor needs to notice
    that a puzzle nobody can solve is about to be saved. */
 .hint.warn {
-  color: #fbbf24;
+  color: var(--c-warn);
 }
 
 /* Which recorded line the log is showing. */
@@ -2007,103 +1832,91 @@ details[open] > .panel-summary {
   }
 }
 
-/* ---------- responsive ---------- */
+/* ---------- responsive ----------
 
-/* Tablet landscape: keep the two-column layout but give the board the room. */
-@media (max-width: 1200px) {
-  .layout {
-    grid-template-columns: 300px 1fr;
+   Interim fallbacks only; the phone layout (.mockup/phone.html) is Phase 2. */
+
+/* Narrower desktops: the side columns give up width before the board does. */
+@media (max-width: 1280px) {
+  .app {
+    --left-w: 300px;
+    --right-w: 260px;
   }
 }
 
-/* Tablet portrait and below: one column, with the sidebar's panels flowing
-   side by side so it stays a header rather than a long scroll before the
-   board. */
+/* Editor, 1024-1280: the left column folds to EditorSidebar's tab rail
+   (`is-rail`, same query in its matchMedia) and the open tab slides a drawer
+   over the board. The column must not clip that drawer, and has to sit above
+   the board and the recording frame. */
+@media (min-width: 1024px) and (max-width: 1280px) {
+  /* --left-w stays: the .app max-width sum still counts it, so the width the
+     rail frees goes to the board row and the opponent strip, not to felt. */
+  .app.mode-editor {
+    grid-template-columns: 56px minmax(0, 1fr) minmax(240px, var(--right-w));
+  }
+
+  .mode-editor .area-left {
+    position: relative;
+    z-index: 30;
+    overflow: visible;
+    padding-right: 0;
+    margin-right: 0;
+  }
+}
+
+/* Tablet portrait and below: one column, ordered like the table -- what the
+   puzzle asks, the opponent, the board, the storyline and your numbers, your
+   hand, then the reference panels.
+
+   The chrome figure is what sits above and below the board on a portrait
+   tablet (header ~116, opponent ~123, one-row storyline + You ~60, tray 160,
+   gaps and padding), so the hand is on screen with the board at 768x1024.
+   Set on :root, where --board-max-h is computed from it. */
 @media (max-width: 1000px) {
+  :root {
+    --layout-chrome-h: 540px;
+  }
+
   .app {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto var(--board-max-h) auto auto auto;
+    grid-template-areas:
+      'header'
+      'opp'
+      'board'
+      'right'
+      'tray'
+      'left';
+    max-width: none;
     padding: 8px;
-    /* One column here, so the sidebar is a full-width header strip and the
-       board is no longer what the app's width should be measured against. */
-    max-width: 1700px;
   }
 
-  .layout {
-    grid-template-columns: 1fr;
+  .area-header {
+    flex-wrap: wrap;
   }
 
-  .sidebar {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-    align-items: start;
+  .area-left,
+  .area-right {
+    overflow: visible;
+    margin-right: 0;
+    padding-right: 0;
   }
 
-  /* The panels are the grid's items here, not the wrapper around them. */
-  .sidebar-scroll {
-    display: contents;
+  .area-right {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .area-right > * {
+    flex: 1 1 240px;
+  }
+
+  .area-tray {
+    min-height: 150px;
   }
 
   .board {
     padding: 8px;
-  }
-
-  /* Single column: the rail lies down as a strip under the mat, still with
-     the opponent's card first and yours second. */
-  .table {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  /* The sidebar sits above the mat here, so the page scrolls regardless.
-     The mat still wants to fit one screen on its own -- trays included, which
-     they now reserve for -- so it only gives up a little breathing room. */
-  :root {
-    --board-max-h: max(240px, calc(100vh - var(--app-chrome-h) - 19px));
-  }
-
-  .stat-rail {
-    grid-column: 1;
-    grid-row: 2;
-    flex-direction: row;
-    flex-wrap: wrap;
-  }
-
-  .stat-rail .stat-card {
-    flex: 1 1 150px;
-  }
-
-  /* In one column the rail lies down as a row; the storyline flows in it with
-     its own basis rather than the fixed rail width used beside the board. */
-  .stat-rail .storyline-block {
-    flex: 1 1 240px;
-    width: auto;
-  }
-
-  /* The sidebar is a header strip at this width, not a column, so your side
-     lies down as a band across it rather than stacking into a tower that
-     pushes the mat off the screen. */
-  .your-side {
-    grid-column: 1 / -1;
-    flex-direction: row;
-    flex-wrap: wrap;
-    align-items: flex-start;
-  }
-
-  .your-side > .hand-row {
-    flex: 2 1 380px;
-    min-width: 0;
-  }
-
-  .your-side .hand-block {
-    flex: 1 1 200px;
-  }
-
-  .your-side .grave-block {
-    flex: 1 1 96px;
-    max-width: 160px;
-  }
-
-  .threshold-grid {
-    grid-template-columns: 1fr 1fr;
-    gap: 2px 12px;
   }
 
   .move-log ol {
@@ -2111,55 +1924,7 @@ details[open] > .panel-summary {
   }
 }
 
-/* Phone and small-tablet portrait. In one column the sidebar's panels came
-   first, so the board -- the thing the page is for -- started around 1000px
-   down and you scrolled past the brief, the archive, the log, the legend and
-   all four of your own zones to reach it. Ordered like the table instead: what
-   the puzzle asks, then the board, then your own side of it. */
 @media (max-width: 700px) {
-  .layout {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    /* The base rule's `align-items: start` only meant "do not stretch rows"
-       under grid. In a column flex it is the cross axis, so every item would
-       shrink-wrap and the mat would collapse to the width of its tray tab. */
-    align-items: stretch;
-  }
-
-  /* Every wrapper steps aside so the panels, the mat, your zones and the
-     counters are all siblings here and can be ordered against each other. */
-  .sidebar,
-  .table {
-    display: contents;
-  }
-
-  .mat-area {
-    order: 2;
-  }
-
-  /* Directly under the mat, not below 380px of counters: the board and your
-     own hand are the pair you need in view at the same time. */
-  .your-side {
-    order: 3;
-  }
-
-  .stat-rail {
-    order: 4;
-  }
-
-  /* Reference panels, not the board: the move log and the legend default to
-     order 0 and so landed above the mat, the very thing this block reorders
-     away. Send them below your own side so the brief -> board -> hand run is
-     unbroken and the reference material trails it. */
-  .move-log {
-    order: 5;
-  }
-
-  .panel.legend {
-    order: 6;
-  }
-
   /* Squares are ~68px wide at this size, so the 3px inset and 4px gutter are
      nearly a tenth of the room a card has. */
   .cell-half {
@@ -2172,15 +1937,31 @@ details[open] > .panel-summary {
      do and you lose sight of where it could go. In flow it sits under the mat
      and pushes instead of covering. */
   .mat-area > .card-actions {
-    position: static;
+    position: relative; /* in flow, but still the × button's containing block */
     max-width: none;
     margin-inline: 0;
     margin-top: 8px;
   }
 
+  /* The row is sized by board + bar here, so a 100%-tall board grew by the
+     bar's height and pushed the bar out over the stats below. */
+  .mat-area > .board {
+    height: auto;
+  }
+
   /* ...so the mat no longer reserves the strip the bar used to float in. */
   .app:has(.card-actions) {
     --tray-bottom: 8px;
+  }
+
+  /* Phones scroll anyway, and the board is bound by the width here: let it
+     be as tall as that makes it. */
+  :root {
+    --layout-chrome-h: 170px;
+  }
+
+  .app {
+    grid-template-rows: auto auto auto auto auto auto;
   }
 }
 
@@ -2234,8 +2015,8 @@ details[open] > .panel-summary {
   }
 }
 
-/* Short viewports (landscape tablets): an open tray must not swallow the
-   whole board, so its panel and the cards inside it tighten up. */
+/* Short viewports (landscape tablets): the opponent drawer must not swallow
+   the whole board, so it and the zones inside it tighten up. */
 @media (max-height: 820px) {
   :root {
     --tray-body-h: 148px;
@@ -2248,11 +2029,11 @@ details[open] > .panel-summary {
     padding: 6px;
   }
 
-  .tray-body .card-token {
+  .opp-drawer .card-token {
     --card-w: 62px;
   }
 
-  .tray-body .grave .card-token {
+  .opp-drawer .grave .card-token {
     --card-w: 46px;
   }
 }

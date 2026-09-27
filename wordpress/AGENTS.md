@@ -1,0 +1,3 @@
+# WordPress plugin
+
+`sorcery-puzzle/sorcery-puzzle.php` provides the `[sorcery_puzzle]` shortcode, the `/wp-json/sorcery-puzzle/v1/` REST endpoints, role gating (`edit_others_posts`, filterable via `sorcery_puzzle_can_edit`), a hidden `sorcery_puzzle` custom post type for site-wide storage, and Media Library externalization of card images (dedup by content hash, stored as `imgId` references). `scripts/build-wp.mjs` (at the repo root) copies the bundle in and zips the plugin (uses Windows `System32\tar.exe`/bsdtar to avoid backslash zip entries that break on Linux hosts). See the README for the full endpoint table and publishing workflow.
