@@ -52,6 +52,11 @@ function dragSite(e, idx) {
 const surfaceCount = (idx) => state.zones[`cell:${idx}:top`].length
 const belowCount = (idx) => state.zones[`cell:${idx}:bot`].length
 
+// The same levels measured in card widths, which is what --n shares the band
+// by: a tapped card lies landscape, 88/63 = 1.4 times as wide as a standing one.
+const levelWidth = (zone) =>
+  state.zones[zone].reduce((w, id) => w + (isTapped(id) ? 1.4 : 1), 0)
+
 // Every card on crossing `idx`, bottom of the stack first. Any number of auras
 // (animated or not) may share a crossing.
 const auraCards = (idx) =>
@@ -308,7 +313,7 @@ function nodeStyle(idx) {
               { split: belowCount(n - 1), crowded: surfaceCount(n - 1) > 1 },
               ...cornerPads(n - 1, 'top'),
             ]"
-            :style="{ '--n': surfaceCount(n - 1) || 1 }"
+            :style="{ '--n': levelWidth(`cell:${n - 1}:top`) || 1, '--k': surfaceCount(n - 1) || 1 }"
           >
             <CardToken
               v-for="id in state.zones[`cell:${n - 1}:top`]"
@@ -329,7 +334,7 @@ function nodeStyle(idx) {
               { split: surfaceCount(n - 1), crowded: belowCount(n - 1) > 1 },
               ...cornerPads(n - 1, 'bot'),
             ]"
-            :style="{ '--n': belowCount(n - 1) || 1 }"
+            :style="{ '--n': levelWidth(`cell:${n - 1}:bot`) || 1, '--k': belowCount(n - 1) || 1 }"
             :keyboard="false"
           >
             <CardToken
@@ -1060,13 +1065,19 @@ function nodeStyle(idx) {
 
 /* A tapped card turns only its art (CardToken), so its layout box stays
    portrait while the picture lies landscape, 88/63 = 1.4 times as wide -- and
-   the square clipped the overhang. The tapped token keeps exactly its slot
-   instead: 0.72 of the width plus 0.14 margin each side, so the turned art is
-   one slot wide (0.72 x 1.4 = 1) and a shared square never wraps. --card-w is
-   a percentage of the band, as are margins, so the sum is exact. */
+   the square clipped the overhang. Shrinking the token to fit its old slot
+   made an attack look like it shrank the unit, so the card keeps its size and
+   takes a landscape slot instead: 0.2 margin each side makes it 1.4 wide, and
+   --n (levelWidth) counts it as 1.4 cards so a shared square still fits.
+   --card-w is a percentage of the band, as are margins, so the sum is exact. */
 .cell-half :deep(.card-token.is-tapped) {
-  width: calc(var(--card-w) * 0.72);
-  margin-inline: calc(var(--card-w) * 0.14);
+  margin-inline: calc(var(--card-w) * 0.2);
+}
+
+/* Alone on its level in a split square it shares the width with the card on
+   the other level, which starts at 56%: 40% x 1.4 is as wide as it can lie. */
+.cell-half.split :deep(.card-token.is-tapped:only-of-type) {
+  --card-w: 40%;
 }
 
 /* ---------- auras ---------- */

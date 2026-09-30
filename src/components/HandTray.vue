@@ -6,6 +6,12 @@ import DropZone from './DropZone.vue'
 import CardToken from './CardToken.vue'
 import { plural } from '../format.js'
 
+defineProps({
+  // The desktop play table's 140px tray (board-size/report.md): smaller pile
+  // faces and fan cards, so the board row gets the height.
+  compact: { type: Boolean, default: false },
+})
+
 // Your side of the table, as it sits on a real one: decks on the left, the
 // hand fanned in the middle, the public piles on the right.
 const DECKS = [
@@ -70,7 +76,7 @@ watch(pileWithTarget, (zone) => {
 </script>
 
 <template>
-  <section class="hand-tray" aria-label="Your hand and piles">
+  <section class="hand-tray" :class="{ compact }" aria-label="Your hand and piles">
     <div class="tray-group decks">
       <div v-for="d in decks" :key="d.zone" class="pile">
         <DropZone :zone="d.zone" class="pile-face deck" :class="[count(d.zone) ? `depth-${depth(d.zone) + 1}` : 'is-empty', { 'is-open': open === d.zone, 'is-hidden': hiddenEmpty(d) }]">
@@ -96,7 +102,7 @@ watch(pileWithTarget, (zone) => {
     </div>
 
     <div class="tray-hand" aria-label="Your hand" role="group">
-      <Hand side="player" variant="fan" />
+      <Hand side="player" variant="fan" :card-w="compact ? 84 : 100" />
     </div>
 
     <div class="tray-group piles">
@@ -399,6 +405,29 @@ watch(pileWithTarget, (zone) => {
 .drawer-cards .empty-word {
   align-self: center;
   margin: auto;
+}
+
+/* Desktop play table: a 140px tray. */
+.hand-tray.compact {
+  gap: 24px;
+  padding: 0 18px 10px;
+}
+
+.compact .tray-group {
+  gap: 12px;
+}
+
+.compact .pile {
+  gap: 4px;
+}
+
+.compact .pile-face {
+  width: 60px;
+  height: 84px;
+}
+
+.compact .pile-label {
+  font-size: var(--fs-sm);
 }
 
 /* Phone and small tablet (.mockup/phone.html): the fan takes the full width

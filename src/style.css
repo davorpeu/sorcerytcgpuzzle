@@ -310,6 +310,60 @@ body {
   min-width: 0;
 }
 
+/* Play, desktop (board-size/report.md): the table around your seat. The
+   opponent moves from its own row to the top of the right column ("across
+   the table"), your stats sit beside your hand, and the tray is 140px. The
+   76px opponent row, 50px of tray and 16px of padding all go to the board.
+   The editor keeps the grid above: its forms need the 380px column.
+
+     header header header
+     left   board  right        right: opponent panel, then the storyline
+     you    tray   tray         <section class="area-you"> StatsBar
+
+   Chrome is now 2 x 12 padding + header 52 + tray 140 + two 12px row gaps.
+   --board-max-h is restated here, not just --layout-chrome-h: at :root it
+   has already substituted the old figure. Above 1000px only, where :root
+   isn't setting its own figure for the stacked layout. */
+@media (min-width: 1001px) {
+  .app.mode-play {
+    --layout-chrome-h: 240px;
+    --board-max-h: max(
+      260px,
+      calc(100vh - (var(--app-chrome-h) - 71px) - var(--layout-chrome-h))
+    );
+    --left-w: 260px;
+    --right-w: 260px;
+
+    /* The containing block of the opponent zones popover: the right column
+       scrolls, and would clip a popover positioned inside it. */
+    position: relative;
+    grid-template-columns: var(--left-w) minmax(0, 1fr) var(--right-w);
+    grid-template-rows: auto var(--board-max-h) 140px;
+    grid-template-areas:
+      'header header header'
+      'left   board  right'
+      'you    tray   tray';
+    max-width: min(
+      1800px,
+      calc(var(--stage-h-max) * 1.25 + 30px + var(--left-w) + var(--right-w) + 2 * var(--sp-6) + 2 * var(--sp-3))
+    );
+    padding: var(--sp-3);
+  }
+
+  .area-you {
+    grid-area: you;
+    min-width: 0;
+    min-height: 0;
+  }
+}
+
+@media (min-width: 1001px) and (max-width: 1180px) {
+  .app.mode-play {
+    --left-w: 220px;
+    --right-w: 220px;
+  }
+}
+
 /* Once a limited player has solved or failed for the day, the play surface is
    sealed: the verdict stays up in the header and the table no longer takes
    input. The header (Reset, mode switch) stays live. */
@@ -317,6 +371,7 @@ body {
 .app.locked > .area-left,
 .app.locked > .area-board,
 .app.locked > .area-right,
+.app.locked > .area-you,
 .app.locked > .area-tray {
   pointer-events: none;
   opacity: 0.85;

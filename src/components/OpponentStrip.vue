@@ -1,13 +1,27 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { state, ui, isStoryChoiceTarget, canActivateTarget, cellSquare, playerControls } from '../store.js'
 import Hand from './Hand.vue'
 import StatsBar from './StatsBar.vue'
+
+const props = defineProps({
+  // 'strip': the full-width row over the board (editor, phones). 'panel':
+  // stacked at the top of the right column on the desktop play table, with
+  // the zones behind a one-line summary.
+  variant: { type: String, default: 'strip' }, // 'strip' | 'panel'
+})
+const panel = computed(() => props.variant === 'panel')
 
 // The opponent's zones are reference rather than workspace: a row of counts
 // on the strip, and a drawer that opens over the top of the mat when you
 // actually need to look (or drop something there).
 const open = ref(false)
+const toggleBtn = ref(null)
+
+function close() {
+  open.value = false
+  nextTick(() => toggleBtn.value?.focus())
+}
 
 const count = (zone) => state.zones[zone]?.length ?? 0
 
@@ -66,20 +80,48 @@ const pileHasTarget = computed(
 watch(pileHasTarget, (has) => {
   if (has) open.value = true
 })
+
+// The panel's summary names the two piles a puzzle most often uses and
+// counts the rest, saying how many cards lie there when any do.
+const moreCards = computed(() =>
+  piles.slice(1).filter(([z]) => z !== 'grave:opponent').reduce((n, [z]) => n + count(z), 0)
+)
 </script>
 
 <template>
-  <section class="opp-strip" aria-label="Opponent">
+  <section class="opp-strip" :class="{ 'opp-panel': panel }" aria-label="Opponent">
     <div class="opp-id">
       <span class="opp-name">Opponent</span>
       <span class="opp-sub">{{ avatarInPlay ? 'Avatar on the board' : 'No avatar on the board' }}</span>
     </div>
 
-    <div class="opp-stats">
+    <StatsBar v-if="panel" side="opponent" variant="compact" />
+    <div v-else class="opp-stats">
       <StatsBar side="opponent" variant="strip" />
     </div>
 
     <button
+      v-if="panel"
+      ref="toggleBtn"
+      type="button"
+      class="zones-btn"
+      :aria-expanded="open"
+      aria-controls="opp-drawer"
+      @click="open = !open"
+      @keydown.esc.stop="close"
+    >
+      <span class="sr-only">Opponent zones:</span>
+      <span class="zones-text">
+        Hand <span class="n" :class="{ zero: !count('hand:opponent') }">{{ count('hand:opponent') }}</span>
+        · Cemetery <span class="n" :class="{ zero: !count('grave:opponent') }">{{ count('grave:opponent') }}</span>
+        · {{ piles.length - 2 }} more<template v-if="moreCards">
+          (<span class="n">{{ moreCards }}</span>)</template>
+      </span>
+      <span class="opp-caret" aria-hidden="true">{{ open ? '▸' : '◂' }}</span>
+    </button>
+    <button
+      v-else
+      ref="toggleBtn"
       class="opp-piles"
       :aria-expanded="open"
       aria-controls="opp-drawer"
@@ -101,9 +143,15 @@ watch(pileHasTarget, (has) => {
       v-show="open"
       id="opp-drawer"
       class="opp-drawer"
+      :class="{ 'opp-pop': panel }"
       role="region"
       aria-label="Opponent zones"
+      @keydown.esc.stop="close"
     >
+      <div v-if="panel" class="pop-head">
+        <h3 class="pop-title">Opponent zones</h3>
+        <button type="button" class="btn small" @click="close">Close</button>
+      </div>
       <Hand side="opponent" />
     </div>
   </section>
@@ -290,6 +338,100 @@ watch(pileHasTarget, (has) => {
 .opp-drawer :deep(.hand),
 .opp-drawer :deep(.grave) {
   padding: 6px;
+}
+
+/* ---------- panel (desktop play table, top of the right column) ---------- */
+
+/* Stacked: name and avatar note, life and mana, thresholds, zones summary.
+   Not positioned, so the popover below finds .app as its containing block. */
+.opp-strip.opp-panel {
+  position: static;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sp-2);
+  flex: none;
+  height: auto;
+  padding: var(--sp-3);
+}
+
+.opp-panel .opp-id {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  column-gap: var(--sp-2);
+  min-width: 0;
+}
+
+.zones-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: 4px 8px;
+  background: none;
+  border: 1px solid var(--c-line);
+  border-radius: var(--r-md);
+  color: var(--c-muted-hi);
+  font: inherit;
+  font-size: var(--fs-xs);
+  text-align: left;
+  cursor: pointer;
+}
+
+.zones-btn:hover,
+.zones-btn[aria-expanded='true'] {
+  border-color: var(--c-line-strong);
+}
+
+.zones-btn:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: 2px;
+}
+
+.zones-btn .n {
+  font-weight: 700;
+  color: var(--c-cream-hi);
+  font-variant-numeric: lining-nums tabular-nums;
+}
+
+.zones-btn .n.zero {
+  font-weight: 400;
+  color: var(--c-muted-lo);
+}
+
+/* Over the top of the board, left of the right column. Anchored to .app
+   (style.css makes it the containing block), never to the column: that
+   scrolls, and a scroller clips a popover positioned inside it. */
+.opp-drawer.opp-pop {
+  top: calc(var(--sp-3) + 52px + var(--sp-3));
+  left: auto;
+  right: calc(var(--sp-3) + var(--right-w) + var(--sp-3));
+  width: min(600px, calc(100% - var(--left-w) - var(--right-w) - 2 * var(--sp-6)));
+  max-height: calc(var(--board-max-h) - var(--sp-6));
+  padding: var(--sp-2) var(--sp-3) var(--sp-3);
+  border-color: var(--c-opp);
+}
+
+.pop-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--sp-2);
+}
+
+.pop-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: var(--fs-md);
+  color: var(--c-opp-hi);
+}
+
+.opp-pop :deep(.hand-row) {
+  flex-wrap: wrap;
 }
 
 @media (max-width: 1280px) {

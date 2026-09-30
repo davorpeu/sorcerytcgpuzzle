@@ -223,6 +223,14 @@ const hint = computed(() => {
   box-shadow: var(--shadow-pop);
 }
 
+/* Desktop: also capped by the board row. The column is that tall and ~250px
+   of it is kicker, hint and actions, which must stay in view at 1280x720. */
+@media (min-width: 1001px) {
+  .inspector-art {
+    max-height: min(100%, calc(var(--board-max-h) - 250px));
+  }
+}
+
 /* Fallback only when there's no art. */
 .inspector-name {
   margin: 0;

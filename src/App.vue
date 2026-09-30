@@ -59,9 +59,12 @@ const editorTooNarrow = computed(() => state.mode === 'editor' && narrow.value)
 const phoneMq = typeof window !== 'undefined' && window.matchMedia ? window.matchMedia('(max-width: 1000px)') : null
 const phone = ref(!!phoneMq?.matches)
 const onPhone = (e) => (phone.value = e.matches)
-// Empty, the storyline is one line, so the moves (play) or the solutions
+// Play above 1000px: the bigger-board grid (style.css, "Play, desktop").
+const playDesk = computed(() => state.mode === 'play' && !phone.value)
+// Empty, the storyline is one line, so the moves (phones) or the solutions
 // (editor) get the column's height. What it is for is in the Help dialog.
-const storyCompact = computed(() => !state.zones.storyline.length)
+// On the desktop play table it has the column under the opponent to itself.
+const storyCompact = computed(() => !state.zones.storyline.length && !playDesk.value)
 const notice = ref('')
 const showArchive = ref(false)
 
@@ -168,10 +171,11 @@ watch(
 </script>
 
 <template>
-  <!-- One grid for both modes (see "play layout" in style.css):
+  <!-- One grid (see "play layout" in style.css):
          header | opp | left | board | right | tray
-       Only the left column changes with the mode: the selected card in play,
-       the editor's panels in the editor. -->
+       The left column changes with the mode: the selected card in play, the
+       editor's panels in the editor. Play on desktop drops the opp row and
+       adds "you" beside the tray ("Play, desktop" in style.css). -->
   <div v-if="editorTooNarrow" class="narrow-shell">
     <!-- The header (where editor messages show) isn't rendered here. -->
     <EditorToast class="narrow-toast" />
@@ -180,7 +184,9 @@ watch(
   <div v-else class="app" :class="[`mode-${state.mode}`, { locked: playLocked }]">
     <TopBar class="area-header" :notice="notice" />
 
-    <OpponentStrip class="area-opp" />
+    <!-- Play on desktop seats the opponent at the top of the right column
+         instead (style.css, "Play, desktop"). -->
+    <OpponentStrip v-if="!playDesk" class="area-opp" />
 
     <!-- Everything in the left column scrolls inside it, so the editor's
          panels can be as tall as they like without pushing the board or your
@@ -222,6 +228,10 @@ watch(
         </div>
 
         <ArchiveCalendar v-if="showArchive && !state.puzzleName" @select="onArchiveSelect" />
+
+        <!-- Desktop: the moves fold under the card, one line until opened
+             (the header already counts them), so they cost the board nothing. -->
+        <MoveLog v-if="playDesk" :open="false" class="moves-left" />
       </template>
 
       <!-- In the editor the Solutions panel (right) and the Card/Pool tabs
@@ -244,6 +254,8 @@ watch(
 
     <aside class="area-right">
       <SolutionsPanel v-if="state.mode === 'editor'" />
+
+      <OpponentStrip v-if="playDesk" variant="panel" />
 
       <!-- The storyline is the shared resolution space. Triggered-ability and
            defender prompts resolve here too, rather than under the mat. -->
@@ -343,9 +355,9 @@ watch(
         </div>
       </section>
 
-      <!-- Play: the moves so far sit with the storyline -- both are what has
-           happened -- and take the height it leaves, scrolling inside. -->
-      <MoveLog v-if="state.mode === 'play'" class="moves-block" />
+      <!-- Phones / tablets: the moves so far sit with the storyline -- both
+           are what has happened -- and take the height it leaves. -->
+      <MoveLog v-if="state.mode === 'play' && phone" class="moves-block" />
 
       <!-- Phone / tablet: one row like the opponent's strip (.mockup/phone.html
            "You Life 14 Mana 5 ..."), so the hand stays near the board. -->
@@ -355,10 +367,17 @@ watch(
           <StatsBar side="player" variant="strip" />
         </div>
       </section>
-      <StatsBar v-else side="player" />
+      <StatsBar v-else-if="!playDesk" side="player" />
     </aside>
 
-    <HandTray class="area-tray" />
+    <!-- Play, desktop: your stats beside your hand, across from the
+         opponent's. -->
+    <section v-if="playDesk" class="area-you you-panel" aria-label="You">
+      <span class="you-name">You</span>
+      <StatsBar side="player" variant="compact" />
+    </section>
+
+    <HandTray class="area-tray" :compact="playDesk" />
 
     <FxOverlay />
     <ChoicePopup />
@@ -528,6 +547,35 @@ watch(
   min-height: 48px;
   display: flex;
   align-items: center;
+}
+
+/* Play, desktop: "You" beside the hand, sized to the 140px tray row. */
+.you-panel {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  overflow: hidden;
+  background: var(--c-panel);
+  border: 1px solid var(--c-line);
+  border-radius: var(--r-lg);
+}
+
+.you-panel .you-name {
+  line-height: 1.1;
+}
+
+/* Folded under the card: it keeps its line and never squeezes the card; open,
+   its list scrolls inside (style.css caps it). */
+.moves-left {
+  flex: none;
+  padding: var(--sp-2) var(--sp-3);
+}
+
+.moves-left :deep(ol) {
+  max-height: 180px;
 }
 
 .area-right :deep(.stat-side) {

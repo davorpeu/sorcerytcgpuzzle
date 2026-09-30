@@ -443,7 +443,11 @@ function onClick() {
 }
 
 .cell-half.split.crowded .card-token {
-  --card-w: clamp(18%, calc(88% / var(--n, 1)), 24%);
+  --card-w: clamp(
+    calc(18% * var(--k, 1) / var(--n, 1)),
+    calc(88% / var(--n, 1)),
+    calc(24% * var(--k, 1) / var(--n, 1))
+  );
 }
 
 .grave .card-token {
@@ -570,15 +574,25 @@ function onClick() {
    whatever was standing there, so the ordinary case, one unit, sat at under a
    third of its square and read as a chip dropped on it rather than a piece
    standing on it. --n is what the square actually holds, written by the band;
-   the floor is what a card needs to stay recognisable when it is sharing. */
+   the floor is what a card needs to stay recognisable when it is sharing.
+
+   --n is the level's width in cards (a tapped one counts 1.4) and --k its
+   count. The bounds are scaled by k/n, so a level with tapped cards takes the
+   same total width as it would standing and still fits on one row; with none
+   tapped k = n and they are the plain 30% / 44% (24% / 18% when crowded). */
 .cell-half .card-token {
-  --card-w: clamp(30%, calc(88% / var(--n, 1)), 44%);
+  --card-w: clamp(
+    calc(30% * var(--k, 1) / var(--n, 1)),
+    calc(88% / var(--n, 1)),
+    calc(44% * var(--k, 1) / var(--n, 1))
+  );
 }
 
 /* Alone in its square a card can have a pixel floor as well: 44% of a phone
    square is 30px, under what a card needs to be recognisable, and with nothing
-   beside it there is room to spare. */
-.cell-half .card-token:only-child {
+   beside it there is room to spare. Of-type, not only-child: the band's cue
+   words and the void tag are spans beside it. */
+.cell-half .card-token:only-of-type {
   --card-w: max(44%, 34px);
 }
 

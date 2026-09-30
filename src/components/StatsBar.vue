@@ -19,11 +19,14 @@ import ThresholdIcon from './ThresholdIcon.vue'
 const props = defineProps({
   side: { type: String, required: true }, // 'player' | 'opponent'
   // 'panel' is the "You" card in the right column; 'strip' lies the same
-  // stats down in one row for the opponent strip.
-  variant: { type: String, default: 'panel' }, // 'panel' | 'strip'
+  // stats down in one row for the opponent strip; 'compact' is three short
+  // rows (life and mana, then thresholds) for the desktop play table's 260px
+  // panels, whose owner draws the name.
+  variant: { type: String, default: 'panel' }, // 'panel' | 'strip' | 'compact'
 })
 
 const strip = computed(() => props.variant === 'strip')
+const panel = computed(() => props.variant === 'panel')
 const title = computed(() => (props.side === 'player' ? 'You' : 'Opponent'))
 const regionLabel = computed(() =>
   props.side === 'player'
@@ -121,24 +124,22 @@ const step = (what, delta) =>
 <template>
   <section
     class="stats stat-card"
-    :class="[`stats-${strip ? 'strip' : 'panel'}`, `side-${side}`, { editing }]"
+    :class="[`stats-${variant}`, `side-${side}`, { editing }]"
     :aria-label="regionLabel"
   >
-    <div v-if="!strip" class="stats-head">
+    <div v-if="panel" class="stats-head">
       <span class="stats-title">{{ title }}</span>
       <span class="life-note" :class="`life-${lifeState}`">{{ lifeNote }}</span>
     </div>
 
     <div class="stats-main">
       <!-- Life: the badge's line carries the state as well as its colour
-           (plain, red, doubled red with a skull), and the words beside it
-           always name the state. -->
+           (plain, red, doubled red), and the words beside it always name
+           the state. -->
       <div class="stat stat-life" :class="`life-${lifeState}`">
         <div class="life-badge-col">
-          <span class="life-badge" :title="`${life} life. ${lifeNote}`">
-            <span v-if="atDoor" class="door-icon" aria-hidden="true">☠</span>{{ life }}
-          </span>
-          <span v-if="!strip" class="life-caption">Life</span>
+          <span class="life-badge" :title="`${life} life. ${lifeNote}`">{{ life }}</span>
+          <span v-if="panel" class="life-caption">Life</span>
           <span v-if="editing" class="adj">
             <button
               type="button"
@@ -159,7 +160,7 @@ const step = (what, delta) =>
             </button>
           </span>
         </div>
-        <div v-if="strip" class="life-words">
+        <div v-if="!panel" class="life-words">
           <span class="stat-name">Life</span>
           <span class="life-note">{{ lifeNote }}</span>
         </div>
@@ -221,7 +222,7 @@ const step = (what, delta) =>
           <ThresholdIcon :element="t.el" aria-hidden="true" />
           <span class="num">{{ t.have }}</span>
         </span>
-        <span class="th-name" :class="{ 'sr-only': strip }">{{ t.name }}</span>
+        <span class="th-name" :class="{ 'sr-only': !panel }">{{ t.name }}</span>
         <span v-if="t.verdict" class="th-verdict">{{ t.verdict }}</span>
         <span v-if="editing" class="adj">
           <button
@@ -373,8 +374,9 @@ const step = (what, delta) =>
   line-height: 1.2;
 }
 
-/* Low: a red line. Death's Door: a doubled red line, a red wash and a skull.
-   The words say the same thing for anyone who can't tell the reds apart. */
+/* Low: a red line. Death's Door: a doubled red line and a red wash. The words
+   ("At Death's Door") say the same thing for anyone who can't tell the reds
+   apart. */
 .life-low .life-badge {
   border-color: var(--c-danger);
   background: var(--c-danger-bg);
@@ -385,11 +387,6 @@ const step = (what, delta) =>
   border: 3px double var(--c-danger);
   background: var(--c-danger-bg);
   color: var(--c-danger-soft);
-}
-
-.door-icon {
-  font-size: 0.55em;
-  margin-right: 2px;
 }
 
 .life-low .life-note,
@@ -739,6 +736,97 @@ const step = (what, delta) =>
   z-index: 30;
 }
 
+/* ---------- compact (desktop play table) ---------- */
+
+/* Life badge and its words on the left, mana on the right, the thresholds as
+   a row of short chips under them: 260 x ~100 in all. The panel around it
+   is its owner's, so no card of its own. */
+.stats-compact {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: 0;
+}
+
+.stats-compact .stats-main {
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.stats-compact .stat-life {
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: var(--sp-2);
+}
+
+.stats-compact .life-badge {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px 8px 18px 18px;
+  font-size: 20px;
+}
+
+.stats-compact .life-words {
+  min-width: 0;
+}
+
+.stats-compact .stat-name {
+  font-size: var(--fs-sm);
+}
+
+.stats-compact .life-note,
+.stats-compact .mana-note {
+  font-size: var(--fs-xs);
+}
+
+.stats-compact .stat-mana {
+  flex: 0 1 auto;
+  align-items: flex-end;
+  gap: 2px;
+  text-align: right;
+}
+
+.stats-compact .mana-pips {
+  justify-content: flex-end;
+  gap: 3px;
+}
+
+.stats-compact .pip {
+  width: 9px;
+  height: 9px;
+  border-width: 1.5px;
+}
+
+.stats-compact .th-chip {
+  flex-direction: row;
+  flex-wrap: wrap;
+  justify-content: center;
+  column-gap: 4px;
+  min-height: 26px;
+  padding: 2px;
+  border-color: var(--c-line-strong);
+}
+
+.stats-compact .th-met {
+  border-color: var(--c-gold);
+}
+
+.stats-compact .th-short {
+  border-color: var(--c-danger);
+}
+
+.stats-compact .th-count {
+  font-size: var(--fs-sm);
+}
+
+.stats-compact .th-count .th-icon {
+  width: 12px;
+  height: 12px;
+}
+
 @media (pointer: coarse) {
   /* Steppers sit in dense rows, so 36px rather than the 44px the other touch
      controls get. */
@@ -754,10 +842,5 @@ const step = (what, delta) =>
   .stats-strip .adj {
     transition: none;
   }
-}
-
-/* Moved from style.css: this component's own rules. */
-.door-icon {
-  margin-right: 2px;
 }
 </style>

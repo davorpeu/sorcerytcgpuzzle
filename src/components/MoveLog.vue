@@ -4,6 +4,11 @@ import { state, zoneLabel, cardName } from '../store.js'
 import MoveEntry from './MoveEntry.vue'
 import { plural } from '../format.js'
 
+// Whether the log starts unfolded. The desktop play table folds it under the
+// selected card; the header already says how many moves were made.
+defineProps({
+  open: { type: Boolean, default: true },
+})
 
 // The ability an entry used: on the card itself, else on any card -- a gained
 // ability (an assumed form) lives on the granted card, which may since have
@@ -66,7 +71,7 @@ function entryClass(i) {
 </script>
 
 <template>
-  <details class="move-log" open>
+  <details class="move-log" :open="open">
     <summary class="panel-summary">{{ title }}</summary>
     <ol v-if="entries.length">
       <template v-for="(m, i) in entries" :key="i">

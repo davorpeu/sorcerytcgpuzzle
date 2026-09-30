@@ -10,6 +10,8 @@ const props = defineProps({
   // 'fan': the hand alone, held as a fan of cards (the player's tray, which
   // draws the piles itself).
   variant: { type: String, default: 'rows' },
+  // The fan's card width: 84 in the desktop play table's 140px tray.
+  cardW: { type: Number, default: 100 },
 })
 
 const handZone = computed(() => `hand:${props.side}`)
@@ -20,7 +22,6 @@ const hand = computed(() => state.zones[handZone.value] || [])
 // reads as an arc. The step between cards is the card width less a small
 // overlap, compressed when the hand outgrows the room so every card still
 // shows a sliver you can grab.
-const CARD_W = 100
 const MIN_STEP = 22
 const fanEl = ref(null)
 const room = ref(0)
@@ -35,10 +36,10 @@ onBeforeUnmount(() => observer?.disconnect())
 
 const step = computed(() => {
   const n = hand.value.length
-  const natural = CARD_W - 10
+  const natural = props.cardW - 10
   if (n < 2 || !room.value) return natural
   // 40px spare: the outer cards' turn swings their corners past the slot.
-  const fit = (room.value - CARD_W - 40) / (n - 1)
+  const fit = (room.value - props.cardW - 40) / (n - 1)
   return Math.max(MIN_STEP, Math.min(natural, fit))
 })
 // Fewer degrees per card as the hand grows, so a big hand stays a gentle arc.
@@ -50,7 +51,7 @@ function slotStyle(i) {
   return {
     '--rot': `${(off * turn.value).toFixed(2)}deg`,
     '--drop': `${Math.min(12, off * off * 1.6).toFixed(1)}px`,
-    marginLeft: i ? `${step.value - CARD_W}px` : '0',
+    marginLeft: i ? `${step.value - props.cardW}px` : '0',
     zIndex: i + 1,
   }
 }
@@ -65,7 +66,7 @@ function slotStyle(i) {
     ref="fanEl"
     :zone="handZone"
     class="hand-fan"
-    :style="{ '--fan-card-w': `${CARD_W}px` }"
+    :style="{ '--fan-card-w': `${cardW}px` }"
   >
     <!-- No role/aria-label here: DropZone sets its own ("Move here: ...")
          while armed, and attributes passed down would override it. -->
