@@ -57,21 +57,9 @@ The modules import each other in a cycle, which is fine for functions. `src/stor
 - **Carrying** (`state.carry[itemId] = carrierId`): a carried card is removed from all zones and exists only in `carry` — it has no position, so per-zone rules stop applying to it. `zoneOf()` resolves a carried card to wherever its carrier sits. Loop prevention in `wouldCycle()`.
 - **Routing**: `routeZone()` reroutes drops so site cards always land in the site slot and non-sites never do. `dropTarget()` handles put-down placement (auras vs. squares).
 
-### Solutions & checking
+### Solutions, checking & persistence
 
-A puzzle has **multiple solution lines** (`state.solutions`, an array of move sequences). Recording snapshots the start position (`initialZones`/`initialCarry`/`initialStats`/`initialTapped`); each recorded line restarts from that same snapshot (`restoreInitial()`). Move-equality is `sameEntry()`: it compares `cardId`/`from`/`to` (or `targetId`/`to` for special types) but deliberately ignores `prevTapped`/`from`/`held`/`carrierId`, which are undo bookkeeping. Entry types: plain move, `attack`, `strike`, `pickup`, `drop`.
-
-**The solve is detected automatically — there is no submit button.** `solveStatus` (`src/store/session.js`) is a computed that re-runs on every move and returns `'optimal'`, `'partial'`, or `null`. Per line, `lineOutcome()` classifies the attempt: `'exact'` (same moves, same length → optimal), `'loose'` (every solution move is present in order **and** the extra moves in between touch only cards the solution never manipulates → solved but not optimal), `'progress'` (on track, solution moves still missing) or `'dead'` (a solution move is out of order, or an extra move touches a solution card). "Touches" is `entryCards()` (a move's `cardId`/`targetId`/`defenderId`/`shooterId`); the solution's cards are `solutionCards()`. Because the verdict just reflects the current board, an extra move that disturbs a solution card un-solves the board as honestly as it solved it.
-
-Only card moves count toward the solution. Life/mana/threshold counters (`stats`) and tap state are informational and reset with the board.
-
-### Persistence (backend-agnostic)
-
-`savePuzzle`/`listPuzzles`/`loadById`/`deletePuzzle`/`loadDaily` are all async and branch on `remote()`: REST API (`api()` helper, sends `X-WP-Nonce`) when embedded, `localStorage` when standalone. `serialize()`/`loadPuzzle()` define the on-disk JSON (see README "Puzzle JSON format"). `loadPuzzle` back-fills defaults so older files load unchanged — preserve that when changing the format, and bump `FORMAT_VERSION` for breaking changes.
-
-URL loading (`initFromUrl`): `?data=` (self-contained base64), `?src=` (hosted JSON), `?puzzle=<id>`, `?daily`. Non-editors default to the daily puzzle when nothing is specified.
-
-There is no submit button, but there is a mistake limit. `evaluatePlay()` (watching `state.moves.length`) snaps back any move that leaves no solution line reachable (`lineOutcome() === 'dead'`) and increments `state.mistakes`. Non-editors fail for the day at `MAX_MISTAKES` (5), and a solve also locks the puzzle for the day (`playLocked`); both are persisted per puzzle per day in localStorage (`ATTEMPTS_KEY`). Editors get the snap-back but no cap or lock.
+A puzzle has several solution lines, recorded from one start snapshot. **The solve is detected automatically — there is no submit button**: `solveStatus` (`session.js`) re-classifies the board after every move, and `evaluatePlay()` snaps back a move that leaves no line reachable and counts it as a mistake (non-editors fail for the day at 5). Only card moves count; `stats` and tap state are informational. Persistence (`persistence.js`) branches on `remote()`: REST API when embedded, `localStorage` when standalone. The line classification, the mistake/lock rules, the save/load functions and URL loading are detailed in `src/store/AGENTS.md`.
 
 ### Mounting & embedding (`src/main.js`)
 
@@ -109,7 +97,7 @@ See `wordpress/AGENTS.md` (plugin PHP, REST endpoints, and the `scripts/build-wp
 - Keep changes scoped to the task; no drive-by refactors or reformatting of files you weren't asked
   to touch.
 - Reuse existing store functions and components before adding new ones.
-- Verify with `npm test`, `npx vite build`, and by using the change in a browser (`npm run dev`).
+- Verify with `npm run lint`, `npm test`, `npx vite build`, and by using the change in a browser (`npm run dev`).
   A change to game rules or the file format needs a test. Say what you verified and what you didn't.
 - Don't commit, push or rewrite git history unless asked.
 
