@@ -14,7 +14,11 @@ npm run build:wp  # build + copy bundle into the plugin + produce sorcery-puzzle
 npm run preview   # serve the production build
 npm test          # Vitest: solve logic + puzzle file format (tests/store.test.js)
 npm run lint      # ESLint: bugs only (recommended + vue/essential), no style rules
+npm version patch # release: lint + tests, bump package.json, sync the plugin header, commit "Version X.Y.Z", tag vX.Y.Z
+git push --follow-tags  # pushing the release is a separate step
 ```
+
+The version lives only in `package.json`; `scripts/sync-version.mjs` (the npm `version` hook) copies it into the WordPress plugin header. Don't edit the header's version by hand. Use `minor` for new features, `major` when old puzzle files stop loading (a `FORMAT_VERSION` bump), `patch` for fixes. `npm version` needs a clean working tree.
 
 Tests live in `tests/` and reach store internals through the `__test` export at the end of `src/store.js` (tests only). `tests/fixtures/` holds real puzzle files, including an old version-1 file — keep them loading. `it.fails` marks a known bug; turn it into `it` when the bug is fixed. There is no formatter (the code mixes two styles; don't reformat files you aren't changing) and no type checker. CI runs lint, tests and the build; all three must pass.
 
