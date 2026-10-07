@@ -13,8 +13,12 @@ import {
   serialize,
   enterPlay,
   resetPlay,
+  beginAttack,
   beginMove,
+  engageCrossings,
   moveCard,
+  pickAttackCrossing,
+  targetAttack,
   solveStatus,
   undo,
   enterEditor,
@@ -25,6 +29,7 @@ import {
   cancelArmed,
   removeCard,
   isDirty,
+  isOversized,
   cellSquare,
   cellLayer,
   crossingIndex,
@@ -397,5 +402,78 @@ describe('clicks (what a click does, given what is armed)', () => {
     clickZone('cell:7:top', false)
     await nextTick()
     expect(state.zones['cell:7:top']).toContain('gk')
+  })
+})
+
+describe('oversized units attack (animated auras)', () => {
+  // Fill in a 3×3 block of sites (squares 6-8, 11-13, 16-18) so the fixture's
+  // aura at intersection 5 stands on four real sites and has a legal crossing to
+  // step to. An oversized minion may only stand where none of its four squares
+  // is void, so without these extra sites the move half has nowhere to go.
+  const addSite = (sq) => {
+    const id = `sx${sq}`
+    state.cards[id] = { id, name: `Site ${sq}`, site: true }
+    state.zones[`site:${sq}`].push(id)
+  }
+
+  beforeEach(async () => {
+    loadFixture()
+    enterPlay()
+    resetPlay()
+    await nextTick()
+    // Isolate the Move half of Attack & Move: leave combat/damage resolution out.
+    state.combat = false
+    for (const sq of [6, 8, 16, 18]) addSite(sq)
+    // Animating the aura makes it an oversized minion. It stands on intersection
+    // 5 (squares 6,7,11,12); the enemy Skeleton on square 7 is also under the
+    // neighbouring crossing 6, so the attacker may move there to engage.
+    state.animated.au = { duration: 'permanent' }
+    await nextTick()
+    // The attack flow reads ui.attacker/attackCrossing/attackTarget, which the
+    // app clears via an async watcher on ui.attacker; reset them here so each
+    // case starts armed-action-clean (the synchronous store calls below never
+    // leave a tick for that watcher to fire).
+    ui.attacker = null
+    ui.attackCrossing = null
+    ui.attackTarget = null
+    ui.awaitingDefender = null
+  })
+
+  it('is oversized once animated, and reaches the enemy from two crossings', () => {
+    expect(isOversized('au')).toBe(true)
+    expect(engageCrossings('au', 'sk')).toEqual([5, 6])
+  })
+
+  it('chooses an intersection first, then moves there to attack', async () => {
+    beginAttack('au')
+    pickAttackCrossing(6)
+    expect(ui.attackCrossing).toBe(6)
+    targetAttack('sk')
+    await nextTick()
+    expect(state.zones['aura:6']).toContain('au')
+    expect(state.zones['aura:5']).not.toContain('au')
+    expect(state.moves[0]).toMatchObject({ type: 'attack', cardId: 'au', targetId: 'sk', crossing: 6 })
+  })
+
+  it('waits for a crossing pick when several reach the target, then moves to it', async () => {
+    beginAttack('au')
+    targetAttack('sk')
+    expect(ui.attackTarget).toBe('sk')
+    expect(state.zones['aura:5']).toContain('au') // not moved while waiting
+    pickAttackCrossing(6)
+    await nextTick()
+    expect(state.zones['aura:6']).toContain('au')
+    expect(state.zones['aura:5']).not.toContain('au')
+    expect(state.moves[0]).toMatchObject({ type: 'attack', cardId: 'au', targetId: 'sk', crossing: 6 })
+  })
+
+  it('stays put when it picks its own crossing', async () => {
+    beginAttack('au')
+    targetAttack('sk')
+    pickAttackCrossing(5)
+    await nextTick()
+    expect(state.zones['aura:5']).toContain('au')
+    expect(state.zones['aura:6']).not.toContain('au')
+    expect(state.moves[0]).toMatchObject({ type: 'attack', cardId: 'au', targetId: 'sk', crossing: 5 })
   })
 })
